@@ -1,0 +1,239 @@
+/**
+ * Path constants and config loading.
+ * All paths derive from KANADE_DIR (default ~/.kanade).
+ * Override via env vars for testing.
+ */
+
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import YAML from "yaml";
+
+export interface KanadePaths {
+	readonly root: string;
+	readonly configFile: string;
+	readonly rolesDir: string;
+	readonly workflowsDir: string;
+	readonly sharedExtensionsDir: string;
+	readonly runsDir: string;
+	readonly tracesDir: string;
+	readonly stateDb: string;
+	readonly logsDir: string;
+}
+
+export interface ServerConfig {
+	port: number;
+	bind: string;
+}
+
+export interface IsolationConfig {
+	defaultMode: "none" | "worktree";
+	defaultBaseBranch: string;
+	defaultBaseRepo: string | null;
+	worktreeBaseDir: string;
+	branchPrefix: string;
+	autoCleanupOnReject: boolean;
+	autoCleanupOnApprove: boolean;
+	autoCleanupOnAbort: boolean;
+	staleAfterDays: number;
+	maxConcurrent: number;
+}
+
+export interface MergeConfig {
+	targetBranch: string;
+	useNoFf: boolean;
+	requireCleanLint: boolean;
+	requireCleanTest: boolean;
+	deleteBranchAfterMerge: boolean;
+	allowSkipReview: boolean;
+}
+
+export interface TracingConfig {
+	enabled: boolean;
+	serviceName: string;
+	exporter: {
+		type: "file" | "console" | "otlp_http";
+		dir?: string;
+		rotate?: "daily" | "hourly" | "none";
+		endpoint?: string;
+		headers?: Record<string, string>;
+	};
+}
+
+export interface DefaultsConfig {
+	model: string | null;
+	tokenBudget: number;
+	concurrency: number;
+}
+
+export interface DebugConfig {
+	persistSubagents: boolean;
+	persistFilter: PersistFilter | null;
+	dumpArtifacts: boolean;
+}
+
+export interface PersistFilter {
+	roles?: string[];
+	phases?: string[];
+	labels?: string[];
+}
+
+export interface CleanupConfig {
+	enabled: boolean;
+	schedule: string;
+	journalRetentionDays: number;
+	traceRetentionDays: number;
+}
+
+export interface KanadeConfig {
+	paths: KanadePaths;
+	server: ServerConfig;
+	isolation: IsolationConfig;
+	merge: MergeConfig;
+	tracing: TracingConfig;
+	defaults: DefaultsConfig;
+	debug: DebugConfig;
+	cleanup: CleanupConfig;
+}
+
+function expandHome(p: string): string {
+	if (p.startsWith("~/")) return join(homedir(), p.slice(2));
+	if (p === "~") return homedir();
+	return p;
+}
+
+function getKanadeDir(): string {
+	const fromEnv = process.env.KANADE_DIR;
+	if (fromEnv) return resolve(expandHome(fromEnv));
+	return join(homedir(), ".kanade");
+}
+
+function buildPaths(root: string): KanadePaths {
+	return {
+		root,
+		configFile: join(root, "config.yml"),
+		rolesDir: join(root, "roles"),
+		workflowsDir: join(root, "workflows"),
+		sharedExtensionsDir: join(root, "shared", "extensions"),
+		runsDir: join(root, "runs"),
+		tracesDir: process.env.KANADE_TRACES_DIR ?? join(root, "traces"),
+		stateDb: join(root, "state.db"),
+		logsDir: join(root, "logs"),
+	};
+}
+
+function defaultConfig(paths: KanadePaths): KanadeConfig {
+	return {
+		paths,
+		server: {
+			port: 7777,
+			bind: "127.0.0.1",
+		},
+		isolation: {
+			defaultMode: "worktree",
+			defaultBaseBranch: "develop",
+			defaultBaseRepo: null,
+			worktreeBaseDir: paths.runsDir,
+			branchPrefix: "kanade",
+			autoCleanupOnReject: true,
+			autoCleanupOnApprove: false,
+			autoCleanupOnAbort: true,
+			staleAfterDays: 7,
+			maxConcurrent: 16,
+		},
+		merge: {
+			targetBranch: "develop",
+			useNoFf: true,
+			requireCleanLint: true,
+			requireCleanTest: true,
+			deleteBranchAfterMerge: true,
+			allowSkipReview: false,
+		},
+		tracing: {
+			enabled: true,
+			serviceName: "kanade",
+			exporter: {
+				type: "file",
+				dir: paths.tracesDir,
+				rotate: "daily",
+			},
+		},
+		defaults: {
+			model: null,
+			tokenBudget: 2_000_000,
+			concurrency: 16,
+		},
+		debug: {
+			persistSubagents: false,
+			persistFilter: null,
+			dumpArtifacts: false,
+		},
+		cleanup: {
+			enabled: true,
+			schedule: "0 * * * *",
+			journalRetentionDays: 30,
+			traceRetentionDays: 90,
+		},
+	};
+}
+
+function deepMerge<T>(base: T, overrides: Partial<T> | undefined): T {
+	if (!overrides) return base;
+	const result = { ...base } as T;
+	for (const [key, value] of Object.entries(overrides) as [keyof T, unknown][]) {
+		if (value === undefined) continue;
+		const baseValue = (base as Record<string, unknown>)[key as string];
+		if (
+			value !== null &&
+			typeof value === "object" &&
+			!Array.isArray(value) &&
+			baseValue !== null &&
+			typeof baseValue === "object" &&
+			!Array.isArray(baseValue)
+		) {
+			(result as Record<string, unknown>)[key as string] = deepMerge(
+				baseValue,
+				value as Record<string, unknown>,
+			);
+		} else {
+			(result as Record<string, unknown>)[key as string] = value;
+		}
+	}
+	return result;
+}
+
+export function loadConfig(): KanadeConfig {
+	const root = getKanadeDir();
+	const paths = buildPaths(root);
+
+	// Ensure root + key subdirs exist
+	for (const dir of [
+		root,
+		paths.rolesDir,
+		paths.workflowsDir,
+		paths.runsDir,
+		paths.tracesDir,
+		paths.logsDir,
+		dirname(paths.sharedExtensionsDir),
+	]) {
+		if (!existsSync(dir)) {
+			mkdirSync(dir, { recursive: true });
+		}
+	}
+
+	let userConfig: Partial<KanadeConfig> = {};
+	if (existsSync(paths.configFile)) {
+		try {
+			const raw = readFileSync(paths.configFile, "utf8");
+			userConfig = YAML.parse(raw) ?? {};
+		} catch (err) {
+			throw new Error(`Failed to parse ${paths.configFile}: ${(err as Error).message}`);
+		}
+	}
+
+	const base = defaultConfig(paths);
+	const merged = deepMerge(base, userConfig);
+	merged.paths = paths;
+
+	return merged;
+}

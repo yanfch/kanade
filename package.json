@@ -1,0 +1,46 @@
+{
+	"name": "kanade",
+	"version": "0.0.1",
+	"private": true,
+	"description": "Multi-agent workflow runtime. LLM writes scripts, you save the good ones.",
+	"type": "module",
+	"engines": {
+		"node": ">=22"
+	},
+	"bin": {
+		"kanade": "./src/bin/kanade.ts"
+	},
+	"scripts": {
+		"dev": "tsx watch src/bin/server.ts",
+		"start": "tsx src/bin/server.ts",
+		"cli": "tsx src/bin/kanade.ts",
+		"test": "vitest",
+		"lint": "biome check src/",
+		"format": "biome format --write src/",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@earendil-works/pi-coding-agent": "^0.76.0",
+		"@mariozechner/pi-ai": "^0.73.0",
+		"@opentelemetry/api": "^1.9.0",
+		"@opentelemetry/core": "^1.30.0",
+		"@opentelemetry/resources": "^1.30.0",
+		"@opentelemetry/sdk-trace-base": "^1.30.0",
+		"@opentelemetry/semantic-conventions": "^1.28.0",
+		"acorn": "^8.14.0",
+		"better-sqlite3": "^11.7.0",
+		"hono": "^4.6.0",
+		"simple-git": "^3.27.0",
+		"typebox": "^0.34.0",
+		"yaml": "^2.6.0"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^1.9.4",
+		"@hono/node-server": "^1.13.0",
+		"@types/better-sqlite3": "^7.6.0",
+		"@types/node": "^22.10.0",
+		"tsx": "^4.19.0",
+		"typescript": "^5.7.0",
+		"vitest": "^2.1.0"
+	}
+}
