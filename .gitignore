@@ -1,0 +1,63 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.npm
+.yarn
+.pnp.*
+.pnpm-store/
+
+# Build outputs
+dist/
+build/
+out/
+*.tsbuildinfo
+.turbo/
+
+# Test coverage
+coverage/
+*.lcov
+.nyc_output
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Local config / secrets
+.env
+.env.local
+.env.*.local
+config.local.json
+
+# Logs
+*.log
+logs/
+
+# Runtime data (workflow runs, journal, debug subagent sessions)
+.runs/
+runs/
+journal.db
+journal.db-wal
+journal.db-shm
+
+# Pi sessions (if any accidentally land in repo)
+.pi/
+sessions/
+
+# Vendored fork (in case we add a marker)
+# (注意：fork 自 pi-dynamic-workflows 的代码会进 src/workflow-engine/，
+#  我们要 commit 它，所以这里不 ignore。LICENSE 和 NOTICE 保留。)
+
+# OS
+Thumbs.db
