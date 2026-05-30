@@ -1,10 +1,12 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { SpanStatusCode, type Tracer } from "@opentelemetry/api";
 import type { KanadeConfig } from "../config/index.ts";
 import type { HumanGate } from "../human/index.ts";
 import { IsolationManager } from "../isolation/index.ts";
 import { Journal, type JournalAllEntries } from "../journal/index.ts";
 import type { NeedsHumanRow, StateStore, TaskRow, TaskStatus, WorkflowSource } from "../store/index.ts";
+import * as Attrs from "../tracing/attributes.ts";
 import { type TracingHandle, Logger as TracingLogger } from "../tracing/index.ts";
 import { runWorkflow } from "../workflow-engine/index.ts";
 import { AppError } from "./errors.ts";
@@ -40,6 +42,7 @@ export class TaskManager {
 	private readonly isolation: IsolationManager;
 
 	private readonly logger: TracingLogger;
+	private readonly tracer: Tracer;
 
 	constructor(
 		private readonly config: KanadeConfig,
@@ -59,6 +62,7 @@ export class TaskManager {
 			autoCleanupOnAbort: config.isolation.autoCleanupOnAbort,
 		});
 		this.logger = tracing?.logger.forComponent("task-manager") ?? createNoopLogger();
+		this.tracer = tracing?.tracer ?? ({ startSpan: () => noopSpan } as unknown as Tracer);
 	}
 
 	create(input: CreateTaskInput): CreateTaskResult {
@@ -312,6 +316,13 @@ export class TaskManager {
 		const taskLog = this.logger.forTask(taskId);
 		taskLog.info("task running");
 
+		const span = this.tracer.startSpan("workflow.task", {
+			attributes: {
+				[Attrs.TASK_ID]: taskId,
+				[Attrs.TASK_SOURCE]: this.store.getTask(taskId)?.workflow_source ?? "unknown",
+			},
+		});
+
 		try {
 			this.store.updateTask(taskId, { status: "running", started_at: Date.now() });
 			this.events.emit("task.running", { taskId }, taskId);
@@ -367,6 +378,8 @@ export class TaskManager {
 				result: JSON.stringify(result.result),
 			});
 			this.events.emit("task.finished", { taskId, result: result.result }, taskId);
+			span.setStatus({ code: SpanStatusCode.OK });
+			span.setAttribute(Attrs.TASK_STATUS, "finished");
 			taskLog.info("task finished");
 			void this.isolation.finalizeWorktrees(taskId, "approved");
 		} catch (error) {
@@ -379,11 +392,15 @@ export class TaskManager {
 				error: error instanceof Error ? error.message : String(error),
 			});
 			this.events.emit(aborted ? "task.aborted" : "task.failed", { taskId, error: String(error) }, taskId);
+			span.setStatus({ code: SpanStatusCode.ERROR, message: String(error) });
+			span.setAttribute(Attrs.TASK_STATUS, finalStatus);
+			if (error instanceof Error) span.recordException(error);
 			taskLog.info(`task ${finalStatus}`, {
 				error: error instanceof Error ? error.message : String(error),
 			});
 			void this.isolation.finalizeWorktrees(taskId, decision);
 		} finally {
+			span.end();
 			journal.close();
 			this.controllers.delete(taskId);
 		}
@@ -417,6 +434,13 @@ export class TaskManager {
 		}
 	}
 }
+
+const noopSpan = {
+	setAttribute() { return this; },
+	setStatus() { return this; },
+	recordException() {},
+	end() {},
+} as const;
 
 function createNoopLogger(): TracingLogger {
 	const noop = () => {};

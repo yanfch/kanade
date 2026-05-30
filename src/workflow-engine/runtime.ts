@@ -4,10 +4,12 @@
 import vm from "node:vm";
 import type { Node } from "acorn";
 import { parse } from "acorn";
+import { SpanStatusCode, type Tracer } from "@opentelemetry/api";
 import type { TSchema } from "typebox";
 import type { HumanRequest, HumanResponse } from "../human/index.ts";
 import type { IsolationManager } from "../isolation/index.ts";
 import { hashHumanRequest } from "../journal/index.ts";
+import * as Attrs from "../tracing/attributes.ts";
 import { WorkflowAgent, type WorkflowAgentOptions } from "./workflow-agent.ts";
 
 export interface WorkflowMetaPhase {
@@ -35,6 +37,7 @@ export interface WorkflowRunOptions extends Omit<WorkflowAgentOptions, "journal"
 	concurrency?: number;
 	tokenBudget?: number | null;
 	signal?: AbortSignal;
+	tracer?: Tracer;
 	onLog?: (message: string) => void;
 	onPhase?: (title: string) => void;
 	onHumanRequest?: (event: { requestId: string; cacheKey: string; request: HumanRequest }) => void;
@@ -139,6 +142,12 @@ export async function runWorkflow<T = unknown>(
 		state.currentPhase = title;
 		if (!state.phases.includes(title)) state.phases.push(title);
 		options.onPhase?.(title);
+		options.tracer?.startSpan("workflow.phase", {
+			attributes: {
+				[Attrs.PHASE_NAME]: title,
+				[Attrs.TASK_ID]: options.taskId ?? "",
+			},
+		}).end();
 	};
 
 	const budget = Object.freeze({
@@ -160,6 +169,15 @@ export async function runWorkflow<T = unknown>(
 		return limiter(async () => {
 			state.agentCount++;
 			const label = requestedLabel || defaultAgentLabel(assignedPhase, state.agentCount);
+			const agentSpan = options.tracer?.startSpan("workflow.agent", {
+				attributes: {
+					[Attrs.AGENT_LABEL]: label,
+					[Attrs.AGENT_ROLE]: agentOptions.role ?? "",
+					[Attrs.AGENT_MODEL]: agentOptions.model ?? "",
+					[Attrs.PHASE_NAME]: assignedPhase ?? "",
+					[Attrs.TASK_ID]: options.taskId ?? "",
+				},
+			});
 			options.onAgentStart?.({ label, phase: assignedPhase, prompt });
 			try {
 				throwIfAborted();
@@ -173,13 +191,18 @@ export async function runWorkflow<T = unknown>(
 				});
 				throwIfAborted();
 				state.spent += estimateTokens(result);
+				agentSpan?.setStatus({ code: SpanStatusCode.OK });
 				options.onAgentEnd?.({ label, phase: assignedPhase, result });
 				return result;
 			} catch (error) {
 				if (options.signal?.aborted) throw error;
+				agentSpan?.setStatus({ code: SpanStatusCode.ERROR, message: String(error) });
+				if (error instanceof Error) agentSpan?.recordException(error);
 				log(`agent ${label} failed: ${error instanceof Error ? error.message : String(error)}`);
 				options.onAgentEnd?.({ label, phase: assignedPhase, result: null });
 				return null;
+			} finally {
+				agentSpan?.end();
 			}
 		});
 	};
@@ -213,11 +236,26 @@ export async function runWorkflow<T = unknown>(
 		if (cached) return cached.response;
 
 		const requestId = `${options.taskId ?? "workflow"}_${ordinal}`;
-		await options.human.createRequest?.({ requestId, cacheKey, request });
-		options.onHumanRequest?.({ requestId, cacheKey, request });
-		const response = await options.human.wait(requestId, options.signal);
-		options.journal?.writeHuman(cacheKey, response);
-		return response;
+		const humanSpan = options.tracer?.startSpan("human.request", {
+			attributes: {
+				[Attrs.HUMAN_REQUEST_ID]: requestId,
+				[Attrs.TASK_ID]: options.taskId ?? "",
+				"human.title": request.title ?? "",
+			},
+		});
+		try {
+			await options.human.createRequest?.({ requestId, cacheKey, request });
+			options.onHumanRequest?.({ requestId, cacheKey, request });
+			const response = await options.human.wait(requestId, options.signal);
+			options.journal?.writeHuman(cacheKey, response);
+			humanSpan?.setStatus({ code: SpanStatusCode.OK });
+			return response;
+		} catch (error) {
+			humanSpan?.setStatus({ code: SpanStatusCode.ERROR, message: String(error) });
+			throw error;
+		} finally {
+			humanSpan?.end();
+		}
 	};
 
 	const pipeline = async (
