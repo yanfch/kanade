@@ -1,6 +1,9 @@
 // Portions of this file are derived from pi-dynamic-workflows
 // (https://github.com/Michaelliv/pi-dynamic-workflows), MIT licensed.
 
+import { existsSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { TSchema } from "typebox";
 import { describe, expect, it } from "vitest";
 import { parseWorkflowScript, runWorkflow } from "./runtime.ts";
@@ -204,5 +207,80 @@ return result
 				instructions: "Workflow phase: Develop\nRequested model: model-from-script\nPrefer minimal diffs.",
 			},
 		});
+	});
+});
+
+describe("artifact dump", () => {
+	it("writes agent results to JSON files when dumpArtifacts=true", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "kanade-artifact-"));
+		const script = `export const meta = { name: 'test', description: 'Test' }
+phase('Work')
+const a = await agent('task A', { label: 'designer' })
+const b = await agent('task B', { label: 'developer' })
+return { a, b }`;
+
+		const result = await runWorkflow(script, {
+			runDir: dir,
+			dumpArtifacts: true,
+			agent: {
+				async run() {
+					return { ok: true } as never;
+				},
+			},
+		});
+
+		expect(result.result).toEqual({ a: { ok: true }, b: { ok: true } });
+
+		const artifactsDir = join(dir, "debug", "artifacts");
+		expect(existsSync(artifactsDir)).toBe(true);
+
+		const files = readdirSync(artifactsDir).sort();
+		expect(files).toHaveLength(2);
+		expect(files[0]).toMatch(/01-designer\.json/);
+		expect(files[1]).toMatch(/02-developer\.json/);
+
+		const content = JSON.parse(readFileSync(join(artifactsDir, files[0]), "utf8"));
+		expect(content).toEqual({ ok: true });
+	});
+
+	it("does not write files when dumpArtifacts is not set", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "kanade-artifact-"));
+		const script = `export const meta = { name: 'test', description: 'Test' }
+return await agent('task', { label: 'dev' })`;
+
+		await runWorkflow(script, {
+			runDir: dir,
+			agent: {
+				async run() {
+					return "done" as never;
+				},
+			},
+		});
+
+		const artifactsDir = join(dir, "debug", "artifacts");
+		expect(existsSync(artifactsDir)).toBe(false);
+	});
+
+	it("skips dump when agent returns null (failed)", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "kanade-artifact-"));
+		const script = `export const meta = { name: 'test', description: 'Test' }
+return await agent('task', { label: 'dev' })`;
+
+		await runWorkflow(script, {
+			runDir: dir,
+			dumpArtifacts: true,
+			agent: {
+				async run() {
+					throw new Error("fail");
+				},
+			},
+		});
+
+		const artifactsDir = join(dir, "debug", "artifacts");
+		// null results are still dumped (shows the agent was called)
+		expect(existsSync(artifactsDir)).toBe(true);
+		const files = readdirSync(artifactsDir);
+		expect(files).toHaveLength(1);
+		expect(JSON.parse(readFileSync(join(artifactsDir, files[0]), "utf8"))).toBeNull();
 	});
 });

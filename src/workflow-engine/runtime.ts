@@ -1,6 +1,8 @@
 // Portions of this file are derived from pi-dynamic-workflows
 // (https://github.com/Michaelliv/pi-dynamic-workflows), MIT licensed.
 
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import vm from "node:vm";
 import { SpanStatusCode, type Tracer } from "@opentelemetry/api";
 import type { Node } from "acorn";
@@ -38,6 +40,10 @@ export interface WorkflowRunOptions extends Omit<WorkflowAgentOptions, "journal"
 	tokenBudget?: number | null;
 	signal?: AbortSignal;
 	tracer?: Tracer;
+	/** Write each agent result to debug/artifacts/<seq>-<label>.json */
+	dumpArtifacts?: boolean;
+	/** Base directory for artifact dump (usually the run dir) */
+	runDir?: string;
 	onLog?: (message: string) => void;
 	onPhase?: (title: string) => void;
 	onHumanRequest?: (event: { requestId: string; cacheKey: string; request: HumanRequest }) => void;
@@ -80,6 +86,7 @@ interface RuntimeState {
 	logs: string[];
 	phases: string[];
 	agentCount: number;
+	artifactSeq: number;
 	humanCount: number;
 	spent: number;
 }
@@ -117,7 +124,7 @@ export async function runWorkflow<T = unknown>(
 ): Promise<WorkflowRunResult<T>> {
 	const started = Date.now();
 	const { meta, body } = parseWorkflowScript(script);
-	const state: RuntimeState = { logs: [], phases: [], agentCount: 0, humanCount: 0, spent: 0 };
+	const state: RuntimeState = { logs: [], phases: [], agentCount: 0, artifactSeq: 0, humanCount: 0, spent: 0 };
 	const agentRunner =
 		options.agent ??
 		new WorkflowAgent({
@@ -195,6 +202,7 @@ export async function runWorkflow<T = unknown>(
 				state.spent += estimateTokens(result);
 				agentSpan?.setStatus({ code: SpanStatusCode.OK });
 				options.onAgentEnd?.({ label, phase: assignedPhase, result });
+				dumpArtifact(options, state, label, result);
 				return result;
 			} catch (error) {
 				if (options.signal?.aborted) throw error;
@@ -202,6 +210,7 @@ export async function runWorkflow<T = unknown>(
 				if (error instanceof Error) agentSpan?.recordException(error);
 				log(`agent ${label} failed: ${error instanceof Error ? error.message : String(error)}`);
 				options.onAgentEnd?.({ label, phase: assignedPhase, result: null });
+				dumpArtifact(options, state, label, null);
 				return null;
 			} finally {
 				agentSpan?.end();
@@ -476,4 +485,13 @@ function buildAgentInstructions(phase: string | undefined, options: AgentOptions
 
 function estimateTokens(value: unknown): number {
 	return Math.ceil(JSON.stringify(value ?? "").length / 4);
+}
+
+function dumpArtifact(options: WorkflowRunOptions, state: RuntimeState, label: string, result: unknown): void {
+	if (!options.dumpArtifacts || !options.runDir) return;
+	const dir = join(options.runDir, "debug", "artifacts");
+	if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+	const seq = String(++state.artifactSeq).padStart(2, "0");
+	const safeLabel = label.replace(/[^a-zA-Z0-9_-]/g, "_");
+	writeFileSync(join(dir, `${seq}-${safeLabel}.json`), JSON.stringify(result, null, 2));
 }

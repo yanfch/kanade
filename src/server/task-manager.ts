@@ -376,6 +376,8 @@ export class TaskManager {
 				disableSubagentCompaction: this.config.models.disableSubagentCompaction,
 				authPath: this.config.models.authPath ?? undefined,
 				modelsPath: this.config.models.modelsPath ?? undefined,
+				dumpArtifacts: this.config.debug.dumpArtifacts,
+				runDir,
 				journal,
 				agentJournal: journal,
 				isolationManager: this.isolation,
