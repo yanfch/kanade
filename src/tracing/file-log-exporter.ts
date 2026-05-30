@@ -9,7 +9,7 @@ import { appendFileSync, existsSync, mkdirSync, readlinkSync, unlinkSync, writeF
 import { join } from "node:path";
 import type { ExportResult } from "@opentelemetry/core";
 import { ExportResultCode } from "@opentelemetry/core";
-import type { ReadableLogRecord, LogRecordExporter } from "@opentelemetry/sdk-logs";
+import type { LogRecordExporter, ReadableLogRecord } from "@opentelemetry/sdk-logs";
 
 export interface FileLogExporterOptions {
 	/** Directory to write log files into (e.g. ~/.kanade/logs) */
@@ -82,7 +82,7 @@ export class FileLogExporter implements LogRecordExporter {
 		}
 
 		const filePath = this.currentFilePath();
-		appendFileSync(filePath, line + "\n", "utf8");
+		appendFileSync(filePath, `${line}\n`, "utf8");
 	}
 
 	private currentSlotName(): string {

@@ -392,8 +392,7 @@ describe("TaskManager — task failure", () => {
 
 			const task = manager.create({
 				source: "inline",
-				script:
-					"export const meta = { name: 'fail', description: 'Fail' }\nthrow new Error('intentional failure')",
+				script: "export const meta = { name: 'fail', description: 'Fail' }\nthrow new Error('intentional failure')",
 			});
 
 			await vi.waitFor(() => {
@@ -551,9 +550,7 @@ describe("TaskManager — generated workflow failure", () => {
 			events.onAny((e) => emitted.push(e.type));
 
 			// Inject an author that always fails
-			const failManager = new (
-				await import("./task-manager.ts")
-			).TaskManager(
+			const failManager = new (await import("./task-manager.ts")).TaskManager(
 				(await import("../config/index.ts")).loadConfig(),
 				store,
 				events,

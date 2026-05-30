@@ -78,7 +78,7 @@ export class FileSpanExporter implements SpanExporter {
 		}
 
 		const filePath = this.currentFilePath();
-		appendFileSync(filePath, line + "\n", "utf8");
+		appendFileSync(filePath, `${line}\n`, "utf8");
 	}
 
 	private currentSlotName(): string {

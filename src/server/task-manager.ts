@@ -7,7 +7,7 @@ import { IsolationManager } from "../isolation/index.ts";
 import { Journal, type JournalAllEntries } from "../journal/index.ts";
 import type { NeedsHumanRow, StateStore, TaskRow, TaskStatus, WorkflowSource } from "../store/index.ts";
 import * as Attrs from "../tracing/attributes.ts";
-import { type TracingHandle, Logger as TracingLogger } from "../tracing/index.ts";
+import type { TracingHandle, Logger as TracingLogger } from "../tracing/index.ts";
 import { runWorkflow } from "../workflow-engine/index.ts";
 import { AppError } from "./errors.ts";
 import type { EventBus } from "./event-bus.ts";
@@ -436,8 +436,12 @@ export class TaskManager {
 }
 
 const noopSpan = {
-	setAttribute() { return this; },
-	setStatus() { return this; },
+	setAttribute() {
+		return this;
+	},
+	setStatus() {
+		return this;
+	},
 	recordException() {},
 	end() {},
 } as const;

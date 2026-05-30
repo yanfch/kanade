@@ -2,7 +2,7 @@ import { serve } from "@hono/node-server";
 import type { KanadeConfig } from "../config/index.ts";
 import { HumanGate } from "../human/index.ts";
 import { StateStore } from "../store/index.ts";
-import { setupTracing, type TracingHandle } from "../tracing/index.ts";
+import { type TracingHandle, setupTracing } from "../tracing/index.ts";
 import { createApp } from "./app.ts";
 import { EventBus } from "./event-bus.ts";
 import { TaskManager } from "./task-manager.ts";

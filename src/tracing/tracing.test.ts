@@ -1,11 +1,11 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../config/index.ts";
-import { Logger } from "./logger.ts";
-import { FileSpanExporter } from "./file-span-exporter.ts";
 import { FileLogExporter } from "./file-log-exporter.ts";
+import { FileSpanExporter } from "./file-span-exporter.ts";
+import { Logger } from "./logger.ts";
 import { setupTracing } from "./setup.ts";
 
 function makeConfig(overrides?: { tracesDir?: string; logsDir?: string }) {

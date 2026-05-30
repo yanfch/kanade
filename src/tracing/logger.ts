@@ -11,7 +11,7 @@
  *   taskLog.error('agent failed', error, { label: 'dev' });
  */
 
-import { logs, SeverityNumber } from "@opentelemetry/api-logs";
+import { SeverityNumber, logs } from "@opentelemetry/api-logs";
 
 export interface LogFields {
 	[key: string]: string | number | boolean | undefined;

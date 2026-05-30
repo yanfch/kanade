@@ -2,9 +2,9 @@
 // (https://github.com/Michaelliv/pi-dynamic-workflows), MIT licensed.
 
 import vm from "node:vm";
+import { SpanStatusCode, type Tracer } from "@opentelemetry/api";
 import type { Node } from "acorn";
 import { parse } from "acorn";
-import { SpanStatusCode, type Tracer } from "@opentelemetry/api";
 import type { TSchema } from "typebox";
 import type { HumanRequest, HumanResponse } from "../human/index.ts";
 import type { IsolationManager } from "../isolation/index.ts";
@@ -142,12 +142,14 @@ export async function runWorkflow<T = unknown>(
 		state.currentPhase = title;
 		if (!state.phases.includes(title)) state.phases.push(title);
 		options.onPhase?.(title);
-		options.tracer?.startSpan("workflow.phase", {
-			attributes: {
-				[Attrs.PHASE_NAME]: title,
-				[Attrs.TASK_ID]: options.taskId ?? "",
-			},
-		}).end();
+		options.tracer
+			?.startSpan("workflow.phase", {
+				attributes: {
+					[Attrs.PHASE_NAME]: title,
+					[Attrs.TASK_ID]: options.taskId ?? "",
+				},
+			})
+			.end();
 	};
 
 	const budget = Object.freeze({
