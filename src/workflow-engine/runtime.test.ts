@@ -283,4 +283,90 @@ return await agent('task', { label: 'dev' })`;
 		expect(files).toHaveLength(1);
 		expect(JSON.parse(readFileSync(join(artifactsDir, files[0]), "utf8"))).toBeNull();
 	});
+
+	it("no-ops when dumpArtifacts=true but runDir is not set", async () => {
+		const script = `export const meta = { name: 'test', description: 'Test' }
+return await agent('task', { label: 'dev' })`;
+
+		// No runDir — should not throw
+		const result = await runWorkflow(script, {
+			dumpArtifacts: true,
+			agent: {
+				async run() {
+					return "ok" as never;
+				},
+			},
+		});
+
+		expect(result.result).toBe("ok");
+	});
+
+	it("sanitizes labels with special characters", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "kanade-artifact-"));
+		const script = `export const meta = { name: 'test', description: 'Test' }
+const a = await agent('task', { label: 'src/config.ts' })
+return a`;
+
+		await runWorkflow(script, {
+			runDir: dir,
+			dumpArtifacts: true,
+			agent: {
+				async run() {
+					return { ok: true } as never;
+				},
+			},
+		});
+
+		const files = readdirSync(join(dir, "debug", "artifacts"));
+		expect(files).toHaveLength(1);
+		// Slashes and dots should be replaced with underscores
+		expect(files[0]).toMatch(/01-src_config_ts\.json/);
+	});
+
+	it("assigns sequential numbers to multiple agents", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "kanade-artifact-"));
+		const script = `export const meta = { name: 'test', description: 'Test' }
+await agent('a', { label: 'first' })
+await agent('b', { label: 'second' })
+await agent('c', { label: 'third' })
+return true`;
+
+		await runWorkflow(script, {
+			runDir: dir,
+			dumpArtifacts: true,
+			agent: {
+				async run() {
+					return "x" as never;
+				},
+			},
+		});
+
+		const files = readdirSync(join(dir, "debug", "artifacts")).sort();
+		expect(files).toEqual(["01-first.json", "02-second.json", "03-third.json"]);
+	});
+
+	it("parallel agents get sequential numbers based on completion order", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "kanade-artifact-"));
+		const script = `export const meta = { name: 'test', description: 'Test' }
+await parallel([
+  () => agent('a', { label: 'alpha' }),
+  () => agent('b', { label: 'beta' }),
+])
+return true`;
+
+		await runWorkflow(script, {
+			runDir: dir,
+			dumpArtifacts: true,
+			agent: {
+				async run() {
+					return "x" as never;
+				},
+			},
+		});
+
+		const files = readdirSync(join(dir, "debug", "artifacts")).sort();
+		expect(files).toHaveLength(2);
+		expect(files[0]).toMatch(/^01-/);
+		expect(files[1]).toMatch(/^02-/);
+	});
 });

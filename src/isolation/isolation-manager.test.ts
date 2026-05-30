@@ -67,6 +67,17 @@ describe("IsolationManager — mode:none", () => {
 		expect(ctx.cwd).toBe("/tmp");
 		await ctx.cleanup();
 	});
+
+	it("uses config.defaultBaseRepo when opts.baseRepo is not set", async () => {
+		const mgr = new IsolationManager(store, {
+			defaultBaseBranch: "develop",
+			defaultBaseRepo: "/custom/repo",
+			branchPrefix: "kanade",
+		});
+		const ctx = await mgr.prepare({ taskId: "T-0001", label: "agent", mode: "none" });
+		expect(ctx.cwd).toBe("/custom/repo");
+		await ctx.cleanup();
+	});
 });
 
 describe("IsolationManager — mode:worktree", () => {
@@ -89,6 +100,23 @@ describe("IsolationManager — mode:worktree", () => {
 		const row = store.getWorktree(ctx.worktree!.id);
 		expect(row?.status).toBe("active");
 		expect(row?.branch).toBe("kanade/T-0001/dev");
+
+		await ctx.cleanup();
+	});
+
+	it("uses config.worktreeBaseDir for worktree path", async () => {
+		const worktreeBase = mkdtempSync(join(tmpdir(), "kanade-wt-base-"));
+		const mgr = new IsolationManager(store, {
+			defaultBaseBranch: "develop",
+			branchPrefix: "kanade",
+			worktreeBaseDir: worktreeBase,
+		});
+		const ctx = await mgr.prepare({ taskId: "T-0001", label: "dev", mode: "worktree", baseRepo });
+
+		// Worktree should be under worktreeBaseDir, not baseRepo/..
+		expect(ctx.cwd).toContain(worktreeBase);
+		expect(ctx.cwd).toContain("T-0001-worktrees");
+		expect(ctx.worktree).toBeDefined();
 
 		await ctx.cleanup();
 	});

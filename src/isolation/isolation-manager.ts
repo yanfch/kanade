@@ -56,7 +56,7 @@ export class IsolationManager {
 
 	async prepare(opts: PrepareOptions): Promise<IsolationContext> {
 		if (opts.mode === "none") {
-			const cwd = opts.baseRepo ?? process.cwd();
+			const cwd = opts.baseRepo ?? this.config.defaultBaseRepo ?? process.cwd();
 			return { cwd, cleanup: async () => {} };
 		}
 		return this.prepareWorktree(opts);
