@@ -5,9 +5,9 @@
  * See docs/10-isolation.md for schema rationale.
  */
 
-import Database from "better-sqlite3";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import Database from "better-sqlite3";
 
 export type TaskStatus = "created" | "running" | "needs_human" | "finished" | "aborted" | "failed";
 export type WorktreeStatus = "creating" | "active" | "inactive" | "merged" | "rejected" | "abandoned";
@@ -203,9 +203,7 @@ export class StateStore {
 
 		if (current < SCHEMA_VERSION) {
 			this.db
-				.prepare(
-					"INSERT OR REPLACE INTO meta (key, value, updated_at) VALUES (?, ?, ?)",
-				)
+				.prepare("INSERT OR REPLACE INTO meta (key, value, updated_at) VALUES (?, ?, ?)")
 				.run("schema_version", String(SCHEMA_VERSION), Date.now());
 		}
 	}
@@ -247,9 +245,7 @@ export class StateStore {
 	listTasks(opts: { status?: TaskStatus; limit?: number } = {}): TaskRow[] {
 		const where = opts.status ? "WHERE status = ?" : "";
 		const limit = opts.limit ?? 100;
-		const stmt = this.db.prepare(
-			`SELECT * FROM tasks ${where} ORDER BY created_at DESC LIMIT ${limit}`,
-		);
+		const stmt = this.db.prepare(`SELECT * FROM tasks ${where} ORDER BY created_at DESC LIMIT ${limit}`);
 		const rows = opts.status ? stmt.all(opts.status) : stmt.all();
 		return rows as TaskRow[];
 	}
@@ -283,9 +279,9 @@ export class StateStore {
 	}
 
 	findWorktreeByBranch(taskId: string, branch: string): WorktreeRow | null {
-		const row = this.db
-			.prepare("SELECT * FROM worktrees WHERE task_id = ? AND branch = ?")
-			.get(taskId, branch) as WorktreeRow | undefined;
+		const row = this.db.prepare("SELECT * FROM worktrees WHERE task_id = ? AND branch = ?").get(taskId, branch) as
+			| WorktreeRow
+			| undefined;
 		return row ?? null;
 	}
 
@@ -330,15 +326,11 @@ export class StateStore {
 		const keys = Object.keys(patch);
 		if (keys.length === 0) return;
 		const setClause = keys.map((k) => `${k} = @${k}`).join(", ");
-		this.db
-			.prepare(`UPDATE agent_calls SET ${setClause} WHERE id = @__id`)
-			.run({ ...patch, __id: id });
+		this.db.prepare(`UPDATE agent_calls SET ${setClause} WHERE id = @__id`).run({ ...patch, __id: id });
 	}
 
 	listAgentCalls(taskId: string): AgentCallRow[] {
-		const rows = this.db
-			.prepare("SELECT * FROM agent_calls WHERE task_id = ? ORDER BY started_at ASC")
-			.all(taskId);
+		const rows = this.db.prepare("SELECT * FROM agent_calls WHERE task_id = ? ORDER BY started_at ASC").all(taskId);
 		return rows as AgentCallRow[];
 	}
 
@@ -359,17 +351,15 @@ export class StateStore {
 	}
 
 	getNeedsHuman(requestId: string): NeedsHumanRow | null {
-		const row = this.db
-			.prepare("SELECT * FROM needs_human WHERE request_id = ?")
-			.get(requestId) as NeedsHumanRow | undefined;
+		const row = this.db.prepare("SELECT * FROM needs_human WHERE request_id = ?").get(requestId) as
+			| NeedsHumanRow
+			| undefined;
 		return row ?? null;
 	}
 
 	findNeedsHumanByCacheKey(taskId: string, cacheKey: string): NeedsHumanRow | null {
 		const row = this.db
-			.prepare(
-				"SELECT * FROM needs_human WHERE task_id = ? AND cache_key = ? ORDER BY created_at DESC LIMIT 1",
-			)
+			.prepare("SELECT * FROM needs_human WHERE task_id = ? AND cache_key = ? ORDER BY created_at DESC LIMIT 1")
 			.get(taskId, cacheKey) as NeedsHumanRow | undefined;
 		return row ?? null;
 	}
@@ -378,15 +368,11 @@ export class StateStore {
 		const keys = Object.keys(patch);
 		if (keys.length === 0) return;
 		const setClause = keys.map((k) => `${k} = @${k}`).join(", ");
-		this.db
-			.prepare(`UPDATE needs_human SET ${setClause} WHERE request_id = @__id`)
-			.run({ ...patch, __id: requestId });
+		this.db.prepare(`UPDATE needs_human SET ${setClause} WHERE request_id = @__id`).run({ ...patch, __id: requestId });
 	}
 
 	listPendingNeedsHuman(): NeedsHumanRow[] {
-		const rows = this.db
-			.prepare("SELECT * FROM needs_human WHERE status = 'pending' ORDER BY created_at ASC")
-			.all();
+		const rows = this.db.prepare("SELECT * FROM needs_human WHERE status = 'pending' ORDER BY created_at ASC").all();
 		return rows as NeedsHumanRow[];
 	}
 
@@ -411,9 +397,7 @@ export class StateStore {
 	}
 
 	listPhases(taskId: string): TaskPhaseRow[] {
-		const rows = this.db
-			.prepare("SELECT * FROM task_phases WHERE task_id = ? ORDER BY started_at ASC")
-			.all(taskId);
+		const rows = this.db.prepare("SELECT * FROM task_phases WHERE task_id = ? ORDER BY started_at ASC").all(taskId);
 		return rows as TaskPhaseRow[];
 	}
 }
