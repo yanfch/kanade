@@ -15,7 +15,7 @@ Files to add:
   - `releaseWorktree(id)` marks `inactive` after agent call ends
   - `finalizeWorktrees(taskId, decision)` decides keep/cleanup per config
   - `cleanupStaleWorktrees()` removes worktrees idle > N days
-  - Branch naming: `{branch_prefix}/{task_id}/{label}` (default `kanade/T-xxx/dev`)
+  - Branch naming: `{branchPrefix}/{task_id}/{label}` (default `kanade/T-xxx/dev`)
 - `git-helpers.ts` — Thin wrappers: `ensureBranch`, `worktreeAdd`, `worktreeRemove`, `branchDelete`, `mergeBranch`. Use `simple-git` or spawn `git`.
 - `merge.ts` — `mergeWorktreeToBase(taskId)`: checks out base branch, merges with `--no-ff`, runs lint/test guards from config, deletes branch on success.
 - `index.ts` — Re-exports.

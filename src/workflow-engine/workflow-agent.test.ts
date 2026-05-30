@@ -272,3 +272,58 @@ describe("resolveModelSpec", () => {
 		expect(resolveModelSpec("same-id", { modelRegistry })).toBeUndefined();
 	});
 });
+
+describe("WorkflowAgent — isolation", () => {
+	it("calls isolationManager.prepare when isolation:worktree is set", async () => {
+		const prepared: Array<{ taskId: string; label: string; mode: string }> = [];
+		const cleanedUp: string[] = [];
+
+		const mockIsolation = {
+			prepare: async (opts: { taskId: string; label: string; mode: string }) => {
+				prepared.push(opts);
+				return {
+					cwd: "/tmp/worktree-mock",
+					worktree: { id: "wt-1", branch: "kanade/T-001/dev", path: "/tmp/worktree-mock" },
+					cleanup: async () => {
+						cleanedUp.push(opts.label);
+					},
+				};
+			},
+		};
+
+		const mock = createMockSessionFactory();
+		const agent = new WorkflowAgent({
+			createSession: mock.createSession,
+			isolationManager: mockIsolation as never,
+			taskId: "T-001",
+		});
+
+		await agent.run("do something", { label: "dev", isolation: "worktree" });
+
+		expect(prepared).toHaveLength(1);
+		expect(prepared[0]).toMatchObject({ taskId: "T-001", label: "dev", mode: "worktree" });
+		expect(cleanedUp).toContain("dev");
+		// session cwd should be the worktree path
+		expect(mock.calls[0].cwd).toBe("/tmp/worktree-mock");
+	});
+
+	it("skips isolationManager when isolation is not set", async () => {
+		const prepared: unknown[] = [];
+		const mockIsolation = {
+			prepare: async (opts: unknown) => {
+				prepared.push(opts);
+				return { cwd: "/tmp", cleanup: async () => {} };
+			},
+		};
+
+		const mock = createMockSessionFactory();
+		const agent = new WorkflowAgent({
+			createSession: mock.createSession,
+			isolationManager: mockIsolation as never,
+			taskId: "T-001",
+		});
+
+		await agent.run("do something", {});
+		expect(prepared).toHaveLength(0);
+	});
+});

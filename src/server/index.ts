@@ -8,10 +8,15 @@ import { TaskManager } from "./task-manager.ts";
 
 export { createApp } from "./app.ts";
 export type { AppContext } from "./app.ts";
+export { AppError } from "./errors.ts";
 export { EventBus } from "./event-bus.ts";
 export type { ServerEvent } from "./event-bus.ts";
 export { TaskManager } from "./task-manager.ts";
-export type { CreateTaskInput, CreateTaskResult } from "./task-manager.ts";
+export type { CreateTaskInput, CreateTaskResult, TaskOptions } from "./task-manager.ts";
+export { WorkflowStore } from "./workflow-store.ts";
+export type { WorkflowInfo } from "./workflow-store.ts";
+export { LlmWorkflowAuthor, StubWorkflowAuthor } from "./workflow-author.ts";
+export type { WorkflowAuthor } from "./workflow-author.ts";
 
 export interface ServerHandle {
 	url: string;

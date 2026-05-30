@@ -1,7 +1,9 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { TaskStatus } from "../store/index.ts";
+import { AppError } from "./errors.ts";
 import type { EventBus, ServerEvent } from "./event-bus.ts";
+import type { CreateTaskInput } from "./task-manager.ts";
 import type { TaskManager } from "./task-manager.ts";
 
 export interface AppContext {
@@ -12,7 +14,10 @@ export interface AppContext {
 export function createApp(ctx: AppContext): Hono {
 	const app = new Hono();
 
-	app.onError((error, c) => c.json({ error: error.message }, 500));
+	app.onError((err, c) => {
+		if (err instanceof AppError) return c.json({ error: err.message }, err.status);
+		return c.json({ error: err.message }, 500);
+	});
 
 	app.get("/health", (c) => c.json({ ok: true }));
 
@@ -20,6 +25,34 @@ export function createApp(ctx: AppContext): Hono {
 		const body = await c.req.json();
 		const result = ctx.taskManager.create(body);
 		return c.json(result, 202);
+	});
+
+	app.get("/workflows", (c) => {
+		return c.json({ workflows: ctx.taskManager.listWorkflows() });
+	});
+
+	app.get("/workflows/:name", (c) => {
+		const workflow = ctx.taskManager.getWorkflow(c.req.param("name"));
+		if (!workflow) return c.json({ error: "Workflow not found" }, 404);
+		return c.json(workflow);
+	});
+
+	app.put("/workflows/:name", async (c) => {
+		const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+		const { script } = body;
+		if (typeof script !== "string" || !script.trim()) throw new AppError("script is required", 400);
+		try {
+			ctx.taskManager.putWorkflow(c.req.param("name"), script);
+		} catch (err) {
+			throw new AppError(err instanceof Error ? err.message : String(err), 400);
+		}
+		return c.json({ ok: true });
+	});
+
+	app.delete("/workflows/:name", (c) => {
+		const deleted = ctx.taskManager.deleteWorkflow(c.req.param("name"));
+		if (!deleted) return c.json({ error: "Workflow not found" }, 404);
+		return c.json({ ok: true });
 	});
 
 	app.get("/tasks", (c) => {
@@ -61,6 +94,51 @@ export function createApp(ctx: AppContext): Hono {
 
 	app.post("/tasks/:id/abort", (c) => {
 		ctx.taskManager.abort(c.req.param("id"));
+		return c.json({ ok: true });
+	});
+
+	app.get("/tasks/:id/journal", (c) => {
+		const entries = ctx.taskManager.getJournal(c.req.param("id"));
+		if (!entries) return c.json({ error: "Task not found" }, 404);
+		return c.json(entries);
+	});
+
+	app.get("/tasks/:id/script", (c) => {
+		const script = ctx.taskManager.getScript(c.req.param("id"));
+		if (script === null) return c.json({ error: "Task not found" }, 404);
+		return c.json({ script });
+	});
+
+	app.get("/tasks/:id/artifacts", (c) => {
+		const list = ctx.taskManager.getArtifacts(c.req.param("id"));
+		if (!list) return c.json({ error: "Task not found" }, 404);
+		return c.json({ artifacts: list });
+	});
+
+	app.get("/tasks/:id/artifacts/:name", (c) => {
+		const content = ctx.taskManager.getArtifact(c.req.param("id"), c.req.param("name"));
+		if (content === null) return c.json({ error: "Not found" }, 404);
+		return c.json(content);
+	});
+
+	app.post("/tasks/:id/rerun", async (c) => {
+		if (!ctx.taskManager.get(c.req.param("id"))) return c.json({ error: "Task not found" }, 404);
+		const body = (await c.req.json().catch(() => ({}))) as {
+			args?: unknown;
+			options?: Partial<CreateTaskInput["options"]>;
+		};
+		const result = ctx.taskManager.rerun(c.req.param("id"), body);
+		return c.json(result, 202);
+	});
+
+	app.post("/tasks/:id/save", async (c) => {
+		const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+		const { name } = body;
+		if (typeof name !== "string" || !name.trim()) throw new AppError("name is required", 400);
+		if (!/^[a-zA-Z0-9_-]+$/.test(name))
+			throw new AppError("name must contain only alphanumeric characters, hyphens, and underscores", 400);
+		if (!ctx.taskManager.get(c.req.param("id"))) return c.json({ error: "Task not found" }, 404);
+		ctx.taskManager.save(c.req.param("id"), name);
 		return c.json({ ok: true });
 	});
 

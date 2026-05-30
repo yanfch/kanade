@@ -1,3 +1,8 @@
-// Worktree-based isolation manager. To be implemented.
-// See ./README.md and docs/10-isolation.md.
-export {};
+export type {
+	IsolationConfig,
+	IsolationContext,
+	IsolationMode,
+	PrepareOptions,
+	WorktreeRef,
+} from "./isolation-manager.ts";
+export { IsolationManager } from "./isolation-manager.ts";

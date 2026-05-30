@@ -6,6 +6,7 @@ import type { Node } from "acorn";
 import { parse } from "acorn";
 import type { TSchema } from "typebox";
 import type { HumanRequest, HumanResponse } from "../human/index.ts";
+import type { IsolationManager } from "../isolation/index.ts";
 import { hashHumanRequest } from "../journal/index.ts";
 import { WorkflowAgent, type WorkflowAgentOptions } from "./workflow-agent.ts";
 
@@ -29,6 +30,7 @@ export interface WorkflowRunOptions extends Omit<WorkflowAgentOptions, "journal"
 	agent?: Pick<WorkflowAgent, "run">;
 	journal?: WorkflowJournal;
 	agentJournal?: WorkflowAgentOptions["journal"];
+	isolationManager?: Pick<IsolationManager, "prepare">;
 	human?: WorkflowHumanGate;
 	concurrency?: number;
 	tokenBudget?: number | null;
@@ -113,7 +115,14 @@ export async function runWorkflow<T = unknown>(
 	const started = Date.now();
 	const { meta, body } = parseWorkflowScript(script);
 	const state: RuntimeState = { logs: [], phases: [], agentCount: 0, humanCount: 0, spent: 0 };
-	const agentRunner = options.agent ?? new WorkflowAgent({ ...options, journal: options.agentJournal });
+	const agentRunner =
+		options.agent ??
+		new WorkflowAgent({
+			...options,
+			journal: options.agentJournal,
+			isolationManager: options.isolationManager,
+			taskId: options.taskId,
+		});
 	const concurrency = Math.max(
 		1,
 		Math.min(options.concurrency ?? Math.max(1, (globalThis.navigator?.hardwareConcurrency ?? 8) - 2), 16),

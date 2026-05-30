@@ -2,6 +2,19 @@ import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
 
+export interface JournalEntryWithKey<T = unknown> extends JournalEntry<T> {
+	cacheKey: string;
+}
+
+export interface HumanJournalEntryWithKey<T = unknown> extends HumanJournalEntry<T> {
+	cacheKey: string;
+}
+
+export interface JournalAllEntries {
+	agents: JournalEntryWithKey[];
+	humans: HumanJournalEntryWithKey[];
+}
+
 export interface JournalEntry<T = unknown> {
 	result: T;
 	tokens: number | null;
@@ -91,6 +104,31 @@ export class Journal {
 		this.db
 			.prepare("INSERT OR REPLACE INTO journal_human (cache_key, response, resolved_at) VALUES (?, ?, ?)")
 			.run(cacheKey, JSON.stringify(response), Date.now());
+	}
+
+	listAll(): JournalAllEntries {
+		const agentRows = this.db
+			.prepare("SELECT cache_key, result, tokens, created_at, hit_count FROM journal ORDER BY created_at ASC")
+			.all() as Array<JournalRow & { cache_key: string }>;
+
+		const humanRows = this.db
+			.prepare("SELECT cache_key, response, resolved_at FROM journal_human ORDER BY resolved_at ASC")
+			.all() as Array<HumanJournalRow & { cache_key: string }>;
+
+		return {
+			agents: agentRows.map((row) => ({
+				cacheKey: row.cache_key,
+				result: JSON.parse(row.result) as unknown,
+				tokens: row.tokens,
+				createdAt: row.created_at,
+				hitCount: row.hit_count,
+			})),
+			humans: humanRows.map((row) => ({
+				cacheKey: row.cache_key,
+				response: JSON.parse(row.response) as unknown,
+				resolvedAt: row.resolved_at,
+			})),
+		};
 	}
 }
 

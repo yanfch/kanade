@@ -15,6 +15,7 @@ import {
 	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import type { Static, TSchema } from "typebox";
+import type { IsolationManager } from "../isolation/index.ts";
 import { hashCall } from "../journal/index.ts";
 import { type RoleConfig, buildSubagentPrompt, filterToolsByWhitelist, loadRole } from "../roles/index.ts";
 import { type StructuredOutputCapture, createStructuredOutputTool } from "./structured-output.ts";
@@ -56,6 +57,10 @@ export interface WorkflowAgentOptions {
 	inheritPiSettings?: boolean;
 	disableSubagentCompaction?: boolean;
 	journal?: AgentJournal;
+	/** IsolationManager instance for worktree isolation. */
+	isolationManager?: Pick<IsolationManager, "prepare">;
+	/** Task ID passed to IsolationManager.prepare(). */
+	taskId?: string;
 }
 
 export interface AgentRunOptions<TSchemaDef extends TSchema | undefined = undefined> {
@@ -66,6 +71,10 @@ export interface AgentRunOptions<TSchemaDef extends TSchema | undefined = undefi
 	model?: string;
 	instructions?: string;
 	signal?: AbortSignal;
+	isolation?: "worktree";
+	reuseBranch?: string;
+	baseRepo?: string;
+	baseBranch?: string;
 }
 
 export type AgentRunResult<TSchemaDef extends TSchema | undefined> = TSchemaDef extends TSchema
@@ -87,6 +96,8 @@ export class WorkflowAgent {
 	private readonly inheritPiSettings: boolean;
 	private readonly disableSubagentCompaction: boolean;
 	private readonly journal?: AgentJournal;
+	private readonly isolationManager?: Pick<IsolationManager, "prepare">;
+	private readonly taskId?: string;
 
 	constructor(options: WorkflowAgentOptions = {}) {
 		this.cwd = options.cwd ?? process.cwd();
@@ -103,12 +114,27 @@ export class WorkflowAgent {
 		this.inheritPiSettings = options.inheritPiSettings ?? true;
 		this.disableSubagentCompaction = options.disableSubagentCompaction ?? true;
 		this.journal = options.journal;
+		this.isolationManager = options.isolationManager;
+		this.taskId = options.taskId;
 	}
 
 	async run<TSchemaDef extends TSchema | undefined = undefined>(
 		prompt: string,
 		options: AgentRunOptions<TSchemaDef> = {},
 	): Promise<AgentRunResult<TSchemaDef>> {
+		// Prepare isolation context if requested
+		const isoCtx =
+			options.isolation && this.isolationManager
+				? await this.isolationManager.prepare({
+						taskId: this.taskId ?? "unknown",
+						label: options.label ?? "agent",
+						mode: options.isolation,
+						baseRepo: options.baseRepo,
+						baseBranch: options.baseBranch,
+						reuseBranch: options.reuseBranch,
+					})
+				: null;
+		const effectiveCwd = isoCtx?.cwd ?? this.cwd;
 		const roleConfig = options.role ? await this.loadRole(options.role) : null;
 		const schema = options.schema ?? (roleConfig?.defaultSchema as TSchema | undefined);
 		const capture: StructuredOutputCapture<Static<Extract<TSchemaDef, TSchema>>> = {
@@ -138,7 +164,7 @@ export class WorkflowAgent {
 		const sessionOptions = await this.buildSessionOptions(requestedModel);
 
 		const { session } = await this.createSession({
-			cwd: this.cwd,
+			cwd: effectiveCwd,
 			agentDir: this.agentDir,
 			sessionManager: SessionManager.inMemory(),
 			customTools,
@@ -172,6 +198,7 @@ export class WorkflowAgent {
 		} finally {
 			removeAbortListener?.();
 			session.dispose();
+			await isoCtx?.cleanup();
 		}
 	}
 
