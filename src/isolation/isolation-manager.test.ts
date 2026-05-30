@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { simpleGit } from "simple-git";
@@ -341,5 +341,83 @@ describe("IsolationManager — reuse edge cases", () => {
 
 		await ctx1.cleanup();
 		await ctx2.cleanup();
+	});
+});
+
+describe("IsolationManager — merge", () => {
+	let baseRepo: string;
+	let store: StateStore;
+
+	beforeEach(async () => {
+		({ baseRepo, store } = await makeRepo());
+	});
+	afterEach(() => store?.close());
+
+	it("merges worktree branch into develop and cleans up", async () => {
+		const mergeConfig = {
+			targetBranch: "develop",
+			useNoFf: true,
+			requireCleanLint: false,
+			requireCleanTest: false,
+			deleteBranchAfterMerge: true,
+			allowSkipReview: false,
+		};
+		const mgr = new IsolationManager(store, { defaultBaseBranch: "develop", branchPrefix: "kanade" }, mergeConfig);
+
+		const ctx = await mgr.prepare({ taskId: "T-0001", label: "dev", mode: "worktree", baseRepo });
+		const branch = ctx.worktree!.branch;
+
+		// Make a commit in the worktree
+		writeFileSync(join(ctx.cwd, "feature.txt"), "hello");
+		const wtGit = simpleGit(ctx.cwd);
+		await wtGit.add(".");
+		await wtGit.commit("add feature");
+
+		await ctx.cleanup();
+
+		// Merge
+		const result = await mgr.merge("T-0001");
+		expect(result.success).toBe(true);
+		expect(result.mergeCommit).toBeTruthy();
+
+		// Branch should be deleted
+		const branches = await simpleGit(baseRepo).branchLocal();
+		expect(branches.all).not.toContain(branch);
+
+		// Worktree status should be merged
+		const rows = store.findWorktreesByTask("T-0001");
+		expect(rows[0].status).toBe("merged");
+		expect(rows[0].merge_commit).toBeTruthy();
+
+		// Develop should have the feature file
+		expect(existsSync(join(baseRepo, "feature.txt"))).toBe(true);
+	});
+
+	it("returns error when no worktrees exist", async () => {
+		const mgr = new IsolationManager(store, {
+			defaultBaseBranch: "develop",
+			branchPrefix: "kanade",
+		});
+		const result = await mgr.merge("T-9999");
+		expect(result.success).toBe(false);
+		expect(result.error).toContain("No worktrees");
+	});
+
+	it("reject removes worktree and branch", async () => {
+		const mgr = new IsolationManager(store, {
+			defaultBaseBranch: "develop",
+			branchPrefix: "kanade",
+		});
+		const ctx = await mgr.prepare({ taskId: "T-0001", label: "dev", mode: "worktree", baseRepo });
+		const branch = ctx.worktree!.branch;
+		await ctx.cleanup();
+
+		await mgr.reject("T-0001");
+
+		const branches = await simpleGit(baseRepo).branchLocal();
+		expect(branches.all).not.toContain(branch);
+
+		const rows = store.findWorktreesByTask("T-0001");
+		expect(rows[0].status).toBe("rejected");
 	});
 });

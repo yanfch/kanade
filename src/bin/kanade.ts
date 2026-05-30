@@ -460,6 +460,38 @@ async function cmdWorkflows(args: ReturnType<typeof parseArgs>["values"]) {
 	console.log(pc.dim(`\n  ${body.workflows.length} workflow(s)`));
 }
 
+async function cmdMerge(taskId: string | undefined) {
+	if (!taskId) {
+		console.error(pc.red("✖ Task ID required. Usage: kanade merge <task-id>"));
+		process.exit(1);
+	}
+
+	console.log(pc.dim(`Merging ${pc.bold(taskId)} into develop...`));
+	const body = (await api(`/tasks/${taskId}/merge`, { method: "POST" })) as {
+		success: boolean;
+		mergeCommit?: string;
+		error?: string;
+	};
+
+	if (body.success) {
+		console.log(pc.green("✔ Merged successfully."));
+		if (body.mergeCommit) console.log(pc.dim(`  Commit: ${body.mergeCommit.slice(0, 12)}`));
+	} else {
+		console.error(pc.red(`✖ Merge failed: ${body.error}`));
+		process.exit(1);
+	}
+}
+
+async function cmdReject(taskId: string | undefined) {
+	if (!taskId) {
+		console.error(pc.red("✖ Task ID required. Usage: kanade reject <task-id>"));
+		process.exit(1);
+	}
+
+	await api(`/tasks/${taskId}/reject`, { method: "POST" });
+	console.log(pc.yellow(`⚑ Task ${pc.bold(taskId)} rejected. Branch removed.`));
+}
+
 async function cmdHealth() {
 	try {
 		const body = (await api("/health")) as { ok: boolean };
@@ -508,6 +540,10 @@ async function main() {
 			return cmdRespond(positionals[1] as string, values);
 		case "abort":
 			return cmdAbort(positionals[1] as string);
+		case "merge":
+			return cmdMerge(positionals[1] as string | undefined);
+		case "reject":
+			return cmdReject(positionals[1] as string | undefined);
 		case "run":
 			return cmdRun(positionals[1] as string | undefined, values);
 		case "save":
@@ -540,6 +576,8 @@ ${pc.bold("Commands:")}
   ${pc.cyan("inbox")}        ${pc.dim("[--json]")}                      List pending human requests
   ${pc.cyan("respond")}      ${pc.dim("<task-id> --request <id> --decision <approve|reject>")}
   ${pc.cyan("abort")}        ${pc.dim("<task-id>")}                    Abort a running task
+  ${pc.cyan("merge")}        ${pc.dim("<task-id>")}                    Merge task branch into develop
+  ${pc.cyan("reject")}        ${pc.dim("<task-id>")}                    Reject task, remove branch
   ${pc.cyan("run")}          ${pc.dim("<name> [--args '{}'] [--follow]")}  Run a saved workflow
   ${pc.cyan("save")}         ${pc.dim("<task-id> --as <name>")}        Save task script as workflow
   ${pc.cyan("workflows")}    ${pc.dim("[--json]")}                     List saved workflows

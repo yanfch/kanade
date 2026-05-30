@@ -54,13 +54,17 @@ export class TaskManager {
 	) {
 		this.workflowStore = new WorkflowStore(config.paths.workflowsDir);
 		this.author = author ?? this.resolveAuthor();
-		this.isolation = new IsolationManager(store, {
-			defaultBaseBranch: config.isolation.defaultBaseBranch,
-			branchPrefix: config.isolation.branchPrefix,
-			autoCleanupOnReject: config.isolation.autoCleanupOnReject,
-			autoCleanupOnApprove: config.isolation.autoCleanupOnApprove,
-			autoCleanupOnAbort: config.isolation.autoCleanupOnAbort,
-		});
+		this.isolation = new IsolationManager(
+			store,
+			{
+				defaultBaseBranch: config.isolation.defaultBaseBranch,
+				branchPrefix: config.isolation.branchPrefix,
+				autoCleanupOnReject: config.isolation.autoCleanupOnReject,
+				autoCleanupOnApprove: config.isolation.autoCleanupOnApprove,
+				autoCleanupOnAbort: config.isolation.autoCleanupOnAbort,
+			},
+			config.merge,
+		);
 		this.logger = tracing?.logger.forComponent("task-manager") ?? createNoopLogger();
 		this.tracer = tracing?.tracer ?? ({ startSpan: () => noopSpan } as unknown as Tracer);
 	}
@@ -305,6 +309,32 @@ export class TaskManager {
 		this.store.updateTask(taskId, { status: "aborted", finished_at: Date.now() });
 		this.events.emit("task.aborted", { taskId }, taskId);
 		this.logger.forTask(taskId).info("task aborted");
+	}
+
+	async merge(taskId: string): Promise<{ success: boolean; mergeCommit?: string; error?: string }> {
+		const task = this.store.getTask(taskId);
+		if (!task) return { success: false, error: `Task not found: ${taskId}` };
+		if (task.status !== "finished")
+			return { success: false, error: `Task must be finished before merge (current: ${task.status})` };
+
+		const result = await this.isolation.merge(taskId);
+		if (result.success) {
+			this.events.emit("task.merged", { taskId, mergeCommit: result.mergeCommit }, taskId);
+			this.logger.forTask(taskId).info("task merged", { commit: result.mergeCommit ?? "" });
+		} else {
+			this.logger.forTask(taskId).warn("merge failed", { error: result.error ?? "" });
+		}
+		return result;
+	}
+
+	async reject(taskId: string): Promise<void> {
+		const task = this.store.getTask(taskId);
+		if (!task) throw new Error(`Task not found: ${taskId}`);
+
+		await this.isolation.reject(taskId);
+		this.store.updateTask(taskId, { status: "aborted" });
+		this.events.emit("task.rejected", { taskId }, taskId);
+		this.logger.forTask(taskId).info("task rejected");
 	}
 
 	private async run(taskId: string, script: string, args: unknown, options: TaskOptions = {}): Promise<void> {

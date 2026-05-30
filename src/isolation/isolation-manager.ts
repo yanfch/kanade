@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { simpleGit } from "simple-git";
+import type { MergeConfig } from "../config/index.ts";
 import type { StateStore, WorktreeRow } from "../store/index.ts";
 
 export type IsolationMode = "none" | "worktree";
@@ -25,6 +26,12 @@ export interface IsolationConfig {
 	autoCleanupOnAbort?: boolean;
 }
 
+export interface MergeResult {
+	success: boolean;
+	mergeCommit?: string;
+	error?: string;
+}
+
 export interface PrepareOptions {
 	taskId: string;
 	label: string;
@@ -42,6 +49,7 @@ export class IsolationManager {
 	constructor(
 		private readonly store: StateStore,
 		private readonly config: IsolationConfig,
+		private readonly mergeConfig?: MergeConfig,
 	) {}
 
 	async prepare(opts: PrepareOptions): Promise<IsolationContext> {
@@ -82,6 +90,121 @@ export class IsolationManager {
 		for (const row of rows) {
 			await this.removeWorktree(row);
 			this.store.updateWorktree(row.id, { status: "abandoned", finished_at: Date.now() });
+		}
+	}
+
+	/**
+	 * Merge a task's worktree branch into the target branch (typically develop).
+	 *
+	 * Steps:
+	 * 1. Checkout target branch
+	 * 2. git merge --no-ff <branch>
+	 * 3. Run lint + test guards (if configured)
+	 * 4. On success: delete worktree dir + branch (if configured)
+	 * 5. On failure: git reset --hard to undo the merge
+	 */
+	async merge(taskId: string): Promise<MergeResult> {
+		const rows = this.store.findWorktreesByTask(taskId);
+		if (rows.length === 0) return { success: false, error: `No worktrees found for task: ${taskId}` };
+
+		const target = this.mergeConfig?.targetBranch ?? this.config.defaultBaseBranch;
+		const useNoFf = this.mergeConfig?.useNoFf ?? true;
+
+		// Use the first worktree's base_repo
+		const baseRepo = rows[0].base_repo;
+		const git = simpleGit(baseRepo);
+
+		// Save current branch to restore on failure
+		const currentBranch = (await git.branchLocal()).current;
+
+		try {
+			// 1. Checkout target
+			await git.checkoutLocalBranch(target).catch(() => git.checkout(target));
+
+			// 2. Merge each branch
+			for (const row of rows) {
+				const mergeArgs = useNoFf ? ["merge", "--no-ff", row.branch] : ["merge", row.branch];
+				await git.raw(mergeArgs);
+			}
+
+			// 3. Run lint guard
+			if (this.mergeConfig?.requireCleanLint) {
+				try {
+					const { execSync } = await import("node:child_process");
+					execSync("npm run lint", { cwd: baseRepo, stdio: "pipe" });
+				} catch {
+					await git.raw(["reset", "--hard", "HEAD~1"]);
+					return { success: false, error: "Lint check failed. Merge rolled back." };
+				}
+			}
+
+			// 4. Run test guard
+			if (this.mergeConfig?.requireCleanTest) {
+				try {
+					const { execSync } = await import("node:child_process");
+					execSync("npm test -- --run", { cwd: baseRepo, stdio: "pipe" });
+				} catch {
+					await git.raw(["reset", "--hard", "HEAD~1"]);
+					return { success: false, error: "Test check failed. Merge rolled back." };
+				}
+			}
+
+			// 5. Get merge commit hash
+			const log = await git.log({ maxCount: 1 });
+			const mergeCommit = log.latest?.hash ?? "";
+
+			// 6. Update worktree status
+			for (const row of rows) {
+				this.store.updateWorktree(row.id, {
+					status: "merged",
+					merge_commit: mergeCommit,
+					finished_at: Date.now(),
+				});
+
+				// Delete worktree dir
+				await this.removeWorktreeDir(row);
+
+				// Delete branch if configured
+				if (this.mergeConfig?.deleteBranchAfterMerge ?? true) {
+					try {
+						await git.deleteLocalBranch(row.branch, true);
+					} catch {
+						// branch may already be gone
+					}
+				}
+			}
+
+			return { success: true, mergeCommit };
+		} catch (err) {
+			// Rollback: reset to the state before merge
+			try {
+				await git.raw(["reset", "--hard", "HEAD~1"]);
+			} catch {
+				// reset may fail if merge didn't actually happen
+			}
+
+			// Restore original branch
+			try {
+				await git.checkout(currentBranch);
+			} catch {
+				// best effort
+			}
+
+			return {
+				success: false,
+				error: err instanceof Error ? err.message : String(err),
+			};
+		}
+	}
+
+	/**
+	 * Reject a task: remove worktree + branch without merging.
+	 */
+	async reject(taskId: string): Promise<void> {
+		const rows = this.store.findWorktreesByTask(taskId);
+		for (const row of rows) {
+			await this.removeWorktree(row);
+			this.store.updateWorktree(row.id, { status: "rejected", finished_at: Date.now() });
 		}
 	}
 

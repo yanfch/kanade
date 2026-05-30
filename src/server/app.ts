@@ -153,6 +153,17 @@ export function createApp(ctx: AppContext): Hono {
 		return c.json({ ok: true });
 	});
 
+	app.post("/tasks/:id/merge", async (c) => {
+		const result = await ctx.taskManager.merge(c.req.param("id"));
+		if (!result.success) return c.json({ error: result.error }, 400);
+		return c.json(result);
+	});
+
+	app.post("/tasks/:id/reject", async (c) => {
+		await ctx.taskManager.reject(c.req.param("id"));
+		return c.json({ ok: true });
+	});
+
 	return app;
 }
 
