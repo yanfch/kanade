@@ -189,9 +189,8 @@ describe("IsolationManager — mode:worktree", () => {
 		await mgr.finalizeWorktrees("T-0001", "aborted");
 
 		const row = store.getWorktree(ctx.worktree!.id);
-		// When cleanup is disabled, the else branch runs: removes worktree dir, sets inactive
-		// (Note: this is the current behavior — the else branch always removes worktree dir)
-		expect(row?.status).toBe("inactive");
+		// When cleanup is disabled, worktree is kept but marked abandoned
+		expect(row?.status).toBe("abandoned");
 
 		const branches = await simpleGit(baseRepo).branchLocal();
 		expect(branches.all).toContain("kanade/T-0001/dev");

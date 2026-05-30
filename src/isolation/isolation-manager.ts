@@ -56,15 +56,23 @@ export class IsolationManager {
 		const rows = this.store.findWorktreesByTask(taskId);
 		for (const row of rows) {
 			if (decision === "rejected" && (this.config.autoCleanupOnReject ?? true)) {
+				// rejected + cleanup enabled: remove worktree dir + branch
 				await this.removeWorktree(row);
 				this.store.updateWorktree(row.id, { status: "rejected", finished_at: Date.now() });
 			} else if (decision === "aborted" && (this.config.autoCleanupOnAbort ?? true)) {
+				// aborted + cleanup enabled: remove worktree dir + branch
 				await this.removeWorktree(row);
 				this.store.updateWorktree(row.id, { status: "abandoned", finished_at: Date.now() });
-			} else {
-				// approved (or cleanup disabled): remove worktree dir but keep branch
+			} else if (decision === "approved") {
+				// approved: remove worktree dir to save disk, keep branch for merge
 				await this.removeWorktreeDir(row);
 				this.store.updateWorktree(row.id, { status: "inactive", finished_at: Date.now() });
+			} else {
+				// rejected/aborted with cleanup disabled: keep everything
+				this.store.updateWorktree(row.id, {
+					status: decision === "rejected" ? "rejected" : "abandoned",
+					finished_at: Date.now(),
+				});
 			}
 		}
 	}

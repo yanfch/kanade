@@ -384,7 +384,7 @@ export class TaskManager {
 			void this.isolation.finalizeWorktrees(taskId, "approved");
 		} catch (error) {
 			const aborted = controller.signal.aborted;
-			const decision = aborted ? "aborted" : "aborted";
+			const decision = aborted ? "aborted" : "rejected";
 			const finalStatus = aborted ? "aborted" : "failed";
 			this.store.updateTask(taskId, {
 				status: finalStatus,
