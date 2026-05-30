@@ -6,12 +6,15 @@ export interface HumanGateOptions {
 	initialPollMs?: number;
 	/** Maximum poll interval in ms. Default: 30000 (30s) */
 	maxPollMs?: number;
+	/** Stop polling after this many ms. Default: 300000 (5min) */
+	pollTimeoutMs?: number;
 }
 
 export class HumanGate {
 	private readonly waiters = new Map<string, Set<(response: HumanResponse) => void>>();
 	private readonly initialPollMs: number;
 	private readonly maxPollMs: number;
+	private readonly pollTimeoutMs: number;
 
 	constructor(
 		private readonly store: StateStore,
@@ -19,6 +22,7 @@ export class HumanGate {
 	) {
 		this.initialPollMs = options.initialPollMs ?? 100;
 		this.maxPollMs = options.maxPollMs ?? 30_000;
+		this.pollTimeoutMs = options.pollTimeoutMs ?? 300_000;
 	}
 
 	async wait(requestId: string, signal?: AbortSignal): Promise<HumanResponse> {
@@ -29,6 +33,7 @@ export class HumanGate {
 		return new Promise<HumanResponse>((resolve, reject) => {
 			let settled = false;
 			let pollMs = this.initialPollMs;
+			let elapsed = 0;
 			let timer: ReturnType<typeof setTimeout> | null = null;
 
 			const poll = () => {
@@ -43,7 +48,13 @@ export class HumanGate {
 					fail(error as Error);
 					return;
 				}
-				// Incremental backoff: double each time, cap at max
+
+				elapsed += pollMs;
+
+				// Stop polling after timeout — task goes dormant in DB.
+				// Waiter stays alive for direct wake via resolve().
+				if (elapsed >= this.pollTimeoutMs) return;
+
 				pollMs = Math.min(pollMs * 2, this.maxPollMs);
 				timer = setTimeout(poll, pollMs);
 			};
@@ -79,7 +90,6 @@ export class HumanGate {
 			set.add(onWake);
 			signal?.addEventListener("abort", onAbort, { once: true });
 
-			// Start first poll
 			timer = setTimeout(poll, this.initialPollMs);
 		});
 	}
