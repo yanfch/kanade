@@ -1,0 +1,108 @@
+import { Hono } from "hono";
+import { streamSSE } from "hono/streaming";
+import type { TaskStatus } from "../store/index.ts";
+import type { EventBus, ServerEvent } from "./event-bus.ts";
+import type { TaskManager } from "./task-manager.ts";
+
+export interface AppContext {
+	taskManager: TaskManager;
+	events: EventBus;
+}
+
+export function createApp(ctx: AppContext): Hono {
+	const app = new Hono();
+
+	app.onError((error, c) => c.json({ error: error.message }, 500));
+
+	app.get("/health", (c) => c.json({ ok: true }));
+
+	app.post("/tasks", async (c) => {
+		const body = await c.req.json();
+		const result = ctx.taskManager.create(body);
+		return c.json(result, 202);
+	});
+
+	app.get("/tasks", (c) => {
+		const status = c.req.query("status") as TaskStatus | undefined;
+		return c.json({ tasks: ctx.taskManager.list(status) });
+	});
+
+	app.get("/tasks/:id", (c) => {
+		const task = ctx.taskManager.get(c.req.param("id"));
+		if (!task) return c.json({ error: "Task not found" }, 404);
+		return c.json({ task });
+	});
+
+	app.get("/inbox", (c) => c.json({ requests: ctx.taskManager.inbox().map(formatInboxRow) }));
+
+	app.get("/events", (c) =>
+		streamSSE(c, async (stream) => {
+			const off = ctx.events.onAny((event) => void writeEvent(stream, event));
+			await waitForClose(c.req.raw.signal, off, stream);
+		}),
+	);
+
+	app.get("/tasks/:id/events", (c) => {
+		const taskId = c.req.param("id");
+		if (!ctx.taskManager.get(taskId)) return c.json({ error: "Task not found" }, 404);
+		return streamSSE(c, async (stream) => {
+			const off = ctx.events.onTask(taskId, (event) => void writeEvent(stream, event));
+			await waitForClose(c.req.raw.signal, off, stream);
+		});
+	});
+
+	app.post("/tasks/:id/respond", async (c) => {
+		const taskId = c.req.param("id");
+		const body = await c.req.json();
+		if (typeof body.request_id !== "string") throw new Error("request_id is required");
+		ctx.taskManager.respond(taskId, body.request_id, body.response ?? body);
+		return c.json({ ok: true });
+	});
+
+	app.post("/tasks/:id/abort", (c) => {
+		ctx.taskManager.abort(c.req.param("id"));
+		return c.json({ ok: true });
+	});
+
+	return app;
+}
+
+function formatInboxRow(row: ReturnType<TaskManager["inbox"]>[number]) {
+	return {
+		request_id: row.request_id,
+		task_id: row.task_id,
+		cache_key: row.cache_key,
+		payload: JSON.parse(row.payload),
+		status: row.status,
+		created_at: row.created_at,
+		resolved_at: row.resolved_at,
+		response: row.response ? JSON.parse(row.response) : null,
+	};
+}
+
+async function writeEvent(
+	stream: { writeSSE(message: { event?: string; data: string; id?: string }): Promise<void> },
+	event: ServerEvent,
+) {
+	await stream.writeSSE({ event: event.type, id: String(event.ts), data: JSON.stringify(event) });
+}
+
+async function waitForClose(
+	signal: AbortSignal,
+	off: () => void,
+	stream: { writeSSE(message: { event?: string; data: string }): Promise<void> },
+): Promise<void> {
+	const keepalive = setInterval(() => void stream.writeSSE({ event: "keepalive", data: "{}" }), 15_000);
+	try {
+		await new Promise<void>((resolve) => {
+			if (signal.aborted) {
+				resolve();
+				return;
+			}
+			signal.addEventListener("abort", () => resolve(), { once: true });
+		});
+	} finally {
+		clearInterval(keepalive);
+		off();
+	}
+}
