@@ -66,6 +66,16 @@ export interface DefaultsConfig {
 	concurrency: number;
 }
 
+export interface ModelsConfig {
+	mode: "inherit-pi" | "kanade";
+	piAgentDir: string | null;
+	agentDir: string | null;
+	authPath: string | null;
+	modelsPath: string | null;
+	inheritPiSettings: boolean;
+	disableSubagentCompaction: boolean;
+}
+
 export interface DebugConfig {
 	persistSubagents: boolean;
 	persistFilter: PersistFilter | null;
@@ -92,6 +102,7 @@ export interface KanadeConfig {
 	merge: MergeConfig;
 	tracing: TracingConfig;
 	defaults: DefaultsConfig;
+	models: ModelsConfig;
 	debug: DebugConfig;
 	cleanup: CleanupConfig;
 }
@@ -163,6 +174,15 @@ function defaultConfig(paths: KanadePaths): KanadeConfig {
 			tokenBudget: 2_000_000,
 			concurrency: 16,
 		},
+		models: {
+			mode: "inherit-pi",
+			piAgentDir: null,
+			agentDir: null,
+			authPath: null,
+			modelsPath: null,
+			inheritPiSettings: true,
+			disableSubagentCompaction: true,
+		},
 		debug: {
 			persistSubagents: false,
 			persistFilter: null,
@@ -191,10 +211,7 @@ function deepMerge<T>(base: T, overrides: Partial<T> | undefined): T {
 			typeof baseValue === "object" &&
 			!Array.isArray(baseValue)
 		) {
-			(result as Record<string, unknown>)[key as string] = deepMerge(
-				baseValue,
-				value as Record<string, unknown>,
-			);
+			(result as Record<string, unknown>)[key as string] = deepMerge(baseValue, value as Record<string, unknown>);
 		} else {
 			(result as Record<string, unknown>)[key as string] = value;
 		}

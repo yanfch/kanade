@@ -7,6 +7,7 @@ export type {
 	KanadeConfig,
 	KanadePaths,
 	MergeConfig,
+	ModelsConfig,
 	PersistFilter,
 	ServerConfig,
 	TracingConfig,
