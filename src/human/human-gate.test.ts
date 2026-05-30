@@ -130,4 +130,54 @@ describe("HumanGate", () => {
 			store.close();
 		}
 	});
+
+	it("stops polling after pollTimeout but waiter stays alive for direct wake", async () => {
+		const store = createStore();
+		try {
+			insertPending(store);
+			// Short timeout: stop polling after 50ms
+			const gate = new HumanGate(store, { initialPollMs: 10, maxPollMs: 10, pollTimeoutMs: 50 });
+			const waiting = gate.wait("req-1");
+
+			// Wait longer than pollTimeout
+			await new Promise((r) => setTimeout(r, 100));
+
+			// Polling stopped, but resolve() should still wake the waiter
+			gate.resolve("req-1", { decision: "approve" });
+
+			await expect(waiting).resolves.toEqual({ decision: "approve" });
+		} finally {
+			store.close();
+		}
+	});
+
+	it("recover() re-attaches waiters for pending requests", async () => {
+		const store = createStore();
+		try {
+			insertPending(store, "req-1");
+			insertPending(store, "req-2");
+
+			// Simulate server restart: create fresh gate
+			const gate = new HumanGate(store, { initialPollMs: 5, pollTimeoutMs: 50 });
+			const recovered = gate.recover();
+			expect(recovered).toBe(2);
+
+			// Resolve one — should wake the recovered waiter
+			const waiting = gate.wait("req-1");
+			gate.resolve("req-1", { decision: "yes" });
+			await expect(waiting).resolves.toEqual({ decision: "yes" });
+		} finally {
+			store.close();
+		}
+	});
+
+	it("recover() returns 0 when no pending requests", () => {
+		const store = createStore();
+		try {
+			const gate = new HumanGate(store);
+			expect(gate.recover()).toBe(0);
+		} finally {
+			store.close();
+		}
+	});
 });
