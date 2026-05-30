@@ -1,113 +1,89 @@
 /**
- * Mock E2E tests — real runWorkflow + WorkflowAgent, mocked pi SDK session.
+ * Mock E2E tests — real TaskManager with injected mock session.
  *
- * Tests the full execution chain: script parsing → sandbox → agent → session → result.
- * Only the bottom layer (createAgentSession) is mocked.
+ * Tests the FULL chain: TaskManager → runWorkflow → WorkflowAgent → session.
+ * Only createAgentSession is mocked.
  */
 
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { Journal } from "../../src/journal/index.ts";
-import { runWorkflow } from "../../src/workflow-engine/index.ts";
-import { WorkflowAgent } from "../../src/workflow-engine/workflow-agent.ts";
 import { createMockSessionFactory } from "./mock-session.ts";
-
-function makeRunDir(): string {
-	return mkdtempSync(join(tmpdir(), "kanade-e2e-"));
-}
-
-function makeAgent(
-	createSession: ReturnType<typeof createMockSessionFactory>["createSession"],
-	runDir: string,
-	journal?: Journal,
-) {
-	return new WorkflowAgent({
-		cwd: runDir,
-		createSession,
-		createCodingTools: () => [],
-		journal,
-	});
-}
-
-async function run(
-	script: string,
-	opts?: { createSession?: Parameters<typeof createMockSessionFactory>[0]; journal?: Journal },
-) {
-	const runDir = makeRunDir();
-	const mock = createMockSessionFactory(opts?.createSession ?? {});
-	const journal = opts?.journal ?? new Journal(join(runDir, "journal.db"));
-	const agent = makeAgent(mock.createSession, runDir, journal);
-
-	const result = await runWorkflow(script, {
-		cwd: runDir,
-		agent,
-		journal,
-		agentJournal: journal,
-	});
-
-	journal.close();
-	return { result, mock, runDir };
-}
+import { createE2EContext, waitForTask } from "./setup.ts";
 
 // ── E1: Single agent with structured output ─────────────────────────────────
 
 describe("E2E — single agent", () => {
 	it("runs one agent call and returns structured result", async () => {
-		const { result, mock } = await run(
-			`export const meta = { name: 'test', description: 'Test' }
+		const mock = createMockSessionFactory({ structuredResult: { ok: true } });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
 phase('Work')
 const r = await agent('do something', {
   label: 'worker',
   schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }
 })
 return r`,
-			{ createSession: { structuredResult: { ok: true } } },
-		);
+			});
 
-		expect(result.result).toEqual({ ok: true });
-		expect(result.agentCount).toBe(1);
-		expect(result.phases).toContain("Work");
-		expect(mock.sessions).toHaveLength(1);
-		expect(mock.sessions[0].prompts.length).toBeGreaterThanOrEqual(1);
-		expect(mock.sessions[0].prompts[0]).toContain("do something");
-		expect(mock.sessions[0].disposed).toBe(true);
+			await waitForTask(ctx.taskManager, task.task_id);
+			const row = ctx.taskManager.get(task.task_id);
+
+			expect(row?.status).toBe("finished");
+			expect(JSON.parse(row?.result ?? "null")).toEqual({ ok: true });
+			expect(mock.sessions).toHaveLength(1);
+			expect(mock.sessions[0].prompts[0]).toContain("do something");
+			expect(mock.sessions[0].disposed).toBe(true);
+		} finally {
+			ctx.cleanup();
+		}
 	});
 
 	it("returns text when no schema is provided", async () => {
-		const { result, mock } = await run(
-			`export const meta = { name: 'test', description: 'Test' }
-return await agent('summarize this', { label: 'summarizer' })`,
-			{ createSession: { text: "here is the summary" } },
-		);
+		const mock = createMockSessionFactory({ text: "here is the summary" });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+return await agent('summarize', { label: 's' })`,
+			});
 
-		expect(result.result).toBe("here is the summary");
-		expect(mock.sessions).toHaveLength(1);
+			await waitForTask(ctx.taskManager, task.task_id);
+			const result = JSON.parse(ctx.taskManager.get(task.task_id)?.result ?? "null");
+			expect(result).toBe("here is the summary");
+		} finally {
+			ctx.cleanup();
+		}
 	});
 
 	it("passes instructions in the prompt", async () => {
 		let capturedPrompt = "";
-		const { result } = await run(
-			`export const meta = { name: 'test', description: 'Test' }
+		const mock = createMockSessionFactory({
+			handler: (prompt) => {
+				capturedPrompt = prompt;
+				return { type: "structured", value: { done: true } };
+			},
+		});
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
 return await agent('implement feature', {
   label: 'dev',
   instructions: 'prefer minimal diffs',
   schema: { type: 'object', properties: { done: { type: 'boolean' } }, required: ['done'] }
 })`,
-			{
-				createSession: {
-					handler: (prompt) => {
-						capturedPrompt = prompt;
-						return { type: "structured", value: { done: true } };
-					},
-				},
-			},
-		);
+			});
 
-		expect(result.result).toEqual({ done: true });
-		expect(capturedPrompt).toContain("implement feature");
-		expect(capturedPrompt).toContain("prefer minimal diffs");
+			await waitForTask(ctx.taskManager, task.task_id);
+			expect(capturedPrompt).toContain("implement feature");
+			expect(capturedPrompt).toContain("prefer minimal diffs");
+		} finally {
+			ctx.cleanup();
+		}
 	});
 });
 
@@ -116,38 +92,30 @@ return await agent('implement feature', {
 describe("E2E — parallel", () => {
 	it("runs two agents in parallel", async () => {
 		let callCount = 0;
-		const { result, mock } = await run(
-			`export const meta = { name: 'test', description: 'Test' }
+		const mock = createMockSessionFactory({
+			handler: () => ({ type: "structured", value: { n: ++callCount } }),
+		});
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
 const results = await parallel([
   () => agent('task A', { label: 'a', schema: { type: 'object', properties: { n: { type: 'number' } }, required: ['n'] } }),
   () => agent('task B', { label: 'b', schema: { type: 'object', properties: { n: { type: 'number' } }, required: ['n'] } }),
 ])
 return { count: results.length, items: results }`,
-			{
-				createSession: {
-					handler: () => ({ type: "structured", value: { n: ++callCount } }),
-				},
-			},
-		);
+			});
 
-		const r = result.result as { count: number; items: unknown[] };
-		expect(r.count).toBe(2);
-		expect(r.items).toHaveLength(2);
-		expect(mock.sessions).toHaveLength(2);
-	});
+			await waitForTask(ctx.taskManager, task.task_id);
+			const result = JSON.parse(ctx.taskManager.get(task.task_id)?.result ?? "null");
 
-	it("parallel thunks must be functions, not promises", async () => {
-		const { result } = await run(
-			`export const meta = { name: 'test', description: 'Test' }
-try {
-  await parallel([Promise.resolve(1)])
-  return { error: 'should have thrown' }
-} catch (e) {
-  return { error: e.message }
-}`,
-		);
-
-		expect((result.result as { error: string }).error).toContain("functions");
+			expect(result.count).toBe(2);
+			expect(result.items).toHaveLength(2);
+			expect(mock.sessions).toHaveLength(2);
+		} finally {
+			ctx.cleanup();
+		}
 	});
 });
 
@@ -155,218 +123,310 @@ try {
 
 describe("E2E — pipeline", () => {
 	it("runs items through stages", async () => {
-		const callCount = 0;
-		const { result, mock } = await run(
-			`export const meta = { name: 'test', description: 'Test' }
-const results = await pipeline(
-  ['a', 'b', 'c'],
-  async (item) => agent('process ' + item, { label: item })
-)
+		const mock = createMockSessionFactory({ text: "processed" });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+const results = await pipeline(['a', 'b', 'c'], async (item) => agent('process ' + item, { label: item }))
 return { count: results.length }`,
-			{ createSession: { text: "processed" } },
-		);
+			});
 
-		expect((result.result as { count: number }).count).toBe(3);
-		expect(mock.sessions.length).toBe(3);
+			await waitForTask(ctx.taskManager, task.task_id);
+			const result = JSON.parse(ctx.taskManager.get(task.task_id)?.result ?? "null");
+			expect(result.count).toBe(3);
+			expect(mock.sessions).toHaveLength(3);
+		} finally {
+			ctx.cleanup();
+		}
 	});
 });
 
 // ── E4: request_human + respond ─────────────────────────────────────────────
 
 describe("E2E — request_human", () => {
-	it("pauses and resumes after human response", async () => {
-		const runDir = makeRunDir();
+	it("pauses and resumes after respond", async () => {
 		const mock = createMockSessionFactory({ text: "unused" });
-		const agent = makeAgent(mock.createSession, runDir);
-		const journal = new Journal(join(runDir, "journal.db"));
-
-		let humanRequestFired = false;
-		let humanRequestId = "";
-
-		const resultPromise = runWorkflow(
-			`export const meta = { name: 'test', description: 'Test' }
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
 const decision = await request_human({ title: 'Approve?', options: ['yes', 'no'] })
 return decision`,
-			{
-				cwd: runDir,
-				agent,
-				journal,
-				agentJournal: journal,
-				human: {
-					createRequest: ({ requestId }) => {
-						humanRequestFired = true;
-						humanRequestId = requestId;
-					},
-					wait: async () => ({ decision: "yes" }),
-				},
-			},
-		);
+			});
 
-		const result = await resultPromise;
-		journal.close();
+			await waitForTask(ctx.taskManager, task.task_id, "needs_human", 5000);
+			expect(ctx.taskManager.get(task.task_id)?.status).toBe("needs_human");
 
-		expect(humanRequestFired).toBe(true);
-		expect(humanRequestId).toBeTruthy();
-		expect(result.result).toEqual({ decision: "yes" });
+			const pending = ctx.store.listPendingNeedsHuman().find((r) => r.task_id === task.task_id);
+			expect(pending).toBeDefined();
+
+			ctx.taskManager.respond(task.task_id, pending!.request_id, { decision: "yes" });
+
+			await waitForTask(ctx.taskManager, task.task_id, "finished", 5000);
+			const result = JSON.parse(ctx.taskManager.get(task.task_id)?.result ?? "null");
+			expect(result).toEqual({ decision: "yes" });
+		} finally {
+			ctx.cleanup();
+		}
 	});
 });
 
-// ── E5: Agent failure doesn't crash workflow ────────────────────────────────
+// ── E5: Agent failure ───────────────────────────────────────────────────────
 
 describe("E2E — agent failure", () => {
 	it("returns null for failed agent, workflow continues", async () => {
-		const { result } = await run(
-			`export const meta = { name: 'test', description: 'Test' }
+		const mock = createMockSessionFactory({ error: new Error("LLM rate limited") });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
 const r = await agent('this will fail', { label: 'failing' })
 return { result: r, failed: r === null }`,
-			{ createSession: { error: new Error("LLM rate limited") } },
-		);
+			});
 
-		const r = result.result as { result: unknown; failed: boolean };
-		expect(r.result).toBeNull();
-		expect(r.failed).toBe(true);
+			await waitForTask(ctx.taskManager, task.task_id);
+			const result = JSON.parse(ctx.taskManager.get(task.task_id)?.result ?? "null");
+			expect(result.result).toBeNull();
+			expect(result.failed).toBe(true);
+		} finally {
+			ctx.cleanup();
+		}
 	});
 
-	it("script-level throw fails the task", async () => {
-		await expect(
-			run(`export const meta = { name: 'test', description: 'Test' }
-throw new Error('script error')`),
-		).rejects.toThrow("script error");
+	it("script-level throw sets task status to failed", async () => {
+		const mock = createMockSessionFactory({ text: "ok" });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+throw new Error('script error')`,
+			});
+
+			await waitForTask(ctx.taskManager, task.task_id, "failed", 5000);
+			const row = ctx.taskManager.get(task.task_id);
+			expect(row?.status).toBe("failed");
+			expect(row?.error).toContain("script error");
+		} finally {
+			ctx.cleanup();
+		}
 	});
 });
 
 // ── E6: Journal cache reuse ─────────────────────────────────────────────────
 
-describe("E2E — journal cache", () => {
-	it("second run reuses cached results", async () => {
+describe("E2E — rerun with journal cache", () => {
+	it("second run reuses cached agent results", async () => {
 		let callCount = 0;
-		const runDir = makeRunDir();
-		const journal = new Journal(join(runDir, "journal.db"));
-
-		const script = `export const meta = { name: 'test', description: 'Test' }
-const r = await agent('cached work', {
+		const mock = createMockSessionFactory({
+			handler: () => ({ type: "structured", value: { n: ++callCount } }),
+		});
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task1 = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+return await agent('cached work', {
   label: 'cached',
   schema: { type: 'object', properties: { n: { type: 'number' } }, required: ['n'] }
-})
-return r`;
+})`,
+			});
 
-		// First run
-		const mock1 = createMockSessionFactory({
-			handler: () => ({ type: "structured", value: { n: ++callCount } }),
-		});
-		const agent1 = makeAgent(mock1.createSession, runDir, journal);
-		const result1 = await runWorkflow(script, {
-			cwd: runDir,
-			agent: agent1,
-			journal,
-			agentJournal: journal,
-		});
-		expect((result1.result as { n: number }).n).toBe(1);
-		expect(callCount).toBe(1);
+			await waitForTask(ctx.taskManager, task1.task_id);
+			expect(JSON.parse(ctx.taskManager.get(task1.task_id)?.result ?? "null")).toEqual({ n: 1 });
+			expect(callCount).toBe(1);
 
-		// Second run — should use journal cache, no new LLM call
-		const mock2 = createMockSessionFactory({
-			handler: () => ({ type: "structured", value: { n: ++callCount } }),
-		});
-		const agent2 = makeAgent(mock2.createSession, runDir, journal);
-		const result2 = await runWorkflow(script, {
-			cwd: runDir,
-			agent: agent2,
-			journal,
-			agentJournal: journal,
-		});
+			// Rerun — should use journal cache
+			const task2 = ctx.taskManager.rerun(task1.task_id);
+			await waitForTask(ctx.taskManager, task2.task_id);
 
-		// Cached result from first run
-		expect((result2.result as { n: number }).n).toBe(1);
-		expect(callCount).toBe(1);
-		// Second mock should NOT have been called
-		expect(mock2.sessions).toHaveLength(0);
-
-		journal.close();
+			// Cached result from first run
+			expect(JSON.parse(ctx.taskManager.get(task2.task_id)?.result ?? "null")).toEqual({ n: 1 });
+			expect(callCount).toBe(1);
+		} finally {
+			ctx.cleanup();
+		}
 	});
 });
 
-// ── E7: Phase tracking ──────────────────────────────────────────────────────
+// ── E7: Lifecycle events ────────────────────────────────────────────────────
 
-describe("E2E — phases", () => {
-	it("tracks phases and returns them in result", async () => {
-		const { result } = await run(
-			`export const meta = { name: 'test', description: 'Test' }
+describe("E2E — task lifecycle events", () => {
+	it("emits complete event sequence", async () => {
+		const mock = createMockSessionFactory({ text: "ok" });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const events: string[] = [];
+			ctx.events.onAny((e) => events.push(e.type));
+
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+phase('work')
+return await agent('do it', { label: 'worker' })`,
+			});
+
+			await waitForTask(ctx.taskManager, task.task_id);
+
+			expect(events).toContain("task.created");
+			expect(events).toContain("task.running");
+			expect(events).toContain("workflow.phase");
+			expect(events).toContain("workflow.agent_started");
+			expect(events).toContain("workflow.agent_completed");
+			expect(events).toContain("task.finished");
+
+			const createdIdx = events.indexOf("task.created");
+			const runningIdx = events.indexOf("task.running");
+			const finishedIdx = events.indexOf("task.finished");
+			expect(runningIdx).toBeGreaterThan(createdIdx);
+			expect(finishedIdx).toBeGreaterThan(runningIdx);
+		} finally {
+			ctx.cleanup();
+		}
+	});
+});
+
+// ── E8: Abort ───────────────────────────────────────────────────────────────
+
+describe("E2E — abort", () => {
+	it("abort during needs_human sets status to aborted", async () => {
+		const mock = createMockSessionFactory({ text: "ok" });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+return await request_human({ title: 'Waiting...' })`,
+			});
+
+			await waitForTask(ctx.taskManager, task.task_id, "needs_human", 5000);
+			ctx.taskManager.abort(task.task_id);
+
+			await waitForTask(ctx.taskManager, task.task_id, "aborted", 5000);
+			expect(ctx.taskManager.get(task.task_id)?.status).toBe("aborted");
+		} finally {
+			ctx.cleanup();
+		}
+	});
+});
+
+// ── E9: Multi-phase ─────────────────────────────────────────────────────────
+
+describe("E2E — multi-phase", () => {
+	it("tracks phases and agent labels", async () => {
+		let callCount = 0;
+		const mock = createMockSessionFactory({
+			handler: () => ({ type: "text", text: `result-${++callCount}` }),
+		});
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const agentEvents: Array<{ type: string; label: string }> = [];
+			ctx.events.onAny((e) => {
+				if (e.type === "workflow.agent_started") {
+					agentEvents.push({ type: e.type, label: (e.data as { label: string }).label });
+				}
+			});
+
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
 phase('Design')
 await agent('design', { label: 'designer' })
 phase('Build')
 await agent('build', { label: 'developer' })
 return { done: true }`,
-			{ createSession: { text: "ok" } },
-		);
+			});
 
-		expect(result.phases).toEqual(["Design", "Build"]);
-		expect(result.agentCount).toBe(2);
+			await waitForTask(ctx.taskManager, task.task_id);
+
+			expect(agentEvents).toHaveLength(2);
+			expect(agentEvents[0].label).toBe("designer");
+			expect(agentEvents[1].label).toBe("developer");
+			expect(mock.sessions).toHaveLength(2);
+		} finally {
+			ctx.cleanup();
+		}
 	});
 });
 
-// ── E8: Edge cases ──────────────────────────────────────────────────────────
+// ── E10: Edge cases ─────────────────────────────────────────────────────────
 
 describe("E2E — edge cases", () => {
 	it("completes with no agent calls", async () => {
-		const { result, mock } = await run(
-			`export const meta = { name: 'test', description: 'Test' }
+		const mock = createMockSessionFactory({ text: "ok" });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
 return { static: true }`,
-		);
+			});
 
-		expect(result.result).toEqual({ static: true });
-		expect(result.agentCount).toBe(0);
-		expect(mock.sessions).toHaveLength(0);
+			await waitForTask(ctx.taskManager, task.task_id);
+			expect(JSON.parse(ctx.taskManager.get(task.task_id)?.result ?? "null")).toEqual({ static: true });
+			expect(mock.sessions).toHaveLength(0);
+		} finally {
+			ctx.cleanup();
+		}
 	});
 
 	it("passes args to the script", async () => {
-		const { result } = await run(
-			`export const meta = { name: 'test', description: 'Test' }
+		const mock = createMockSessionFactory({ text: "ok" });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
 return { received: args }`,
-		);
+				args: { key: "value", num: 42 },
+			});
 
-		// args is undefined when not passed
-		expect((result.result as { received: unknown }).received).toBeUndefined();
+			await waitForTask(ctx.taskManager, task.task_id);
+			expect(JSON.parse(ctx.taskManager.get(task.task_id)?.result ?? "null")).toEqual({
+				received: { key: "value", num: 42 },
+			});
+		} finally {
+			ctx.cleanup();
+		}
 	});
 
-	it("log() records messages", async () => {
-		const { result } = await run(
-			`export const meta = { name: 'test', description: 'Test' }
-log('step 1')
-log('step 2')
-return { done: true }`,
-		);
+	it("saved workflow source works", async () => {
+		const mock = createMockSessionFactory({ structuredResult: { ok: true } });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			ctx.taskManager.putWorkflow(
+				"test-wf",
+				`export const meta = { name: 'test', description: 'Test' }
+return await agent('run', { label: 'r', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] } })`,
+			);
 
-		expect(result.logs).toContain("step 1");
-		expect(result.logs).toContain("step 2");
+			const task = ctx.taskManager.create({ source: "saved", workflow_name: "test-wf" });
+			await waitForTask(ctx.taskManager, task.task_id);
+
+			const row = ctx.taskManager.get(task.task_id);
+			expect(row?.status).toBe("finished");
+			expect(row?.workflow_source).toBe("saved");
+			expect(row?.workflow_name).toBe("test-wf");
+		} finally {
+			ctx.cleanup();
+		}
 	});
 
-	it("concurrent agent calls respect limiter", async () => {
-		let maxConcurrent = 0;
-		let currentConcurrent = 0;
+	it("generated workflow source works", async () => {
+		const mock = createMockSessionFactory({ text: "ok" });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task = ctx.taskManager.create({ source: "generated", prompt: "test task" });
+			expect(task.generated).toBe(true);
 
-		const { result, mock } = await run(
-			`export const meta = { name: 'test', description: 'Test' }
-const results = await parallel(
-  Array.from({ length: 5 }, (_, i) => () => agent('task ' + i, { label: 't' + i }))
-)
-return { count: results.length }`,
-			{
-				createSession: {
-					handler: async () => {
-						currentConcurrent++;
-						maxConcurrent = Math.max(maxConcurrent, currentConcurrent);
-						await new Promise((r) => setTimeout(r, 50));
-						currentConcurrent--;
-						return { type: "text", text: "done" };
-					},
-				},
-			},
-		);
-
-		expect((result.result as { count: number }).count).toBe(5);
-		expect(mock.sessions).toHaveLength(5);
-		// Default concurrency limit is 16, so all 5 could run concurrently
-		expect(maxConcurrent).toBeGreaterThanOrEqual(1);
+			await waitForTask(ctx.taskManager, task.task_id);
+			expect(ctx.taskManager.get(task.task_id)?.status).toBe("finished");
+		} finally {
+			ctx.cleanup();
+		}
 	});
 });

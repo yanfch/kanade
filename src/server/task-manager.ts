@@ -1,5 +1,6 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@earendil-works/pi-coding-agent";
 import { SpanStatusCode, type Tracer } from "@opentelemetry/api";
 import type { KanadeConfig } from "../config/index.ts";
 import type { HumanGate } from "../human/index.ts";
@@ -43,6 +44,7 @@ export class TaskManager {
 
 	private readonly logger: TracingLogger;
 	private readonly tracer: Tracer;
+	private readonly createSession?: (options: CreateAgentSessionOptions) => Promise<CreateAgentSessionResult>;
 
 	constructor(
 		private readonly config: KanadeConfig,
@@ -51,7 +53,9 @@ export class TaskManager {
 		private readonly humanGate: HumanGate,
 		author?: WorkflowAuthor,
 		tracing?: TracingHandle,
+		sessionFactory?: (options: CreateAgentSessionOptions) => Promise<CreateAgentSessionResult>,
 	) {
+		this.createSession = sessionFactory;
 		this.workflowStore = new WorkflowStore(config.paths.workflowsDir);
 		this.author = author ?? this.resolveAuthor();
 		this.isolation = new IsolationManager(
@@ -367,6 +371,7 @@ export class TaskManager {
 				signal: controller.signal,
 				rolesDir: this.config.paths.rolesDir,
 				agentDir: this.resolveAgentDir(),
+				...(this.createSession ? { createSession: this.createSession } : {}),
 				inheritPiSettings: this.config.models.inheritPiSettings,
 				disableSubagentCompaction: this.config.models.disableSubagentCompaction,
 				authPath: this.config.models.authPath ?? undefined,
