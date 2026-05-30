@@ -11,4 +11,6 @@ export type {
 	PersistFilter,
 	ServerConfig,
 	TracingConfig,
+	TracingExporterConfig,
+	TracingSamplingConfig,
 } from "./config.ts";

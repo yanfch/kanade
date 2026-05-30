@@ -5,6 +5,7 @@ import type { HumanGate } from "../human/index.ts";
 import { IsolationManager } from "../isolation/index.ts";
 import { Journal, type JournalAllEntries } from "../journal/index.ts";
 import type { NeedsHumanRow, StateStore, TaskRow, TaskStatus, WorkflowSource } from "../store/index.ts";
+import { type TracingHandle, Logger as TracingLogger } from "../tracing/index.ts";
 import { runWorkflow } from "../workflow-engine/index.ts";
 import { AppError } from "./errors.ts";
 import type { EventBus } from "./event-bus.ts";
@@ -38,12 +39,15 @@ export class TaskManager {
 	private readonly author: WorkflowAuthor;
 	private readonly isolation: IsolationManager;
 
+	private readonly logger: TracingLogger;
+
 	constructor(
 		private readonly config: KanadeConfig,
 		private readonly store: StateStore,
 		private readonly events: EventBus,
 		private readonly humanGate: HumanGate,
 		author?: WorkflowAuthor,
+		tracing?: TracingHandle,
 	) {
 		this.workflowStore = new WorkflowStore(config.paths.workflowsDir);
 		this.author = author ?? this.resolveAuthor();
@@ -54,6 +58,7 @@ export class TaskManager {
 			autoCleanupOnApprove: config.isolation.autoCleanupOnApprove,
 			autoCleanupOnAbort: config.isolation.autoCleanupOnAbort,
 		});
+		this.logger = tracing?.logger.forComponent("task-manager") ?? createNoopLogger();
 	}
 
 	create(input: CreateTaskInput): CreateTaskResult {
@@ -295,6 +300,7 @@ export class TaskManager {
 		this.controllers.get(taskId)?.abort();
 		this.store.updateTask(taskId, { status: "aborted", finished_at: Date.now() });
 		this.events.emit("task.aborted", { taskId }, taskId);
+		this.logger.forTask(taskId).info("task aborted");
 	}
 
 	private async run(taskId: string, script: string, args: unknown, options: TaskOptions = {}): Promise<void> {
@@ -302,6 +308,9 @@ export class TaskManager {
 		this.controllers.set(taskId, controller);
 		const runDir = join(this.config.paths.runsDir, taskId);
 		const journal = new Journal(join(runDir, "journal.db"));
+
+		const taskLog = this.logger.forTask(taskId);
+		taskLog.info("task running");
 
 		try {
 			this.store.updateTask(taskId, { status: "running", started_at: Date.now() });
@@ -358,16 +367,21 @@ export class TaskManager {
 				result: JSON.stringify(result.result),
 			});
 			this.events.emit("task.finished", { taskId, result: result.result }, taskId);
+			taskLog.info("task finished");
 			void this.isolation.finalizeWorktrees(taskId, "approved");
 		} catch (error) {
 			const aborted = controller.signal.aborted;
 			const decision = aborted ? "aborted" : "aborted";
+			const finalStatus = aborted ? "aborted" : "failed";
 			this.store.updateTask(taskId, {
-				status: aborted ? "aborted" : "failed",
+				status: finalStatus,
 				finished_at: Date.now(),
 				error: error instanceof Error ? error.message : String(error),
 			});
 			this.events.emit(aborted ? "task.aborted" : "task.failed", { taskId, error: String(error) }, taskId);
+			taskLog.info(`task ${finalStatus}`, {
+				error: error instanceof Error ? error.message : String(error),
+			});
 			void this.isolation.finalizeWorktrees(taskId, decision);
 		} finally {
 			journal.close();
@@ -402,4 +416,17 @@ export class TaskManager {
 			return new StubWorkflowAuthor();
 		}
 	}
+}
+
+function createNoopLogger(): TracingLogger {
+	const noop = () => {};
+	const self: TracingLogger = {
+		info: noop,
+		warn: noop,
+		error: noop,
+		debug: noop,
+		forTask: () => self,
+		forComponent: () => self,
+	} as unknown as TracingLogger;
+	return self;
 }

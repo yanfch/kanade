@@ -48,16 +48,31 @@ export interface MergeConfig {
 	allowSkipReview: boolean;
 }
 
+export interface TracingExporterConfig {
+	type: "file" | "console" | "otlp_http";
+	dir?: string;
+	logDir?: string;
+	rotate?: "daily" | "hourly" | "none";
+	endpoint?: string;
+	headers?: Record<string, string>;
+}
+
+export interface TracingSamplingConfig {
+	rate: number;
+	alwaysSample: string[];
+	logErrorRate: number;
+	logInfoRate: number;
+	logDebugRate: number;
+}
+
 export interface TracingConfig {
 	enabled: boolean;
 	serviceName: string;
-	exporter: {
-		type: "file" | "console" | "otlp_http";
-		dir?: string;
-		rotate?: "daily" | "hourly" | "none";
-		endpoint?: string;
-		headers?: Record<string, string>;
-	};
+	/** @deprecated Use exporters array instead */
+	exporter: TracingExporterConfig;
+	exporters?: TracingExporterConfig[];
+	sampling?: TracingSamplingConfig;
+	captureContent?: boolean;
 }
 
 export interface DefaultsConfig {
@@ -166,8 +181,17 @@ function defaultConfig(paths: KanadePaths): KanadeConfig {
 			exporter: {
 				type: "file",
 				dir: paths.tracesDir,
+				logDir: paths.logsDir,
 				rotate: "daily",
 			},
+			sampling: {
+				rate: 1.0,
+				alwaysSample: ["workflow.task", "workflow.author", "human.request"],
+				logErrorRate: 1.0,
+				logInfoRate: 1.0,
+				logDebugRate: 0.0,
+			},
+			captureContent: false,
 		},
 		defaults: {
 			model: null,

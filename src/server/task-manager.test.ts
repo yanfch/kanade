@@ -545,7 +545,7 @@ describe("TaskManager — journal persistence", () => {
 
 describe("TaskManager — generated workflow failure", () => {
 	it("sets status to failed when author.generate() throws", async () => {
-		const { store, events, manager } = setup();
+		const { store, events, manager: _manager } = setup();
 		try {
 			const emitted: string[] = [];
 			events.onAny((e) => emitted.push(e.type));

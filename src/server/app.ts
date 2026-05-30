@@ -14,6 +14,17 @@ export interface AppContext {
 export function createApp(ctx: AppContext): Hono {
 	const app = new Hono();
 
+	// Request logging middleware
+	app.use("*", async (c, next) => {
+		const start = Date.now();
+		await next();
+		const duration = Date.now() - start;
+		const status = c.res.status;
+		// Skip noisy endpoints
+		if (c.req.path === "/health" || c.req.path.endsWith("/events")) return;
+		console.log(`${c.req.method} ${c.req.path} ${status} ${duration}ms`);
+	});
+
 	app.onError((err, c) => {
 		if (err instanceof AppError) return c.json({ error: err.message }, err.status);
 		return c.json({ error: err.message }, 500);
