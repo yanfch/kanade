@@ -12,6 +12,7 @@ import YAML from "yaml";
 export interface KanadePaths {
 	readonly root: string;
 	readonly configFile: string;
+	readonly dbDir: string;
 	readonly rolesDir: string;
 	readonly workflowsDir: string;
 	readonly sharedExtensionsDir: string;
@@ -138,12 +139,13 @@ function buildPaths(root: string): KanadePaths {
 	return {
 		root,
 		configFile: join(root, "config.yml"),
+		dbDir: join(root, "db"),
 		rolesDir: join(root, "roles"),
 		workflowsDir: join(root, "workflows"),
 		sharedExtensionsDir: join(root, "shared", "extensions"),
 		runsDir: join(root, "runs"),
 		tracesDir: process.env.KANADE_TRACES_DIR ?? join(root, "traces"),
-		stateDb: join(root, "state.db"),
+		stateDb: join(root, "db", "state.db"),
 		logsDir: join(root, "logs"),
 	};
 }
@@ -250,6 +252,7 @@ export function loadConfig(): KanadeConfig {
 	// Ensure root + key subdirs exist
 	for (const dir of [
 		root,
+		paths.dbDir,
 		paths.rolesDir,
 		paths.workflowsDir,
 		paths.runsDir,
