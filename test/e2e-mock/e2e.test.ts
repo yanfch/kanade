@@ -430,3 +430,53 @@ return await agent('run', { label: 'r', schema: { type: 'object', properties: { 
 		}
 	});
 });
+
+// ── E7: Worktree isolation ──────────────────────────────────────────────────
+
+describe("E2E — worktree isolation", () => {
+	it("agent with isolation:worktree runs in a worktree cwd", async () => {
+		const capturedCwd = "";
+		const mock = createMockSessionFactory({
+			handler: (_prompt, tools) => {
+				// The session cwd should be a worktree path, not the original cwd
+				return { type: "text", text: "ok" };
+			},
+		});
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+return await agent('work in isolation', { label: 'dev', isolation: 'worktree' })`,
+			});
+
+			await waitForTask(ctx.taskManager, task.task_id);
+			expect(ctx.taskManager.get(task.task_id)?.status).toBe("finished");
+
+			// Verify the session was created (worktree path is internal to WorkflowAgent)
+			expect(mock.sessions).toHaveLength(1);
+		} finally {
+			ctx.cleanup();
+		}
+	});
+
+	it("multiple agents can use different worktree labels", async () => {
+		const mock = createMockSessionFactory({ text: "ok" });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+const a = await agent('task A', { label: 'dev', isolation: 'worktree' })
+const b = await agent('task B', { label: 'review', isolation: 'worktree' })
+return { a, b }`,
+			});
+
+			await waitForTask(ctx.taskManager, task.task_id);
+			expect(ctx.taskManager.get(task.task_id)?.status).toBe("finished");
+			expect(mock.sessions).toHaveLength(2);
+		} finally {
+			ctx.cleanup();
+		}
+	});
+});

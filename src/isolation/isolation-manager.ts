@@ -20,6 +20,8 @@ export interface IsolationContext {
 
 export interface IsolationConfig {
 	defaultBaseBranch: string;
+	defaultBaseRepo?: string | null;
+	worktreeBaseDir?: string;
 	branchPrefix: string;
 	autoCleanupOnReject?: boolean;
 	autoCleanupOnApprove?: boolean;
@@ -211,7 +213,7 @@ export class IsolationManager {
 	// ── private ──────────────────────────────────────────────────────────────
 
 	private async prepareWorktree(opts: PrepareOptions): Promise<IsolationContext> {
-		const baseRepo = opts.baseRepo ?? process.cwd();
+		const baseRepo = opts.baseRepo ?? this.config.defaultBaseRepo ?? process.cwd();
 		const baseBranch = opts.baseBranch ?? this.config.defaultBaseBranch;
 
 		// Reuse existing worktree?
@@ -224,7 +226,8 @@ export class IsolationManager {
 		}
 
 		const branch = `${this.config.branchPrefix}/${opts.taskId}/${opts.label}`;
-		const worktreePath = join(baseRepo, "..", `${opts.taskId}-worktrees`, opts.label);
+		const worktreeBaseDir = this.config.worktreeBaseDir ?? join(baseRepo, "..");
+		const worktreePath = join(worktreeBaseDir, `${opts.taskId}-worktrees`, opts.label);
 		mkdirSync(join(worktreePath, ".."), { recursive: true });
 
 		const git = simpleGit(baseRepo);

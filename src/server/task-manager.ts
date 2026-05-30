@@ -62,6 +62,8 @@ export class TaskManager {
 			store,
 			{
 				defaultBaseBranch: config.isolation.defaultBaseBranch,
+				defaultBaseRepo: config.isolation.defaultBaseRepo,
+				worktreeBaseDir: config.isolation.worktreeBaseDir,
 				branchPrefix: config.isolation.branchPrefix,
 				autoCleanupOnReject: config.isolation.autoCleanupOnReject,
 				autoCleanupOnApprove: config.isolation.autoCleanupOnApprove,
