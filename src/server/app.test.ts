@@ -18,7 +18,7 @@ function setup() {
 	const config = loadConfig();
 	const store = new StateStore(config.paths.stateDb);
 	const events = new EventBus();
-	const humanGate = new HumanGate(store, { pollIntervalMs: 5 });
+	const humanGate = new HumanGate(store, { initialPollMs: 5 });
 	const taskManager = new TaskManager(config, store, events, humanGate);
 	const app = createApp({ taskManager, events });
 	return { config, store, taskManager, events, app };

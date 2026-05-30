@@ -51,7 +51,7 @@ describe("HumanGate", () => {
 		const store = createStore();
 		try {
 			insertPending(store);
-			const gate = new HumanGate(store, { pollIntervalMs: 10 });
+			const gate = new HumanGate(store, { initialPollMs: 10 });
 
 			const waiting = gate.wait("req-1");
 			gate.resolve("req-1", { decision: "approve" });
@@ -72,7 +72,7 @@ describe("HumanGate", () => {
 				resolved_at: Date.now(),
 				response: JSON.stringify({ freeform: "done" }),
 			});
-			const gate = new HumanGate(store, { pollIntervalMs: 10 });
+			const gate = new HumanGate(store, { initialPollMs: 10 });
 
 			await expect(gate.wait("req-1")).resolves.toEqual({ freeform: "done" });
 		} finally {
@@ -84,7 +84,7 @@ describe("HumanGate", () => {
 		const store = createStore();
 		try {
 			insertPending(store);
-			const gate = new HumanGate(store, { pollIntervalMs: 5 });
+			const gate = new HumanGate(store, { initialPollMs: 5 });
 			const waiting = gate.wait("req-1");
 
 			setTimeout(() => {
@@ -105,7 +105,7 @@ describe("HumanGate", () => {
 		const store = createStore();
 		try {
 			insertPending(store);
-			const gate = new HumanGate(store, { pollIntervalMs: 10 });
+			const gate = new HumanGate(store, { initialPollMs: 10 });
 			const controller = new AbortController();
 			const waiting = gate.wait("req-1", controller.signal);
 

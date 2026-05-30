@@ -28,5 +28,10 @@ export function buildWorkflowAuthorPrompt(taskPrompt: string): string {
 		...WORKFLOW_AUTHOR_GUIDELINES.map((line) => `- ${line}`),
 		"Task:",
 		taskPrompt,
+		"",
+		"Output contract:",
+		"- Your final action MUST be a structured_output tool call.",
+		"- The structured_output arguments must contain a 'script' field with the complete JavaScript workflow string.",
+		"- Do not emit prose or markdown. Call structured_output exactly once with the script.",
 	].join("\n");
 }

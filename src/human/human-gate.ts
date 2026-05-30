@@ -2,18 +2,23 @@ import type { StateStore } from "../store/index.ts";
 import type { HumanResponse } from "./types.ts";
 
 export interface HumanGateOptions {
-	pollIntervalMs?: number;
+	/** Initial poll interval in ms. Default: 100 */
+	initialPollMs?: number;
+	/** Maximum poll interval in ms. Default: 30000 (30s) */
+	maxPollMs?: number;
 }
 
 export class HumanGate {
 	private readonly waiters = new Map<string, Set<(response: HumanResponse) => void>>();
-	private readonly pollIntervalMs: number;
+	private readonly initialPollMs: number;
+	private readonly maxPollMs: number;
 
 	constructor(
 		private readonly store: StateStore,
 		options: HumanGateOptions = {},
 	) {
-		this.pollIntervalMs = options.pollIntervalMs ?? 1_000;
+		this.initialPollMs = options.initialPollMs ?? 100;
+		this.maxPollMs = options.maxPollMs ?? 30_000;
 	}
 
 	async wait(requestId: string, signal?: AbortSignal): Promise<HumanResponse> {
@@ -23,20 +28,30 @@ export class HumanGate {
 
 		return new Promise<HumanResponse>((resolve, reject) => {
 			let settled = false;
+			let pollMs = this.initialPollMs;
+			let timer: ReturnType<typeof setTimeout> | null = null;
 
-			const interval = setInterval(() => {
+			const poll = () => {
+				if (settled) return;
 				try {
 					const response = this.getResolvedResponse(requestId);
-					if (response) finish(response);
+					if (response) {
+						finish(response);
+						return;
+					}
 				} catch (error) {
 					fail(error as Error);
+					return;
 				}
-			}, this.pollIntervalMs);
+				// Incremental backoff: double each time, cap at max
+				pollMs = Math.min(pollMs * 2, this.maxPollMs);
+				timer = setTimeout(poll, pollMs);
+			};
 
 			const cleanup = () => {
 				if (settled) return;
 				settled = true;
-				clearInterval(interval);
+				if (timer) clearTimeout(timer);
 				signal?.removeEventListener("abort", onAbort);
 				const set = this.waiters.get(requestId);
 				set?.delete(onWake);
@@ -63,6 +78,9 @@ export class HumanGate {
 			}
 			set.add(onWake);
 			signal?.addEventListener("abort", onAbort, { once: true });
+
+			// Start first poll
+			timer = setTimeout(poll, this.initialPollMs);
 		});
 	}
 
@@ -80,6 +98,21 @@ export class HumanGate {
 		const waiters = this.waiters.get(requestId);
 		if (!waiters) return;
 		for (const wake of waiters) wake(response);
+	}
+
+	/**
+	 * Re-attach waiters for pending requests after server restart.
+	 * Call this once at startup.
+	 */
+	recover(): number {
+		const pending = this.store.listPendingNeedsHuman();
+		for (const row of pending) {
+			// Re-attach a waiter that polls with backoff
+			this.wait(row.request_id).catch(() => {
+				// Silently ignore — the task may have been abandoned
+			});
+		}
+		return pending.length;
 	}
 
 	private getResolvedResponse(requestId: string): HumanResponse | null {

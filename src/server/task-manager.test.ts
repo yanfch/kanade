@@ -16,7 +16,7 @@ function setup() {
 	const config = loadConfig();
 	const store = new StateStore(config.paths.stateDb);
 	const events = new EventBus();
-	const humanGate = new HumanGate(store, { pollIntervalMs: 5 });
+	const humanGate = new HumanGate(store, { initialPollMs: 5 });
 	const manager = new TaskManager(config, store, events, humanGate);
 	return { config, store, events, manager };
 }
@@ -554,7 +554,7 @@ describe("TaskManager — generated workflow failure", () => {
 				(await import("../config/index.ts")).loadConfig(),
 				store,
 				events,
-				new (await import("../human/index.ts")).HumanGate(store, { pollIntervalMs: 5 }),
+				new (await import("../human/index.ts")).HumanGate(store, { initialPollMs: 5 }),
 				{
 					async generate() {
 						throw new Error("LLM unavailable");

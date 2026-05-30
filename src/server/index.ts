@@ -33,6 +33,11 @@ export function startServer(config: KanadeConfig): ServerHandle {
 	const events = new EventBus();
 	const humanGate = new HumanGate(store);
 	const taskManager = new TaskManager(config, store, events, humanGate, undefined, tracing);
+
+	// Recover pending human requests from previous run
+	const recovered = humanGate.recover();
+	if (recovered > 0) logger.info("recovered pending human requests", { count: String(recovered) });
+
 	const app = createApp({ taskManager, events });
 
 	const server = serve({ fetch: app.fetch, hostname: config.server.bind, port: config.server.port });

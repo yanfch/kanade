@@ -61,12 +61,14 @@ export class LlmWorkflowAuthor implements WorkflowAuthor {
 
 		const { session } = await createAgentSession({
 			agentDir,
+			authStorage,
+			modelRegistry,
 			sessionManager: SessionManager.inMemory(),
 			customTools: [outputTool as never],
 			settingsManager,
 			...(this.opts.model
 				? {
-						model: modelRegistry.getAll().find((m) => m.id === this.opts.model || m.name === this.opts.model) as never,
+						model: this.resolveModel(modelRegistry) as never,
 					}
 				: {}),
 		});
@@ -74,11 +76,48 @@ export class LlmWorkflowAuthor implements WorkflowAuthor {
 		try {
 			await session.prompt(buildWorkflowAuthorPrompt(prompt));
 			if (!capture.called || !capture.value?.script) {
-				throw new Error("Workflow author did not produce a script");
+				// Debug: log what the LLM actually returned
+				const msgs = session.messages ?? [];
+				const debugInfo = msgs.slice(-3).map((m: unknown) => {
+					const msg = m as { role?: string; content?: unknown };
+					const content = msg?.content;
+					if (Array.isArray(content)) {
+						return content
+							.map((c: { type?: string; text?: string; thinking?: string }) => {
+								if (c.type === "text") return `[text:${(c.text ?? "").slice(0, 100)}]`;
+								if (c.type === "thinking") return `[thinking:${(c.thinking ?? "").slice(0, 100)}]`;
+								return `[${c.type}]`;
+							})
+							.join(", ");
+					}
+					return String(content).slice(0, 100);
+				});
+				throw new Error(
+					`Workflow author did not produce a script. called=${capture.called}, msgs=${debugInfo.join(" | ")}`,
+				);
 			}
 			return capture.value.script;
 		} finally {
 			session.dispose();
 		}
+	}
+
+	private resolveModel(modelRegistry: ModelRegistry): unknown {
+		if (!this.opts.model) return undefined;
+
+		// Support provider/model or provider:model format
+		const colon = this.opts.model.indexOf(":");
+		const slash = this.opts.model.indexOf("/");
+		const sep = colon > 0 ? colon : slash > 0 ? slash : -1;
+
+		if (sep > 0) {
+			const provider = this.opts.model.slice(0, sep);
+			const modelId = this.opts.model.slice(sep + 1);
+			const found = modelRegistry.find(provider, modelId);
+			if (found) return found;
+		}
+
+		// Fallback: search by id or name
+		return modelRegistry.getAll().find((m) => m.id === this.opts.model || m.name === this.opts.model);
 	}
 }
