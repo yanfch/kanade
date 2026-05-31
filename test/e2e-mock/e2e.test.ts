@@ -836,3 +836,116 @@ return { a, b }`,
 		}
 	});
 });
+
+// ── E10: abort during execution ─────────────────────────────────────────────
+
+describe("E2E — abort mid-execution", () => {
+	it("abort signal propagates to running agent", async () => {
+		const mock = createMockSessionFactory({ text: "ok" });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+return await agent('long task', { label: 'worker' })`,
+			});
+
+			ctx.taskManager.abort(task.task_id);
+			await waitForTask(ctx.taskManager, task.task_id, "aborted", 5000);
+			expect(ctx.taskManager.get(task.task_id)?.status).toBe("aborted");
+		} finally {
+			ctx.cleanup();
+		}
+	});
+
+	it("abort stops parallel agents after human gate", async () => {
+		const mock = createMockSessionFactory({ text: "ok" });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+await request_human({ title: 'wait' })
+await parallel([
+  () => agent('a', { label: 'a' }),
+  () => agent('b', { label: 'b' }),
+])
+return 'done'`,
+			});
+
+			await waitForTask(ctx.taskManager, task.task_id, "needs_human", 5000);
+			ctx.taskManager.abort(task.task_id);
+			await waitForTask(ctx.taskManager, task.task_id, "aborted", 5000);
+			expect(ctx.taskManager.get(task.task_id)?.status).toBe("aborted");
+		} finally {
+			ctx.cleanup();
+		}
+	});
+});
+
+// ── E11: token budget ───────────────────────────────────────────────────────
+
+describe("E2E — token budget", () => {
+	it("workflow fails when token budget exhausted", async () => {
+		const mock = createMockSessionFactory({ text: "x" });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+for (let i = 0; i < 10; i++) {
+  await agent('work ' + i, { label: 'w' + i })
+}
+return 'done'`,
+				options: { token_budget: 5 },
+			});
+
+			await waitForTask(ctx.taskManager, task.task_id, "failed", 10000);
+			const row = ctx.taskManager.get(task.task_id);
+			expect(row?.status).toBe("failed");
+			expect(row?.error).toContain("budget");
+		} finally {
+			ctx.cleanup();
+		}
+	});
+});
+
+// ── E16: parallel event interleaving ─────────────────────────────────────────
+
+describe("E2E — parallel event interleaving", () => {
+	it("parallel agents emit correct started/completed pairs", async () => {
+		let callCount = 0;
+		const mock = createMockSessionFactory({
+			handler: () => ({ type: "text", text: `r-${++callCount}` }),
+		});
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const started: string[] = [];
+			const completed: string[] = [];
+			ctx.events.onAny((e) => {
+				if (e.type === "workflow.agent_started") started.push((e.data as { label: string }).label);
+				if (e.type === "workflow.agent_completed") completed.push((e.data as { label: string }).label);
+			});
+
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+await parallel([
+  () => agent('task A', { label: 'alpha' }),
+  () => agent('task B', { label: 'beta' }),
+  () => agent('task C', { label: 'gamma' }),
+])
+return 'done'`,
+			});
+
+			await waitForTask(ctx.taskManager, task.task_id);
+
+			expect(started).toHaveLength(3);
+			expect(completed).toHaveLength(3);
+			expect(started.sort()).toEqual(["alpha", "beta", "gamma"]);
+			expect(completed.sort()).toEqual(["alpha", "beta", "gamma"]);
+		} finally {
+			ctx.cleanup();
+		}
+	});
+});
