@@ -863,6 +863,61 @@ return { a, b }`,
 	});
 });
 
+// ── Worktree cleanup verification ───────────────────────────────────────────
+
+describe("E2E — worktree cleanup", () => {
+	it("task finish removes worktree dir but keeps branch", async () => {
+		cleanupBranches();
+		const mock = createMockSessionFactory({ text: "ok" });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+return await agent('work', { label: 'dev', isolation: 'worktree' })`,
+			});
+
+			await waitForTask(ctx.taskManager, task.task_id);
+			expect(ctx.taskManager.get(task.task_id)?.status).toBe("finished");
+
+			// Branch should still exist (kept for merge)
+			const branches = execSync("git branch | grep kanade/", { encoding: "utf8", cwd: process.cwd() });
+			expect(branches).toContain(`kanade/${task.task_id}/dev`);
+		} finally {
+			ctx.cleanup();
+			cleanupBranches();
+		}
+	});
+
+	it("task abort removes worktree dir and branch", async () => {
+		cleanupBranches();
+		const mock = createMockSessionFactory({ text: "ok" });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+await request_human({ title: 'wait' })
+return await agent('work', { label: 'dev', isolation: 'worktree' })`,
+			});
+
+			await waitForTask(ctx.taskManager, task.task_id, "needs_human", 5000);
+			ctx.taskManager.abort(task.task_id);
+			await waitForTask(ctx.taskManager, task.task_id, "aborted", 5000);
+
+			// Branch should be deleted after abort
+			const branches = execSync("git branch 2>/dev/null | grep kanade/ || true", {
+				encoding: "utf8",
+				cwd: process.cwd(),
+			});
+			expect(branches.trim()).toBe("");
+		} finally {
+			ctx.cleanup();
+			cleanupBranches();
+		}
+	});
+});
+
 // ── E9: reuseBranch ─────────────────────────────────────────────────────────
 
 describe("E2E — reuseBranch", () => {
