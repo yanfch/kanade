@@ -163,9 +163,9 @@ cleanup:
 
 | Layer | Tests | What |
 |-------|-------|------|
-| Unit | 37 | Config, journal, human gate, roles, tracing, session persistence |
+| Unit | 50 | Config, journal, human gate, roles, tracing, session persistence, cleanup |
 | Integration | 141 | Runtime, workflow-agent, app routes, task-manager, isolation |
-| Mock E2E | 21 | Full execution chain (script → sandbox → agent → session, persistence) |
+| Mock E2E | 23 | Full execution chain (script → sandbox → agent → session, persistence, cleanup) |
 
 ```bash
 npm test                        # All tests

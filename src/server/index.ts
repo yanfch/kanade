@@ -4,6 +4,7 @@ import { HumanGate } from "../human/index.ts";
 import { StateStore } from "../store/index.ts";
 import { type TracingHandle, setupTracing } from "../tracing/index.ts";
 import { createApp } from "./app.ts";
+import { CleanupScheduler } from "./cleanup-scheduler.ts";
 import { EventBus } from "./event-bus.ts";
 import { TaskManager } from "./task-manager.ts";
 
@@ -38,7 +39,16 @@ export function startServer(config: KanadeConfig): ServerHandle {
 	const recovered = humanGate.recover();
 	if (recovered > 0) logger.info("recovered pending human requests", { count: String(recovered) });
 
-	const app = createApp({ taskManager, events });
+	// Start cleanup scheduler
+	const cleanupScheduler = new CleanupScheduler({
+		config: config.cleanup,
+		paths: config.paths,
+		isolation: taskManager.isolationManager,
+		logger: tracing.logger.forComponent("cleanup"),
+	});
+	cleanupScheduler.start();
+
+	const app = createApp({ taskManager, events, config });
 
 	const server = serve({ fetch: app.fetch, hostname: config.server.bind, port: config.server.port });
 	logger.info("server started", {
@@ -52,6 +62,7 @@ export function startServer(config: KanadeConfig): ServerHandle {
 		tracing,
 		async close() {
 			logger.info("server shutting down");
+			cleanupScheduler.stop();
 			server.close();
 			await tracing.shutdown();
 			store.close();

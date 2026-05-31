@@ -85,18 +85,18 @@
 
 **工作量**: 已完成
 
-### 6. CleanupScheduler
+### 6. CleanupScheduler ✅
 
-**现状**: config 有 `cleanup.schedule`（cron 表达式）但无调度器  
-**设计**: `docs/02-orchestrator.md §状态机` + `docs/10-isolation.md`
+**已完成**: `src/server/cleanup-scheduler.ts` + `src/server/index.ts`
+- `CleanupScheduler` 类：后台定时执行清理任务
+- `parseScheduleToMs()`：解析 cron 表达式为毫秒间隔
+- 清理 stale worktrees（调用 `IsolationManager.cleanupStaleWorktrees`）
+- 清理过期 `journal.db`（按 mtime 判断）
+- 清理过期 trace 目录（按目录名日期判断，跳过 `current`）
+- 接入 `startServer()`，shutdown 时 stop()
+- 测试：13 单元测试 + 2 E2E 测试
 
-需要实现：
-- 后台定时任务，按 cron 表达式执行
-- 调用 `isolationManager.cleanupStaleWorktrees()`
-- 可选：journal 老化（删 N 天前的 journal.db）
-- 可选：trace 文件 rotate
-
-**工作量**: 1 天
+**工作量**: 已完成
 
 ### 7. Subagent 读取路由
 

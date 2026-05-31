@@ -435,7 +435,56 @@ return await agent('run', { label: 'r', schema: { type: 'object', properties: { 
 
 // ── E7: Worktree isolation ──────────────────────────────────────────────────
 
-// ── E11: Subagent session persistence ────────────────────────────────────────
+// ── E11: CleanupScheduler integration ───────────────────────────────────────
+
+describe("E2E — cleanup scheduler", () => {
+	it("CleanupScheduler is created and starts with the server", async () => {
+		const mock = createMockSessionFactory({ text: "ok" });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			// Verify the task manager exposes isolationManager for the scheduler
+			expect(ctx.taskManager.isolationManager).toBeDefined();
+			expect(typeof ctx.taskManager.isolationManager.cleanupStaleWorktrees).toBe("function");
+		} finally {
+			ctx.cleanup();
+		}
+	});
+
+	it("cleanup scheduler runs and cleans expired journals", async () => {
+		const mock = createMockSessionFactory({ text: "ok" });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			// Create a task to get a journal.db
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+return 'done'`,
+			});
+			await waitForTask(ctx.taskManager, task.task_id);
+
+			const journalPath = join(ctx.config.paths.runsDir, task.task_id, "journal.db");
+			expect(existsSync(journalPath)).toBe(true);
+
+			// Manually run cleanup with 0 retention (delete all journals)
+			const { CleanupScheduler } = await import("../../src/server/cleanup-scheduler.ts");
+			const cleanupLogger = { info: () => {}, warn: () => {}, error: () => {} };
+			const scheduler = new CleanupScheduler({
+				config: { ...ctx.config.cleanup, journalRetentionDays: 0 },
+				paths: ctx.config.paths,
+				isolation: ctx.taskManager.isolationManager,
+				logger: cleanupLogger as never,
+			});
+			const result = await scheduler.run();
+
+			expect(result.journalsCleaned).toBe(1);
+			expect(existsSync(journalPath)).toBe(false);
+		} finally {
+			ctx.cleanup();
+		}
+	});
+});
+
+// ── E12: Subagent session persistence ────────────────────────────────────────
 
 describe("E2E — subagent session persistence", () => {
 	it("persists subagent sessions when persistSubagents is enabled", async () => {

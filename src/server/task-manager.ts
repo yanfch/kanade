@@ -41,6 +41,8 @@ export class TaskManager {
 	private readonly workflowStore: WorkflowStore;
 	private readonly author: WorkflowAuthor;
 	private readonly isolation: IsolationManager;
+	/** Exposed for CleanupScheduler access. */
+	readonly isolationManager: IsolationManager;
 
 	private readonly logger: TracingLogger;
 	private readonly tracer: Tracer;
@@ -73,6 +75,7 @@ export class TaskManager {
 		);
 		this.logger = tracing?.logger.forComponent("task-manager") ?? createNoopLogger();
 		this.tracer = tracing?.tracer ?? ({ startSpan: () => noopSpan } as unknown as Tracer);
+		this.isolationManager = this.isolation;
 	}
 
 	create(input: CreateTaskInput): CreateTaskResult {
