@@ -450,7 +450,7 @@ export class TaskManager {
 			span.setStatus({ code: SpanStatusCode.OK });
 			span.setAttribute(Attrs.TASK_STATUS, "finished");
 			taskLog.info("task finished");
-			void this.isolation.finalizeWorktrees(taskId, "approved");
+			void this.isolation.finalizeWorktrees(taskId, "approved").catch(() => {});
 		} catch (error) {
 			const aborted = controller.signal.aborted;
 			const decision = aborted ? "aborted" : "rejected";
@@ -467,7 +467,7 @@ export class TaskManager {
 			taskLog.info(`task ${finalStatus}`, {
 				error: error instanceof Error ? error.message : String(error),
 			});
-			void this.isolation.finalizeWorktrees(taskId, decision);
+			void this.isolation.finalizeWorktrees(taskId, decision).catch(() => {});
 		} finally {
 			span.end();
 			journal.close();
