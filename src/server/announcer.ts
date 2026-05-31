@@ -102,16 +102,24 @@ export interface DispatchResult {
 	announcer?: string;
 }
 
+export interface AnnouncerLogger {
+	info(msg: string): void;
+	warn(msg: string): void;
+	error(msg: string): void;
+}
+
 export class AnnouncerRegistry {
 	private readonly announcers: Map<string, AnnouncerConfig> = new Map();
 	private handlers: Record<string, AnnounceHandler> = { ...builtinHandlers };
 	private probeHandler: ProbeHandler = builtinProbe;
 	private disabledNames = new Set<string>();
+	private readonly logger: AnnouncerLogger;
 
-	constructor(configs: AnnouncerConfig[]) {
+	constructor(configs: AnnouncerConfig[], logger?: AnnouncerLogger) {
 		for (const config of configs) {
 			this.announcers.set(config.name, config);
 		}
+		this.logger = logger ?? { info: () => {}, warn: () => {}, error: () => {} };
 	}
 
 	/** Register a custom handler for an announcer type (for testing) */
@@ -131,9 +139,11 @@ export class AnnouncerRegistry {
 			try {
 				const ok = await this.probeHandler(config);
 				if (!ok) {
+					this.logger.warn(`announcer probe failed: ${name} (${config.url})`);
 					this.disabledNames.add(name);
 				}
 			} catch {
+				this.logger.warn(`announcer probe error: ${name} (${config.url})`);
 				this.disabledNames.add(name);
 			}
 		}
@@ -143,18 +153,24 @@ export class AnnouncerRegistry {
 	async dispatch(event: ServerEvent): Promise<DispatchResult> {
 		let current = this.findMatching(event);
 		while (current) {
+			const name = current.name;
 			const fallbackName = current.fallback;
 			try {
 				const ctx = this.buildContext(current, event);
 				const handler = this.handlers[current.type];
 				if (!handler) {
+					this.logger.warn(`announcer handler not found: ${current.type} (${name})`);
 					current = fallbackName ? this.announcers.get(fallbackName) : undefined;
 					continue;
 				}
 				const ok = await handler(ctx);
-				if (ok) return { dispatched: true, announcer: current.name };
-			} catch {
-				// handler threw — treat as failure, try fallback
+				if (ok) {
+					this.logger.info(`announcer dispatched: ${name} ← ${event.type}`);
+					return { dispatched: true, announcer: current.name };
+				}
+				this.logger.warn(`announcer returned false: ${name} ← ${event.type}`);
+			} catch (err) {
+				this.logger.error(`announcer handler error: ${name} ← ${event.type}: ${err}`);
 			}
 			current = fallbackName ? this.announcers.get(fallbackName) : undefined;
 		}
@@ -173,7 +189,7 @@ export class AnnouncerRegistry {
 	private isEnabled(config: AnnouncerConfig): boolean {
 		if (this.disabledNames.has(config.name)) return false;
 		if (config.enabled === true) return true;
-		if (config.enabled === "auto") return true; // will be disabled by probe() if unreachable
+		if (config.enabled === "auto") return true;
 		return false;
 	}
 

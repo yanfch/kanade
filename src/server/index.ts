@@ -41,7 +41,7 @@ export function startServer(config: KanadeConfig): ServerHandle {
 	if (recovered > 0) logger.info("recovered pending human requests", { count: String(recovered) });
 
 	// Start announcer registry
-	const announcerRegistry = new AnnouncerRegistry(config.announcers);
+	const announcerRegistry = new AnnouncerRegistry(config.announcers, tracing.logger.forComponent("announcer"));
 	announcerRegistry.probe().catch(() => {});
 	events.onAny((event) => {
 		announcerRegistry.dispatch(event).catch(() => {});

@@ -120,6 +120,7 @@ export class TaskManager {
 		});
 
 		this.events.emit("task.created", { taskId, runDir, workflowPath }, taskId);
+		this.logger.forTask(taskId).info("task created", { source: "generated" });
 		void this.runGenerated(taskId, workflowPath, prompt, args, options).catch(() => undefined);
 		return { task_id: taskId, run_dir: runDir, workflow_path: workflowPath, generated: true };
 	}
@@ -175,6 +176,7 @@ export class TaskManager {
 		});
 
 		this.events.emit("task.created", { taskId, runDir, workflowPath }, taskId);
+		this.logger.forTask(taskId).info("task created", { source });
 		void this.run(taskId, script, args, options).catch(() => undefined);
 		return { task_id: taskId, run_dir: runDir, workflow_path: workflowPath };
 	}
@@ -281,6 +283,7 @@ export class TaskManager {
 			{ taskId: newTaskId, runDir: newRunDir, workflowPath, rerunOf: taskId },
 			newTaskId,
 		);
+		this.logger.forTask(newTaskId).info("task created", { source: "rerun", rerunOf: taskId });
 		void this.run(newTaskId, script, overrides.args, mergedOptions).catch(() => undefined);
 		return { task_id: newTaskId, run_dir: newRunDir, workflow_path: workflowPath, rerun_of: taskId };
 	}
@@ -410,6 +413,7 @@ export class TaskManager {
 						});
 						this.store.updateTask(taskId, { status: "needs_human" });
 						this.events.emit("task.needs_human", { taskId, requestId, request }, taskId);
+						this.logger.forTask(taskId).info("needs human input", { requestId });
 					},
 					wait: (requestId, signal) => this.humanGate.wait(requestId, signal),
 				},
