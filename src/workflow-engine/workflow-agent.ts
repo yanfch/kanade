@@ -159,17 +159,7 @@ export class WorkflowAgent {
 		const effectiveCwd = isoCtx?.cwd ?? this.cwd;
 		const roleConfig = options.role ? await this.loadRole(options.role) : null;
 		const schema = options.schema ?? (roleConfig?.defaultSchema as TSchema | undefined);
-		const capture: StructuredOutputCapture<Static<Extract<TSchemaDef, TSchema>>> = {
-			called: false,
-			value: undefined,
-		};
 		const baseTools = roleConfig ? filterToolsByWhitelist(this.baseTools, roleConfig.tools.allow) : this.baseTools;
-		const customTools: ToolDefinition[] = [...baseTools, ...(options.tools ?? [])];
-
-		if (schema) {
-			customTools.push(createStructuredOutputTool({ schema, capture }) as unknown as ToolDefinition);
-		}
-
 		const requestedModel = options.model ?? roleConfig?.defaultModel;
 		const additionalInstructions = this.buildAdditionalInstructions(options.instructions);
 		const cacheKey = hashCall({
@@ -207,10 +197,18 @@ export class WorkflowAgent {
 					});
 				}
 
+				// Fresh capture per attempt — structured_output tool closure must not share state
+				const capture: StructuredOutputCapture<Static<Extract<TSchemaDef, TSchema>>> = {
+					called: false,
+					value: undefined,
+				};
+				const customTools: ToolDefinition[] = [...baseTools, ...(options.tools ?? [])];
+				if (schema) {
+					customTools.push(createStructuredOutputTool({ schema, capture }) as unknown as ToolDefinition);
+				}
+
 				let removeAbortListener: (() => void) | undefined;
-				let session:
-					| { prompt(text: string): Promise<void>; abort(): void; dispose(): void; messages: unknown[] }
-					| undefined;
+				let session: Awaited<ReturnType<typeof this.createSession>>["session"] | undefined;
 				try {
 					if (options.signal?.aborted) throw new Error("Subagent was aborted");
 					const sessionManager = this.createSessionManager(label, effectiveCwd);
