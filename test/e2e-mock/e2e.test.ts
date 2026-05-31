@@ -5,11 +5,41 @@
  * Only createAgentSession is mocked.
  */
 
+import { execSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createMockSessionFactory } from "./mock-session.ts";
 import { createE2EContext, waitForTask } from "./setup.ts";
+
+/** Clean up git worktrees and branches created by worktree tests */
+function cleanupBranches() {
+	try {
+		// First remove worktrees
+		const wtOut = execSync("git worktree list", { encoding: "utf8", cwd: process.cwd() });
+		for (const line of wtOut.split("\n")) {
+			const parts = line.split(/\s+/);
+			const wtPath = parts[0];
+			if (wtPath.includes("kanade") || wtPath.includes("worktrees")) {
+				try {
+					execSync(`git worktree remove --force ${wtPath}`, { cwd: process.cwd(), stdio: "ignore" });
+				} catch {}
+			}
+		}
+	} catch {}
+	try {
+		// Then delete branches
+		const out = execSync("git branch", { encoding: "utf8", cwd: process.cwd() });
+		for (const line of out.split("\n")) {
+			const branch = line.replace(/^\*?\s*/, "").trim();
+			if (branch.startsWith("kanade/")) {
+				try {
+					execSync(`git branch -D ${branch}`, { cwd: process.cwd(), stdio: "ignore" });
+				} catch {}
+			}
+		}
+	} catch {}
+}
 
 // ── E1: Single agent with structured output ─────────────────────────────────
 
@@ -791,13 +821,8 @@ return await agent('work', { label: 'worker' })`,
 
 describe("E2E — worktree isolation", () => {
 	it("agent with isolation:worktree runs in a worktree cwd", async () => {
-		const capturedCwd = "";
-		const mock = createMockSessionFactory({
-			handler: (_prompt, tools) => {
-				// The session cwd should be a worktree path, not the original cwd
-				return { type: "text", text: "ok" };
-			},
-		});
+		cleanupBranches();
+		const mock = createMockSessionFactory({ text: "ok" });
 		const ctx = createE2EContext(mock.createSession);
 		try {
 			const task = ctx.taskManager.create({
@@ -808,15 +833,15 @@ return await agent('work in isolation', { label: 'dev', isolation: 'worktree' })
 
 			await waitForTask(ctx.taskManager, task.task_id);
 			expect(ctx.taskManager.get(task.task_id)?.status).toBe("finished");
-
-			// Verify the session was created (worktree path is internal to WorkflowAgent)
 			expect(mock.sessions).toHaveLength(1);
 		} finally {
 			ctx.cleanup();
+			cleanupBranches();
 		}
 	});
 
 	it("multiple agents can use different worktree labels", async () => {
+		cleanupBranches();
 		const mock = createMockSessionFactory({ text: "ok" });
 		const ctx = createE2EContext(mock.createSession);
 		try {
@@ -833,6 +858,38 @@ return { a, b }`,
 			expect(mock.sessions).toHaveLength(2);
 		} finally {
 			ctx.cleanup();
+			cleanupBranches();
+		}
+	});
+});
+
+// ── E9: reuseBranch ─────────────────────────────────────────────────────────
+
+describe("E2E — reuseBranch", () => {
+	it("second agent reuses worktree from first agent via reuseBranch", async () => {
+		cleanupBranches();
+		const mock = createMockSessionFactory({ text: "ok" });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task1 = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+return await agent('setup', { label: 'dev', isolation: 'worktree' })`,
+			});
+			await waitForTask(ctx.taskManager, task1.task_id);
+			expect(ctx.taskManager.get(task1.task_id)?.status).toBe("finished");
+
+			const task2 = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+return await agent('iterate', { label: 'dev-v2', isolation: 'worktree', reuseBranch: 'kanade/${task1.task_id}/dev' })`,
+			});
+			await waitForTask(ctx.taskManager, task2.task_id);
+			expect(ctx.taskManager.get(task2.task_id)?.status).toBe("finished");
+			expect(mock.sessions).toHaveLength(2);
+		} finally {
+			ctx.cleanup();
+			cleanupBranches();
 		}
 	});
 });

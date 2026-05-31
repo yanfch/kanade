@@ -82,6 +82,8 @@ export interface AgentOptions<TSchemaDef extends TSchema | undefined = TSchema |
 	model?: string;
 	instructions?: string;
 	isolation?: "worktree";
+	/** Reuse an existing worktree branch */
+	reuseBranch?: string;
 	agentType?: string;
 	/** Retry configuration for transient failures */
 	retry?: { maxRetries: number; backoffMs?: number };
@@ -206,6 +208,8 @@ export async function runWorkflow<T = unknown>(
 					schema: agentOptions.schema,
 					signal: options.signal,
 					instructions: buildAgentInstructions(assignedPhase, agentOptions),
+					isolation: agentOptions.isolation,
+					reuseBranch: agentOptions.reuseBranch,
 					...(agentOptions.retry ? { retry: agentOptions.retry } : {}),
 				});
 				throwIfAborted();
