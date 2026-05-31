@@ -1,5 +1,6 @@
 export { loadConfig } from "./config.ts";
 export type {
+	AnnouncerConfig,
 	CleanupConfig,
 	DebugConfig,
 	DefaultsConfig,

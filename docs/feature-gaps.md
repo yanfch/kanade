@@ -5,8 +5,8 @@
 ## 状态总览
 
 ```
-已完成 ████████████████████████████████  96%
-未完成 █░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   4%
+已完成 █████████████████████████████████  98%
+未完成 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   2%
 ```
 
 ---
@@ -132,17 +132,18 @@ const reviews = await parallel(
 
 **工作量**: 已完成
 
-### 9. Announcer 框架
+### 9. Announcer 框架 ✅
 
-**现状**: 无  
-**设计**: `docs/07-integration.md §Orchestrator 的 announcer 框架`
+**已完成**: `src/server/announcer.ts` + `src/server/index.ts`
+- `AnnouncerRegistry`：config 驱动的 announcer 注册表
+- 支持 `http_post` / `macos_notification` / `tts_local` 三种类型
+- fallback 链：primary 失败自动尝试下一个
+- `probe()` 启动时探测 `enabled: auto` 的 HTTP announcers
+- template 变量：`{{task.id}}`, `{{event.type}}`, `{{event.summary}}`
+- 接入 EventBus，fire-and-forget 不阻塞主流程
+- 测试：15 单元测试
 
-task 完成/needs_human 时通知 VoiceBar TTS 播报：
-- announcer 注册表（config 驱动）
-- fallback 链
-- 服务发现（启动时探测对方 health）
-
-**工作量**: 1-2 天
+**工作量**: 已完成
 
 ### 10. Snapshot 实时更新
 

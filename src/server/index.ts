@@ -3,6 +3,7 @@ import type { KanadeConfig } from "../config/index.ts";
 import { HumanGate } from "../human/index.ts";
 import { StateStore } from "../store/index.ts";
 import { type TracingHandle, setupTracing } from "../tracing/index.ts";
+import { AnnouncerRegistry } from "./announcer.ts";
 import { createApp } from "./app.ts";
 import { CleanupScheduler } from "./cleanup-scheduler.ts";
 import { EventBus } from "./event-bus.ts";
@@ -38,6 +39,13 @@ export function startServer(config: KanadeConfig): ServerHandle {
 	// Recover pending human requests from previous run
 	const recovered = humanGate.recover();
 	if (recovered > 0) logger.info("recovered pending human requests", { count: String(recovered) });
+
+	// Start announcer registry
+	const announcerRegistry = new AnnouncerRegistry(config.announcers);
+	announcerRegistry.probe().catch(() => {});
+	events.onAny((event) => {
+		announcerRegistry.dispatch(event).catch(() => {});
+	});
 
 	// Start cleanup scheduler
 	const cleanupScheduler = new CleanupScheduler({

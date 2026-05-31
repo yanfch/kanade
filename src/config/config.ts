@@ -104,6 +104,25 @@ export interface PersistFilter {
 	labels?: string[];
 }
 
+export interface AnnouncerConfig {
+	name: string;
+	type: "http_post" | "macos_notification" | "tts_local";
+	/** URL for http_post type */
+	url?: string;
+	/** Events to listen for (e.g. task.finished, task.needs_human) */
+	events: string[];
+	/** Template for notification title. Supports {{task.id}}, {{event.summary}} */
+	title_template?: string;
+	/** Template for notification body */
+	body_template?: string;
+	/** true = always on, false = disabled, "auto" = probe health on startup */
+	enabled: boolean | "auto";
+	/** Name of fallback announcer if this one fails */
+	fallback?: string;
+	/** Timeout for http_post requests (ms). Default: 5000 */
+	timeout_ms?: number;
+}
+
 export interface CleanupConfig {
 	enabled: boolean;
 	schedule: string;
@@ -121,6 +140,7 @@ export interface KanadeConfig {
 	models: ModelsConfig;
 	debug: DebugConfig;
 	cleanup: CleanupConfig;
+	announcers: AnnouncerConfig[];
 }
 
 function expandHome(p: string): string {
@@ -220,6 +240,7 @@ function defaultConfig(paths: KanadePaths): KanadeConfig {
 			journalRetentionDays: 30,
 			traceRetentionDays: 90,
 		},
+		announcers: [],
 	};
 }
 
