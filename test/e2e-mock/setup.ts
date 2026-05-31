@@ -2,9 +2,18 @@
  * E2E test setup: real TaskManager with injected mock session.
  */
 
+import { execSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+function currentBranch(): string {
+	try {
+		return execSync("git rev-parse --abbrev-ref HEAD", { encoding: "utf8" }).trim();
+	} catch {
+		return "main";
+	}
+}
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@earendil-works/pi-coding-agent";
 import type { Hono } from "hono";
 import { loadConfig } from "../../src/config/index.ts";
@@ -37,6 +46,8 @@ export function createE2EContext(
 	const root = mkdtempSync(join(tmpdir(), "kanade-e2e-"));
 	process.env.KANADE_DIR = root;
 	const config = loadConfig();
+	// Use current git branch as base for worktree tests
+	config.isolation.defaultBaseBranch = currentBranch();
 	if (opts.persistSubagents) {
 		config.debug.persistSubagents = true;
 	}
