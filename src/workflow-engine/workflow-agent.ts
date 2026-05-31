@@ -70,6 +70,13 @@ export interface WorkflowAgentOptions {
 	persistDir?: string;
 }
 
+export interface RetryOptions {
+	/** Maximum number of retries after initial failure. Default: 0 (no retry) */
+	maxRetries: number;
+	/** Base backoff delay in ms. Doubles on each retry. Default: 1000 */
+	backoffMs?: number;
+}
+
 export interface AgentRunOptions<TSchemaDef extends TSchema | undefined = undefined> {
 	label?: string;
 	schema?: TSchemaDef;
@@ -82,6 +89,8 @@ export interface AgentRunOptions<TSchemaDef extends TSchema | undefined = undefi
 	reuseBranch?: string;
 	baseRepo?: string;
 	baseBranch?: string;
+	/** Retry configuration for transient failures */
+	retry?: RetryOptions;
 }
 
 export type AgentRunResult<TSchemaDef extends TSchema | undefined> = TSchemaDef extends TSchema
@@ -177,42 +186,74 @@ export class WorkflowAgent {
 		const sessionOptions = await this.buildSessionOptions(requestedModel);
 
 		const label = options.label ?? "agent";
-		const sessionManager = this.createSessionManager(label, effectiveCwd);
-		const { session } = await this.createSession({
-			cwd: effectiveCwd,
-			agentDir: this.agentDir,
-			sessionManager,
-			customTools,
-			...sessionOptions,
-		});
+		const retry = options.retry;
+		const maxAttempts = 1 + (retry?.maxRetries ?? 0);
+		const backoffMs = retry?.backoffMs ?? 1000;
 
-		let removeAbortListener: (() => void) | undefined;
 		try {
-			if (options.signal?.aborted) throw new Error("Subagent was aborted");
-			if (options.signal) {
-				const onAbort = () => void session.abort();
-				options.signal.addEventListener("abort", onAbort, { once: true });
-				removeAbortListener = () => options.signal?.removeEventListener("abort", onAbort);
-			}
-
-			await session.prompt(this.buildPrompt(prompt, options, roleConfig, Boolean(schema), additionalInstructions));
-			if (options.signal?.aborted) throw new Error("Subagent was aborted");
-
-			let result: AgentRunResult<TSchemaDef>;
-			if (schema) {
-				if (!capture.called) {
-					throw new Error("Subagent finished without calling structured_output");
+			let lastError: unknown;
+			for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+				if (attempt > 1) {
+					// Backoff with abort check
+					const delay = backoffMs * 2 ** (attempt - 2);
+					if (options.signal?.aborted) throw new Error("Subagent was aborted");
+					await new Promise<void>((resolve, reject) => {
+						const timer = setTimeout(resolve, delay);
+						const onAbort = () => {
+							clearTimeout(timer);
+							reject(new Error("Subagent was aborted"));
+						};
+						options.signal?.addEventListener("abort", onAbort, { once: true });
+					});
 				}
-				result = capture.value as AgentRunResult<TSchemaDef>;
-			} else {
-				result = this.lastAssistantText(session.messages) as AgentRunResult<TSchemaDef>;
-			}
 
-			this.journal?.write(cacheKey, { result, tokens: estimateTokens(result) });
-			return result;
+				let removeAbortListener: (() => void) | undefined;
+				let session:
+					| { prompt(text: string): Promise<void>; abort(): void; dispose(): void; messages: unknown[] }
+					| undefined;
+				try {
+					if (options.signal?.aborted) throw new Error("Subagent was aborted");
+					const sessionManager = this.createSessionManager(label, effectiveCwd);
+					const created = await this.createSession({
+						cwd: effectiveCwd,
+						agentDir: this.agentDir,
+						sessionManager,
+						customTools,
+						...sessionOptions,
+					});
+					session = created.session;
+					if (options.signal) {
+						const onAbort = () => void session?.abort();
+						options.signal.addEventListener("abort", onAbort, { once: true });
+						removeAbortListener = () => options.signal?.removeEventListener("abort", onAbort);
+					}
+
+					await session.prompt(this.buildPrompt(prompt, options, roleConfig, Boolean(schema), additionalInstructions));
+					if (options.signal?.aborted) throw new Error("Subagent was aborted");
+
+					let result: AgentRunResult<TSchemaDef>;
+					if (schema) {
+						if (!capture.called) {
+							throw new Error("Subagent finished without calling structured_output");
+						}
+						result = capture.value as AgentRunResult<TSchemaDef>;
+					} else {
+						result = this.lastAssistantText(session.messages) as AgentRunResult<TSchemaDef>;
+					}
+
+					this.journal?.write(cacheKey, { result, tokens: estimateTokens(result) });
+					return result;
+				} catch (err) {
+					lastError = err;
+					if (options.signal?.aborted) throw err;
+					if (attempt === maxAttempts) throw err;
+				} finally {
+					removeAbortListener?.();
+					session?.dispose();
+				}
+			}
+			throw lastError;
 		} finally {
-			removeAbortListener?.();
-			session.dispose();
 			await isoCtx?.cleanup();
 		}
 	}

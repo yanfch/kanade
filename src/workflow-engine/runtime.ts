@@ -83,6 +83,8 @@ export interface AgentOptions<TSchemaDef extends TSchema | undefined = TSchema |
 	instructions?: string;
 	isolation?: "worktree";
 	agentType?: string;
+	/** Retry configuration for transient failures */
+	retry?: { maxRetries: number; backoffMs?: number };
 }
 
 interface RuntimeState {
@@ -204,6 +206,7 @@ export async function runWorkflow<T = unknown>(
 					schema: agentOptions.schema,
 					signal: options.signal,
 					instructions: buildAgentInstructions(assignedPhase, agentOptions),
+					...(agentOptions.retry ? { retry: agentOptions.retry } : {}),
 				});
 				throwIfAborted();
 				state.spent += estimateTokens(result);

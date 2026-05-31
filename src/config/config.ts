@@ -80,6 +80,8 @@ export interface DefaultsConfig {
 	model: string | null;
 	tokenBudget: number;
 	concurrency: number;
+	/** Maximum number of tasks running simultaneously. 0 = unlimited. */
+	maxConcurrentTasks: number;
 }
 
 export interface ModelsConfig {
@@ -219,6 +221,7 @@ function defaultConfig(paths: KanadePaths): KanadeConfig {
 			model: null,
 			tokenBudget: 2_000_000,
 			concurrency: 16,
+			maxConcurrentTasks: 0,
 		},
 		models: {
 			mode: "inherit-pi",

@@ -353,7 +353,20 @@ export class TaskManager {
 		this.logger.forTask(taskId).info("task rejected");
 	}
 
+	private get runningCount(): number {
+		return this.controllers.size;
+	}
+
 	private async run(taskId: string, script: string, args: unknown, options: TaskOptions = {}): Promise<void> {
+		// Rate limiting
+		const max = this.config.defaults.maxConcurrentTasks;
+		if (max > 0 && this.runningCount >= max) {
+			throw new AppError(
+				`Too many concurrent tasks (${this.runningCount}/${max}). Wait for existing tasks to finish.`,
+				429,
+			);
+		}
+
 		const controller = new AbortController();
 		this.controllers.set(taskId, controller);
 		const runDir = join(this.config.paths.runsDir, taskId);

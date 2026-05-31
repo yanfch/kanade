@@ -481,3 +481,97 @@ describe("WorkflowAgent — isolation", () => {
 		expect(prepared).toHaveLength(0);
 	});
 });
+
+describe("WorkflowAgent — retry", () => {
+	it("retries on failure when retry option is set", async () => {
+		let callCount = 0;
+		const mock = createMockSessionFactory();
+		const originalCreate = mock.createSession;
+		const createSession: CreateSession = async (options) => {
+			callCount++;
+			if (callCount === 1) {
+				throw new Error("LLM rate limited");
+			}
+			return originalCreate(options);
+		};
+
+		const agent = new WorkflowAgent({
+			createSession,
+			createCodingTools: () => [],
+		});
+
+		const result = await agent.run("do something", {
+			label: "worker",
+			retry: { maxRetries: 2, backoffMs: 10 },
+		});
+
+		expect(result).toBe("final text");
+		expect(callCount).toBe(2);
+	});
+
+	it("fails after maxRetries exhausted", async () => {
+		let callCount = 0;
+		const createSession: CreateSession = async (_options) => {
+			callCount++;
+			throw new Error("persistent failure");
+		};
+
+		const agent = new WorkflowAgent({
+			createSession,
+			createCodingTools: () => [],
+		});
+
+		await expect(
+			agent.run("do something", {
+				label: "worker",
+				retry: { maxRetries: 2, backoffMs: 10 },
+			}),
+		).rejects.toThrow("persistent failure");
+
+		// 1 initial + 2 retries = 3 total
+		expect(callCount).toBe(3);
+	});
+
+	it("does not retry when retry option is not set", async () => {
+		let callCount = 0;
+		const createSession: CreateSession = async (_options) => {
+			callCount++;
+			throw new Error("LLM error");
+		};
+
+		const agent = new WorkflowAgent({
+			createSession,
+			createCodingTools: () => [],
+		});
+
+		await expect(agent.run("do something", { label: "worker" })).rejects.toThrow("LLM error");
+		expect(callCount).toBe(1);
+	});
+
+	it("respects abort signal during retry backoff", async () => {
+		let callCount = 0;
+		const createSession: CreateSession = async (_options) => {
+			callCount++;
+			throw new Error("LLM error");
+		};
+
+		const agent = new WorkflowAgent({
+			createSession,
+			createCodingTools: () => [],
+		});
+
+		const controller = new AbortController();
+		setTimeout(() => controller.abort(), 5);
+
+		await expect(
+			agent.run("do something", {
+				label: "worker",
+				retry: { maxRetries: 5, backoffMs: 1000 },
+				signal: controller.signal,
+			}),
+		).rejects.toThrow();
+
+		// Should have aborted during backoff, not completed all retries
+		expect(callCount).toBeLessThan(6);
+	});
+});
