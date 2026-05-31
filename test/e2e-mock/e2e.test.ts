@@ -949,6 +949,40 @@ return await agent('iterate', { label: 'dev-v2', isolation: 'worktree', reuseBra
 	});
 });
 
+// ── Iterate ────────────────────────────────────────────────────────────────
+
+describe("E2E — iterate", () => {
+	it("iterate creates a new task with previousResult", async () => {
+		let callCount = 0;
+		const mock = createMockSessionFactory({
+			handler: () => ({ type: "text", text: `result-${++callCount}` }),
+		});
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const t1 = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+return await agent('initial', { label: 'dev' })`,
+			});
+			await waitForTask(ctx.taskManager, t1.task_id);
+
+			const t2 = ctx.taskManager.iterate(t1.task_id, { instructions: "improve it" });
+			await waitForTask(ctx.taskManager, t2.task_id);
+
+			expect(ctx.taskManager.get(t2.task_id)?.status).toBe("finished");
+			expect(t2.task_id).not.toBe(t1.task_id);
+
+			// Check iteration chain
+			const iter = ctx.taskManager.getIteration(t2.task_id);
+			expect(iter.iteration?.parent_task_id).toBe(t1.task_id);
+			expect(iter.iteration?.instructions).toBe("improve it");
+			expect(iter.chain).toEqual([t1.task_id, t2.task_id]);
+		} finally {
+			ctx.cleanup();
+		}
+	});
+});
+
 // ── E10: abort during execution ─────────────────────────────────────────────
 
 describe("E2E — abort mid-execution", () => {

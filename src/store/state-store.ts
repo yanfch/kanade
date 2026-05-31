@@ -10,6 +10,15 @@ import { dirname } from "node:path";
 import Database from "better-sqlite3";
 
 export type TaskStatus = "created" | "running" | "needs_human" | "finished" | "aborted" | "failed";
+
+export interface TaskIterationRow {
+	id: string;
+	task_id: string;
+	parent_task_id: string | null;
+	instructions: string | null;
+	reuse_branch: string | null;
+	created_at: number;
+}
 export type WorktreeStatus = "creating" | "active" | "inactive" | "merged" | "rejected" | "abandoned";
 export type AgentCallStatus = "running" | "completed" | "failed" | "from_cache";
 export type NeedsHumanStatus = "pending" | "resolved" | "timeout";
@@ -176,6 +185,19 @@ CREATE TABLE IF NOT EXISTS meta (
 	value TEXT,
 	updated_at INTEGER
 );
+
+CREATE TABLE IF NOT EXISTS task_iterations (
+	id TEXT PRIMARY KEY,
+	task_id TEXT NOT NULL,
+	parent_task_id TEXT,
+	instructions TEXT,
+	reuse_branch TEXT,
+	created_at INTEGER NOT NULL,
+	FOREIGN KEY (task_id) REFERENCES tasks(id),
+	FOREIGN KEY (parent_task_id) REFERENCES tasks(id)
+);
+CREATE INDEX IF NOT EXISTS iterations_task ON task_iterations(task_id);
+CREATE INDEX IF NOT EXISTS iterations_parent ON task_iterations(parent_task_id);
 `;
 
 export class StateStore {
@@ -248,6 +270,48 @@ export class StateStore {
 		const stmt = this.db.prepare(`SELECT * FROM tasks ${where} ORDER BY created_at DESC LIMIT ${limit}`);
 		const rows = opts.status ? stmt.all(opts.status) : stmt.all();
 		return rows as TaskRow[];
+	}
+
+	// === iterations ===
+
+	insertIteration(row: TaskIterationRow): void {
+		this.db
+			.prepare(
+				`INSERT INTO task_iterations (id, task_id, parent_task_id, instructions, reuse_branch, created_at)
+				VALUES (@id, @task_id, @parent_task_id, @instructions, @reuse_branch, @created_at)`,
+			)
+			.run(row);
+	}
+
+	getIterationByTask(taskId: string): TaskIterationRow | null {
+		const row = this.db.prepare("SELECT * FROM task_iterations WHERE task_id = ?").get(taskId);
+		return (row as TaskIterationRow) ?? null;
+	}
+
+	getIterationChain(taskId: string): TaskIterationRow[] {
+		const chain: TaskIterationRow[] = [];
+		let current = taskId;
+		while (current) {
+			const row = this.db.prepare("SELECT * FROM task_iterations WHERE task_id = ?").get(current) as
+				| TaskIterationRow
+				| undefined;
+			if (row) {
+				chain.unshift(row);
+				current = row.parent_task_id ?? "";
+			} else {
+				// Root task (created with create(), not iterate())
+				chain.unshift({
+					id: `root-${current}`,
+					task_id: current,
+					parent_task_id: null,
+					instructions: null,
+					reuse_branch: null,
+					created_at: 0,
+				});
+				break;
+			}
+		}
+		return chain;
 	}
 
 	// === worktrees ===

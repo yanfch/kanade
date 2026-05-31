@@ -4,6 +4,7 @@ export type {
 	AgentCallStatus,
 	NeedsHumanRow,
 	NeedsHumanStatus,
+	TaskIterationRow,
 	TaskPhaseRow,
 	TaskRow,
 	TaskStatus,

@@ -181,6 +181,76 @@ export class TaskManager {
 		return { task_id: taskId, run_dir: runDir, workflow_path: workflowPath };
 	}
 
+	iterate(parentTaskId: string, options: { instructions?: string; args?: unknown } = {}): CreateTaskResult {
+		const parentTask = this.store.getTask(parentTaskId);
+		if (!parentTask) throw new AppError(`Task not found: ${parentTaskId}`, 404);
+		if (!existsSync(parentTask.workflow_path))
+			throw new AppError(`Workflow script not found for task: ${parentTaskId}`, 404);
+
+		const script = readFileSync(parentTask.workflow_path, "utf8");
+		const parentOptions = JSON.parse(parentTask.options) as TaskOptions;
+
+		// Find worktree branch from parent task
+		const worktrees = this.store.findWorktreesByTask(parentTaskId);
+		const reuseBranch = worktrees.length > 0 ? worktrees[0].branch : undefined;
+
+		// Build args with iteration context
+		const iterateArgs = {
+			...((options.args as Record<string, unknown>) ?? {}),
+			previousTaskId: parentTaskId,
+			previousResult: parentTask.result ? JSON.parse(parentTask.result) : null,
+			instructions: options.instructions ?? null,
+			reuseBranch,
+		};
+
+		const newTaskId = this.allocateTaskId();
+		const newRunDir = join(this.config.paths.runsDir, newTaskId);
+		mkdirSync(newRunDir, { recursive: true });
+		const workflowPath = join(newRunDir, "workflow.js");
+		writeFileSync(workflowPath, script, "utf8");
+
+		const now = Date.now();
+		this.store.insertTask({
+			id: newTaskId,
+			workflow_source: parentTask.workflow_source,
+			workflow_name: parentTask.workflow_name,
+			workflow_path: workflowPath,
+			status: "created",
+			base_repo: parentTask.base_repo,
+			base_branch: parentTask.base_branch,
+			cwd: parentOptions?.cwd ?? parentTask.cwd,
+			created_at: now,
+			started_at: null,
+			finished_at: null,
+			error: null,
+			options: JSON.stringify(parentOptions ?? {}),
+			result: null,
+		});
+
+		// Record iteration link
+		this.store.insertIteration({
+			id: `iter-${newTaskId}`,
+			task_id: newTaskId,
+			parent_task_id: parentTaskId,
+			instructions: options.instructions ?? null,
+			reuse_branch: reuseBranch ?? null,
+			created_at: now,
+		});
+
+		this.events.emit(
+			"task.created",
+			{ taskId: newTaskId, runDir: newRunDir, workflowPath, iterateFrom: parentTaskId },
+			newTaskId,
+		);
+		this.logger.forTask(newTaskId).info("task created", {
+			source: "iterate",
+			parent: parentTaskId,
+			instructions: options.instructions ?? "",
+		});
+		void this.run(newTaskId, script, iterateArgs, parentOptions).catch(() => undefined);
+		return { task_id: newTaskId, run_dir: newRunDir, workflow_path: workflowPath };
+	}
+
 	get(taskId: string): TaskRow | null {
 		return this.store.getTask(taskId);
 	}
@@ -211,6 +281,15 @@ export class TaskManager {
 		} finally {
 			journal.close();
 		}
+	}
+
+	getIteration(taskId: string): {
+		iteration: import("../store/index.ts").TaskIterationRow | null;
+		chain: string[];
+	} {
+		const iteration = this.store.getIterationByTask(taskId);
+		const chain = this.store.getIterationChain(taskId).map((r) => r.task_id);
+		return { iteration, chain };
 	}
 
 	getScript(taskId: string): string | null {

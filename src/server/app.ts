@@ -174,6 +174,15 @@ export function createApp(ctx: AppContext): Hono {
 		return c.json({ ok: true });
 	});
 
+	app.post("/tasks/:id/iterate", async (c) => {
+		const body = (await c.req.json().catch(() => ({}))) as {
+			instructions?: string;
+			args?: unknown;
+		};
+		const result = ctx.taskManager.iterate(c.req.param("id"), body);
+		return c.json(result, 202);
+	});
+
 	// ── Subagent session routes ──────────────────────────────────────────────
 
 	app.get("/tasks/:id/sessions", (c) => {

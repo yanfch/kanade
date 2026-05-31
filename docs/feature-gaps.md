@@ -195,14 +195,15 @@ const reviews = await parallel(
 
 **工作量**: 已完成
 
-### Phase 2 补全: 缺失 E2E 用例
+### Phase 2 补全: 缺失 E2E 用例 ✅
 
-| # | 用例 | 工作量 |
-|---|------|--------|
-| E9 | reuseBranch 复用 | 半天 |
-| E10 | abort 执行中取消（agent 延迟 + signal 传播） | 半天 |
-| E11 | token budget 耗尽 | 半天 |
-| E16 | 多 agent parallel 事件交错 | 半天 |
+| # | 用例 | 状态 |
+|---|------|------|
+| E9 | reuseBranch 复用 | ✅ |
+| E10 | abort 执行中取消 | ✅ |
+| E11 | token budget 耗尽 | ✅ |
+| E16 | 多 agent parallel 事件交错 | ✅ |
+| + | worktree cleanup 验证 | ✅ |
 
 ### Phase 5 补全: 真实 E2E
 
@@ -236,7 +237,7 @@ const reviews = await parallel(
 
 ```
 Week 1:  ~~Eval 框架~~ ✅ + ~~Error Recovery~~ ✅ + ~~Rate Limiting~~ ✅
-Week 2:  Phase 2 补全 (E9-E11, E16)
+Week 2:  ~~Phase 2 补全 (E9-E11, E16)~~ ✅
 Week 3:  Phase 5 补全 (R3-R5)
 Week 4:  扩充 eval suite 到 30+ cases
 ```

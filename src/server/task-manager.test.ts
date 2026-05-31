@@ -186,6 +186,68 @@ describe("TaskManager — rerun", () => {
 	});
 });
 
+describe("TaskManager — iterate", () => {
+	it("throws for an unknown task", () => {
+		const { store, manager } = setup();
+		try {
+			expect(() => manager.iterate("T-9999")).toThrow("Task not found");
+		} finally {
+			store.close();
+		}
+	});
+
+	it("creates a new task with previousResult in args", async () => {
+		const { store, manager } = setup();
+		try {
+			const original = manager.create({ source: "inline", script: SIMPLE_SCRIPT });
+			await vi.waitFor(() => expect(manager.get(original.task_id)?.status).toBe("finished"));
+
+			const iter = manager.iterate(original.task_id, { instructions: "improve it" });
+			expect(iter.task_id).not.toBe(original.task_id);
+
+			await vi.waitFor(() => expect(manager.get(iter.task_id)?.status).toBe("finished"));
+		} finally {
+			store.close();
+		}
+	});
+
+	it("records iteration in task_iterations table", async () => {
+		const { store, manager } = setup();
+		try {
+			const original = manager.create({ source: "inline", script: SIMPLE_SCRIPT });
+			await vi.waitFor(() => expect(manager.get(original.task_id)?.status).toBe("finished"));
+
+			const iter = manager.iterate(original.task_id, { instructions: "add retry" });
+			const iteration = manager.getIteration(iter.task_id);
+
+			expect(iteration.iteration).not.toBeNull();
+			expect(iteration.iteration?.parent_task_id).toBe(original.task_id);
+			expect(iteration.iteration?.instructions).toBe("add retry");
+			expect(iteration.chain).toEqual([original.task_id, iter.task_id]);
+		} finally {
+			store.close();
+		}
+	});
+
+	it("iteration chain links multiple iterations", async () => {
+		const { store, manager } = setup();
+		try {
+			const t1 = manager.create({ source: "inline", script: SIMPLE_SCRIPT });
+			await vi.waitFor(() => expect(manager.get(t1.task_id)?.status).toBe("finished"));
+
+			const t2 = manager.iterate(t1.task_id, { instructions: "step 2" });
+			await vi.waitFor(() => expect(manager.get(t2.task_id)?.status).toBe("finished"));
+
+			const t3 = manager.iterate(t2.task_id, { instructions: "step 3" });
+
+			const chain = manager.getIteration(t3.task_id).chain;
+			expect(chain).toEqual([t1.task_id, t2.task_id, t3.task_id]);
+		} finally {
+			store.close();
+		}
+	});
+});
+
 describe("TaskManager — create source:saved", () => {
 	it("runs a saved workflow by name", async () => {
 		const { store, manager } = setup();
