@@ -10,6 +10,8 @@ import type { NeedsHumanRow, StateStore, TaskRow, TaskStatus, WorkflowSource } f
 import * as Attrs from "../tracing/attributes.ts";
 import type { TracingHandle, Logger as TracingLogger } from "../tracing/index.ts";
 import { runWorkflow } from "../workflow-engine/index.ts";
+import { SnapshotBuilder } from "../workflow-engine/snapshot-builder.ts";
+import type { WorkflowSnapshot } from "../workflow-engine/snapshot.ts";
 import { AppError } from "./errors.ts";
 import type { EventBus } from "./event-bus.ts";
 import { LlmWorkflowAuthor, StubWorkflowAuthor, type WorkflowAuthor } from "./workflow-author.ts";
@@ -46,6 +48,7 @@ export class TaskManager {
 
 	private readonly logger: TracingLogger;
 	private readonly tracer: Tracer;
+	private readonly snapshotBuilder: SnapshotBuilder;
 	private readonly createSession?: (options: CreateAgentSessionOptions) => Promise<CreateAgentSessionResult>;
 
 	constructor(
@@ -76,6 +79,7 @@ export class TaskManager {
 		this.logger = tracing?.logger.forComponent("task-manager") ?? createNoopLogger();
 		this.tracer = tracing?.tracer ?? ({ startSpan: () => noopSpan } as unknown as Tracer);
 		this.isolationManager = this.isolation;
+		this.snapshotBuilder = new SnapshotBuilder(events);
 	}
 
 	create(input: CreateTaskInput): CreateTaskResult {
@@ -366,6 +370,10 @@ export class TaskManager {
 			this.store.updateTask(taskId, { status: "running", started_at: Date.now() });
 			this.events.emit("task.running", { taskId }, taskId);
 
+			// Initialize snapshot for real-time progress tracking
+			const scriptMeta = this.parseScriptMeta(script);
+			if (scriptMeta) this.snapshotBuilder.init(taskId, scriptMeta);
+
 			const result = await runWorkflow(script, {
 				args,
 				taskId,
@@ -459,6 +467,26 @@ export class TaskManager {
 
 	private resolveAgentDir(): string | undefined {
 		return this.config.models.agentDir ?? this.config.models.piAgentDir ?? undefined;
+	}
+
+	/** Get the current snapshot for a task (real-time progress). */
+	getSnapshot(taskId: string): WorkflowSnapshot | null {
+		return this.snapshotBuilder.get(taskId);
+	}
+
+	private parseScriptMeta(script: string): { name: string; description: string } | null {
+		try {
+			const match = script.match(/export\s+const\s+meta\s*=\s*\{/);
+			if (!match) return null;
+			const nameMatch = script.match(/name\s*:\s*['"]([^'"]+)['"]\s*,/);
+			const descMatch = script.match(/description\s*:\s*['"]([^'"]+)['"]/);
+			return {
+				name: nameMatch?.[1] ?? "workflow",
+				description: descMatch?.[1] ?? "",
+			};
+		} catch {
+			return null;
+		}
 	}
 
 	private buildPersistFilter(): ((label: string) => boolean) | undefined {

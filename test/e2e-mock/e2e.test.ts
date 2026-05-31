@@ -435,6 +435,79 @@ return await agent('run', { label: 'r', schema: { type: 'object', properties: { 
 
 // ── E7: Worktree isolation ──────────────────────────────────────────────────
 
+// ── E10: Snapshot real-time progress ────────────────────────────────────────
+
+describe("E2E — snapshot", () => {
+	it("snapshot tracks agent lifecycle via events", async () => {
+		let callCount = 0;
+		const mock = createMockSessionFactory({
+			handler: () => ({ type: "text", text: `result-${++callCount}` }),
+		});
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'snap-test', description: 'Test snapshot' }
+phase('Research')
+await agent('find info', { label: 'researcher' })
+phase('Build')
+await agent('implement', { label: 'developer' })
+return 'done'`,
+			});
+
+			await waitForTask(ctx.taskManager, task.task_id);
+
+			const snap = ctx.taskManager.getSnapshot(task.task_id);
+			expect(snap).not.toBeNull();
+			expect(snap!.name).toBe("snap-test");
+			expect(snap!.agents).toHaveLength(2);
+			expect(snap!.agents[0].label).toBe("researcher");
+			expect(snap!.agents[0].status).toBe("done");
+			expect(snap!.agents[1].label).toBe("developer");
+			expect(snap!.agents[1].status).toBe("done");
+			expect(snap!.doneCount).toBe(2);
+			expect(snap!.runningCount).toBe(0);
+			expect(snap!.phases).toContain("Research");
+			expect(snap!.phases).toContain("Build");
+		} finally {
+			ctx.cleanup();
+		}
+	});
+
+	it("GET /tasks/:id/snapshot returns snapshot", async () => {
+		const mock = createMockSessionFactory({ text: "ok" });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'api-test', description: 'Test' }
+return await agent('work', { label: 'worker' })`,
+			});
+
+			await waitForTask(ctx.taskManager, task.task_id);
+
+			const res = await ctx.app.request(`/tasks/${task.task_id}/snapshot`);
+			expect(res.status).toBe(200);
+			const body = await res.json();
+			expect(body.snapshot.name).toBe("api-test");
+			expect(body.snapshot.agents).toHaveLength(1);
+		} finally {
+			ctx.cleanup();
+		}
+	});
+
+	it("GET /tasks/:id/snapshot returns 404 for unknown task", async () => {
+		const mock = createMockSessionFactory({ text: "ok" });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const res = await ctx.app.request("/tasks/T-9999/snapshot");
+			expect(res.status).toBe(404);
+		} finally {
+			ctx.cleanup();
+		}
+	});
+});
+
 // ── E11: CleanupScheduler integration ───────────────────────────────────────
 
 describe("E2E — cleanup scheduler", () => {

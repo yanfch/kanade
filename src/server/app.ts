@@ -136,6 +136,12 @@ export function createApp(ctx: AppContext): Hono {
 		return c.json(content);
 	});
 
+	app.get("/tasks/:id/snapshot", (c) => {
+		const snapshot = ctx.taskManager.getSnapshot(c.req.param("id"));
+		if (!snapshot) return c.json({ error: "Not found" }, 404);
+		return c.json({ snapshot });
+	});
+
 	app.post("/tasks/:id/rerun", async (c) => {
 		if (!ctx.taskManager.get(c.req.param("id"))) return c.json({ error: "Task not found" }, 404);
 		const body = (await c.req.json().catch(() => ({}))) as {

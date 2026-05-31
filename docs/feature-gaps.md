@@ -5,8 +5,7 @@
 ## 状态总览
 
 ```
-已完成 █████████████████████████████████  98%
-未完成 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   2%
+已完成 ██████████████████████████████████ 100%
 ```
 
 ---
@@ -145,14 +144,17 @@ const reviews = await parallel(
 
 **工作量**: 已完成
 
-### 10. Snapshot 实时更新
+### 10. Snapshot 实时更新 ✅
 
-**现状**: `snapshot.ts` 有数据结构但从未在 runtime 中使用  
-**设计**: `docs/06-workflow-engine.md`
+**已完成**: `src/workflow-engine/snapshot-builder.ts` + `src/server/app.ts`
+- `SnapshotBuilder`：事件驱动的 workflow 进度追踪器
+- 订阅 EventBus 事件（agent_started, agent_completed, phase）
+- Runtime 零改动——完全通过事件解耦
+- Log 事件不触发 snapshot 更新（性能优化）
+- API: `GET /tasks/:id/snapshot`
+- 测试：10 单元测试 + 3 E2E 测试
 
-agent 开始/完成时更新 snapshot，供 UI 展示实时进度。
-
-**工作量**: 1 天
+**工作量**: 已完成
 
 ### 11. 真实 LLM WorkflowAuthor 集成 ✅
 
