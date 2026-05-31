@@ -506,6 +506,58 @@ return await agent('work', { label: 'worker' })`,
 			ctx.cleanup();
 		}
 	});
+
+	it("snapshot tracks parallel agents correctly", async () => {
+		let callCount = 0;
+		const mock = createMockSessionFactory({
+			handler: () => ({ type: "text", text: `r-${++callCount}` }),
+		});
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'parallel-snap', description: 'Test' }
+await parallel([
+  () => agent('task A', { label: 'alpha' }),
+  () => agent('task B', { label: 'beta' }),
+  () => agent('task C', { label: 'gamma' }),
+])
+return 'done'`,
+			});
+
+			await waitForTask(ctx.taskManager, task.task_id);
+
+			const snap = ctx.taskManager.getSnapshot(task.task_id);
+			expect(snap!.agents).toHaveLength(3);
+			expect(snap!.doneCount).toBe(3);
+			expect(snap!.runningCount).toBe(0);
+			expect(snap!.errorCount).toBe(0);
+		} finally {
+			ctx.cleanup();
+		}
+	});
+
+	it("snapshot tracks agent failure as error", async () => {
+		const mock = createMockSessionFactory({ error: new Error("LLM failed") });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'fail-snap', description: 'Test' }
+const r = await agent('will fail', { label: 'broken' })
+return { r }`,
+			});
+
+			await waitForTask(ctx.taskManager, task.task_id);
+
+			const snap = ctx.taskManager.getSnapshot(task.task_id);
+			expect(snap!.agents).toHaveLength(1);
+			expect(snap!.agents[0].status).toBe("error");
+			expect(snap!.errorCount).toBe(1);
+		} finally {
+			ctx.cleanup();
+		}
+	});
 });
 
 // ── E11: CleanupScheduler integration ───────────────────────────────────────
@@ -551,6 +603,37 @@ return 'done'`,
 
 			expect(result.journalsCleaned).toBe(1);
 			expect(existsSync(journalPath)).toBe(false);
+		} finally {
+			ctx.cleanup();
+		}
+	});
+
+	it("cleanup scheduler cleans expired trace directories", async () => {
+		const mock = createMockSessionFactory({ text: "ok" });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			// Create old and recent trace dirs
+			const oldDir = join(ctx.config.paths.tracesDir, "2020-01-01");
+			const recentDir = join(ctx.config.paths.tracesDir, "2026-05-30");
+			const { mkdirSync, writeFileSync } = await import("node:fs");
+			mkdirSync(oldDir, { recursive: true });
+			mkdirSync(recentDir, { recursive: true });
+			writeFileSync(join(oldDir, "test.jsonl"), "old");
+			writeFileSync(join(recentDir, "test.jsonl"), "recent");
+
+			const { CleanupScheduler } = await import("../../src/server/cleanup-scheduler.ts");
+			const cleanupLogger = { info: () => {}, warn: () => {}, error: () => {} };
+			const scheduler = new CleanupScheduler({
+				config: { ...ctx.config.cleanup, traceRetentionDays: 30 },
+				paths: ctx.config.paths,
+				isolation: ctx.taskManager.isolationManager,
+				logger: cleanupLogger as never,
+			});
+			const result = await scheduler.run();
+
+			expect(existsSync(oldDir)).toBe(false);
+			expect(existsSync(recentDir)).toBe(true);
+			expect(result.tracesCleaned).toBe(1);
 		} finally {
 			ctx.cleanup();
 		}
