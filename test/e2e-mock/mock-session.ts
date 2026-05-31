@@ -48,6 +48,12 @@ export function createMockSessionFactory(scenario: MockScenario = {}) {
 		};
 		sessions.push(record);
 
+		// If sessionManager is persisted, write entries so JSONL file is actually created
+		const sm = options.sessionManager;
+		if (sm?.isPersisted()) {
+			sm.newSession();
+		}
+
 		const session = {
 			messages: [
 				{
@@ -85,6 +91,13 @@ export function createMockSessionFactory(scenario: MockScenario = {}) {
 			},
 			dispose() {
 				record.disposed = true;
+				// Flush persisted session on dispose
+				if (sm?.isPersisted()) {
+					sm.appendMessage({
+						role: "assistant",
+						content: [{ type: "text", text: scenario.text ?? "mock result" }],
+					} as never);
+				}
 			},
 		};
 

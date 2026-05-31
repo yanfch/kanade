@@ -44,6 +44,10 @@ export interface WorkflowRunOptions extends Omit<WorkflowAgentOptions, "journal"
 	dumpArtifacts?: boolean;
 	/** Base directory for artifact dump (usually the run dir) */
 	runDir?: string;
+	/** Persist subagent sessions to disk. Default: false */
+	persistSubagents?: boolean;
+	/** Filter which subagent labels get persisted. Return true to persist. */
+	persistFilter?: (label: string) => boolean;
 	onLog?: (message: string) => void;
 	onPhase?: (title: string) => void;
 	onHumanRequest?: (event: { requestId: string; cacheKey: string; request: HumanRequest }) => void;
@@ -132,6 +136,9 @@ export async function runWorkflow<T = unknown>(
 			journal: options.agentJournal,
 			isolationManager: options.isolationManager,
 			taskId: options.taskId,
+			persistSubagents: options.persistSubagents,
+			persistFilter: options.persistFilter,
+			persistDir: options.runDir ? join(options.runDir, "debug", "subagents") : undefined,
 		});
 	const concurrency = Math.max(
 		1,

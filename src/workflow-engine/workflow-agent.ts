@@ -1,6 +1,7 @@
 // Portions of this file are derived from pi-dynamic-workflows
 // (https://github.com/Michaelliv/pi-dynamic-workflows), MIT licensed.
 
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import {
 	AuthStorage,
@@ -61,6 +62,12 @@ export interface WorkflowAgentOptions {
 	isolationManager?: Pick<IsolationManager, "prepare">;
 	/** Task ID passed to IsolationManager.prepare(). */
 	taskId?: string;
+	/** Persist subagent sessions to disk. Default: false */
+	persistSubagents?: boolean;
+	/** Filter which subagent labels get persisted. Return true to persist. */
+	persistFilter?: (label: string) => boolean;
+	/** Directory for persisted subagent sessions. Required for persistence. */
+	persistDir?: string;
 }
 
 export interface AgentRunOptions<TSchemaDef extends TSchema | undefined = undefined> {
@@ -98,6 +105,9 @@ export class WorkflowAgent {
 	private readonly journal?: AgentJournal;
 	private readonly isolationManager?: Pick<IsolationManager, "prepare">;
 	private readonly taskId?: string;
+	private readonly persistSubagents: boolean;
+	private readonly persistFilter?: (label: string) => boolean;
+	private readonly persistDir?: string;
 
 	constructor(options: WorkflowAgentOptions = {}) {
 		this.cwd = options.cwd ?? process.cwd();
@@ -116,6 +126,9 @@ export class WorkflowAgent {
 		this.journal = options.journal;
 		this.isolationManager = options.isolationManager;
 		this.taskId = options.taskId;
+		this.persistSubagents = options.persistSubagents ?? false;
+		this.persistFilter = options.persistFilter;
+		this.persistDir = options.persistDir;
 	}
 
 	async run<TSchemaDef extends TSchema | undefined = undefined>(
@@ -163,10 +176,12 @@ export class WorkflowAgent {
 
 		const sessionOptions = await this.buildSessionOptions(requestedModel);
 
+		const label = options.label ?? "agent";
+		const sessionManager = this.createSessionManager(label, effectiveCwd);
 		const { session } = await this.createSession({
 			cwd: effectiveCwd,
 			agentDir: this.agentDir,
-			sessionManager: SessionManager.inMemory(),
+			sessionManager,
 			customTools,
 			...sessionOptions,
 		});
@@ -240,6 +255,16 @@ export class WorkflowAgent {
 			settingsManager.applyOverrides({ compaction: { enabled: false } });
 		}
 		return settingsManager;
+	}
+
+	private createSessionManager(label: string, cwd: string): SessionManager {
+		const dir = this.persistDir;
+		if (!this.persistSubagents || !dir) return SessionManager.inMemory();
+		if (this.persistFilter && !this.persistFilter(label)) return SessionManager.inMemory();
+		const safeLabel = label.replace(/[^a-zA-Z0-9_-]/g, "_");
+		const labelDir = join(dir, safeLabel);
+		if (!existsSync(labelDir)) mkdirSync(labelDir, { recursive: true });
+		return SessionManager.create(cwd, labelDir);
 	}
 
 	private buildAdditionalInstructions(callInstructions: string | undefined): string | undefined {

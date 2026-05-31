@@ -59,6 +59,8 @@ GET  /tasks/:id                Task details
 GET  /tasks/:id/journal        Agent call journal
 GET  /tasks/:id/script         Workflow script
 GET  /tasks/:id/artifacts      Debug artifacts
+GET  /tasks/:id/sessions       Subagent session list
+GET  /tasks/:id/sessions/:label  Read subagent session JSONL
 POST /tasks/:id/abort          Abort
 POST /tasks/:id/respond        Respond to human request
 POST /tasks/:id/rerun          Rerun with journal cache
@@ -144,6 +146,12 @@ tracing:
     - type: otlp_http           # Braintrust / self-hosted collector
       endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT}
 
+debug:
+  dumpArtifacts: false
+  persistSubagents: false
+  persistFilter:          # Optional: only persist specific labels
+    labels: []
+
 cleanup:
   journalRetentionDays: 30
   traceRetentionDays: 90
@@ -155,9 +163,9 @@ cleanup:
 
 | Layer | Tests | What |
 |-------|-------|------|
-| Unit | 30 | Config, journal, human gate, roles, tracing |
-| Integration | 135 | Runtime, workflow-agent, app routes, task-manager, isolation |
-| Mock E2E | 15 | Full execution chain (script → sandbox → agent → session) |
+| Unit | 37 | Config, journal, human gate, roles, tracing, session persistence |
+| Integration | 141 | Runtime, workflow-agent, app routes, task-manager, isolation |
+| Mock E2E | 21 | Full execution chain (script → sandbox → agent → session, persistence) |
 
 ```bash
 npm test                        # All tests

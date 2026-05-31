@@ -1,5 +1,8 @@
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
+import type { KanadeConfig } from "../config/config.ts";
 import type { TaskStatus } from "../store/index.ts";
 import { AppError } from "./errors.ts";
 import type { EventBus, ServerEvent } from "./event-bus.ts";
@@ -9,6 +12,7 @@ import type { TaskManager } from "./task-manager.ts";
 export interface AppContext {
 	taskManager: TaskManager;
 	events: EventBus;
+	config?: KanadeConfig;
 }
 
 export function createApp(ctx: AppContext): Hono {
@@ -162,6 +166,60 @@ export function createApp(ctx: AppContext): Hono {
 	app.post("/tasks/:id/reject", async (c) => {
 		await ctx.taskManager.reject(c.req.param("id"));
 		return c.json({ ok: true });
+	});
+
+	// ── Subagent session routes ──────────────────────────────────────────────
+
+	app.get("/tasks/:id/sessions", (c) => {
+		const taskId = c.req.param("id");
+		if (!ctx.taskManager.get(taskId)) return c.json({ error: "Task not found" }, 404);
+		const config = ctx.config;
+		if (!config) return c.json({ error: "Config not available" }, 500);
+		const subagentsDir = join(config.paths.runsDir, taskId, "debug", "subagents");
+		if (!existsSync(subagentsDir)) return c.json({ sessions: [] });
+		// Labels are sanitized directory names (original labels may contain special chars)
+		const labels = readdirSync(subagentsDir).filter((name) => {
+			const fullPath = join(subagentsDir, name);
+			try {
+				return existsSync(fullPath) && readdirSync(fullPath).some((f) => f.endsWith(".jsonl"));
+			} catch {
+				return false;
+			}
+		});
+		const sessions = labels.map((label) => {
+			const labelDir = join(subagentsDir, label);
+			const files = readdirSync(labelDir).filter((f) => f.endsWith(".jsonl"));
+			return { label, files };
+		});
+		return c.json({ sessions });
+	});
+
+	app.get("/tasks/:id/sessions/:label", (c) => {
+		const taskId = c.req.param("id");
+		const label = c.req.param("label");
+		if (!ctx.taskManager.get(taskId)) return c.json({ error: "Task not found" }, 404);
+		const config = ctx.config;
+		if (!config) return c.json({ error: "Config not available" }, 500);
+		const safeLabel = label.replace(/[^a-zA-Z0-9_-]/g, "_");
+		const labelDir = join(config.paths.runsDir, taskId, "debug", "subagents", safeLabel);
+		if (!existsSync(labelDir)) return c.json({ error: "Session not found" }, 404);
+		const files = readdirSync(labelDir).filter((f) => f.endsWith(".jsonl"));
+		if (!files.length) return c.json({ error: "Session not found" }, 404);
+		// Return the most recent session file
+		const sessionFile = join(labelDir, files[files.length - 1]);
+		const content = readFileSync(sessionFile, "utf8");
+		const entries = content
+			.trim()
+			.split("\n")
+			.map((line) => {
+				try {
+					return JSON.parse(line);
+				} catch {
+					return null;
+				}
+			})
+			.filter(Boolean);
+		return c.json({ label, entries, file: files[files.length - 1] });
 	});
 
 	return app;

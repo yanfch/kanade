@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
 	CreateAgentSessionOptions,
 	CreateAgentSessionResult,
@@ -72,6 +75,8 @@ function createMockSessionFactory(opts: { structuredResult?: unknown } = {}): {
 	const disposed = { value: false };
 	const createSession: CreateSession = async (options) => {
 		calls.push(options);
+		const sm = options.sessionManager;
+		if (sm?.isPersisted()) sm.newSession();
 		return {
 			session: {
 				messages: [
@@ -90,6 +95,9 @@ function createMockSessionFactory(opts: { structuredResult?: unknown } = {}): {
 				async abort() {},
 				dispose() {
 					disposed.value = true;
+					if (sm?.isPersisted()) {
+						sm.appendMessage({ role: "assistant", content: [{ type: "text", text: "final text" }] } as never);
+					}
 				},
 			},
 		} as CreateAgentSessionResult;
@@ -270,6 +278,152 @@ describe("resolveModelSpec", () => {
 		expect(resolveModelSpec("unique-id", { modelRegistry })).toBe(unique);
 		expect(resolveModelSpec("Unique Model", { modelRegistry })).toBe(unique);
 		expect(resolveModelSpec("same-id", { modelRegistry })).toBeUndefined();
+	});
+});
+
+describe("WorkflowAgent — session persistence", () => {
+	it("does not persist sessions when persistSubagents is false (default)", async () => {
+		const persistDir = mkdtempSync(join(tmpdir(), "kanade-persist-test-"));
+		const mock = createMockSessionFactory();
+		const agent = new WorkflowAgent({
+			cwd: "/repo",
+			createSession: mock.createSession,
+			createCodingTools: () => [],
+			persistSubagents: false,
+			persistDir,
+		});
+
+		await agent.run("do something", { label: "worker" });
+
+		expect(mock.calls[0].sessionManager?.isPersisted()).toBe(false);
+	});
+
+	it("persists sessions to persistDir/label/ when persistSubagents is true", async () => {
+		const persistDir = mkdtempSync(join(tmpdir(), "kanade-persist-test-"));
+		const mock = createMockSessionFactory();
+		const agent = new WorkflowAgent({
+			cwd: "/repo",
+			createSession: mock.createSession,
+			createCodingTools: () => [],
+			persistSubagents: true,
+			persistDir,
+		});
+
+		await agent.run("do something", { label: "researcher" });
+
+		expect(mock.calls[0].sessionManager?.isPersisted()).toBe(true);
+		// Session file should exist under persistDir/researcher/
+		const labelDir = join(persistDir, "researcher");
+		expect(existsSync(labelDir)).toBe(true);
+		const files = readdirSync(labelDir);
+		expect(files.length).toBeGreaterThanOrEqual(1);
+		expect(files[0]).toMatch(/\.jsonl$/);
+	});
+
+	it("uses in-memory session when label is filtered out by persistFilter", async () => {
+		const persistDir = mkdtempSync(join(tmpdir(), "kanade-persist-test-"));
+		const mock = createMockSessionFactory();
+		const agent = new WorkflowAgent({
+			cwd: "/repo",
+			createSession: mock.createSession,
+			createCodingTools: () => [],
+			persistSubagents: true,
+			persistFilter: (label) => label === "important",
+			persistDir,
+		});
+
+		await agent.run("task A", { label: "important" });
+		await agent.run("task B", { label: "skip-me" });
+
+		expect(mock.calls[0].sessionManager?.isPersisted()).toBe(true);
+		expect(mock.calls[1].sessionManager?.isPersisted()).toBe(false);
+	});
+
+	it("sanitizes label names for filesystem safety", async () => {
+		const persistDir = mkdtempSync(join(tmpdir(), "kanade-persist-test-"));
+		const mock = createMockSessionFactory();
+		const agent = new WorkflowAgent({
+			cwd: "/repo",
+			createSession: mock.createSession,
+			createCodingTools: () => [],
+			persistSubagents: true,
+			persistDir,
+		});
+
+		await agent.run("task", { label: "my agent / weird:label" });
+
+		const entries = readdirSync(persistDir);
+		expect(entries).toHaveLength(1);
+		// Should not contain slashes or colons
+		expect(entries[0]).not.toContain("/");
+		expect(entries[0]).not.toContain(":");
+		// Label is a directory containing the session JSONL
+		const sessionFiles = readdirSync(join(persistDir, entries[0]));
+		expect(sessionFiles).toHaveLength(1);
+		expect(sessionFiles[0]).toMatch(/\.jsonl$/);
+	});
+
+	it("each agent call creates a separate session file", async () => {
+		const persistDir = mkdtempSync(join(tmpdir(), "kanade-persist-test-"));
+		const mock = createMockSessionFactory();
+		const agent = new WorkflowAgent({
+			cwd: "/repo",
+			createSession: mock.createSession,
+			createCodingTools: () => [],
+			persistSubagents: true,
+			persistDir,
+		});
+
+		await agent.run("task A", { label: "alpha" });
+		await agent.run("task B", { label: "alpha" });
+
+		// Both should persist under same label dir but different files
+		const labelDir = join(persistDir, "alpha");
+		const files = readdirSync(labelDir);
+		expect(files).toHaveLength(2);
+		expect(files.every((f) => f.endsWith(".jsonl"))).toBe(true);
+	});
+
+	it("persists session content as valid JSONL", async () => {
+		const persistDir = mkdtempSync(join(tmpdir(), "kanade-persist-test-"));
+		const mock = createMockSessionFactory();
+		const agent = new WorkflowAgent({
+			cwd: "/repo",
+			createSession: mock.createSession,
+			createCodingTools: () => [],
+			persistSubagents: true,
+			persistDir,
+		});
+
+		await agent.run("summarize this", { label: "summarizer" });
+
+		const labelDir = join(persistDir, "summarizer");
+		const file = readdirSync(labelDir)[0];
+		const content = readFileSync(join(labelDir, file), "utf8");
+		const lines = content.trim().split("\n");
+		expect(lines.length).toBeGreaterThanOrEqual(1);
+		// Each line should be valid JSON
+		for (const line of lines) {
+			expect(() => JSON.parse(line)).not.toThrow();
+		}
+		// First line should be the session header
+		const header = JSON.parse(lines[0]);
+		expect(header.type).toBe("session");
+	});
+
+	it("defaults persistDir to undefined when not specified", async () => {
+		const mock = createMockSessionFactory();
+		const agent = new WorkflowAgent({
+			cwd: "/repo",
+			createSession: mock.createSession,
+			createCodingTools: () => [],
+			persistSubagents: true,
+			// no persistDir
+		});
+
+		// Without persistDir, should fall back to in-memory
+		await agent.run("do something", { label: "worker" });
+		expect(mock.calls[0].sessionManager?.isPersisted()).toBe(false);
 	});
 });
 

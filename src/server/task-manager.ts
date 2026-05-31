@@ -380,6 +380,8 @@ export class TaskManager {
 				modelsPath: this.config.models.modelsPath ?? undefined,
 				dumpArtifacts: this.config.debug.dumpArtifacts,
 				runDir,
+				persistSubagents: this.config.debug.persistSubagents,
+				persistFilter: this.buildPersistFilter(),
 				journal,
 				agentJournal: journal,
 				isolationManager: this.isolation,
@@ -454,6 +456,15 @@ export class TaskManager {
 
 	private resolveAgentDir(): string | undefined {
 		return this.config.models.agentDir ?? this.config.models.piAgentDir ?? undefined;
+	}
+
+	private buildPersistFilter(): ((label: string) => boolean) | undefined {
+		const filter = this.config.debug.persistFilter;
+		if (!filter) return undefined;
+		return (label: string) => {
+			if (filter.labels?.length && filter.labels.some((l) => label.includes(l))) return true;
+			return false;
+		};
 	}
 
 	private resolveAuthor(): WorkflowAuthor {

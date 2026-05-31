@@ -5,6 +5,8 @@
  * Only createAgentSession is mocked.
  */
 
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createMockSessionFactory } from "./mock-session.ts";
 import { createE2EContext, waitForTask } from "./setup.ts";
@@ -432,6 +434,155 @@ return await agent('run', { label: 'r', schema: { type: 'object', properties: { 
 });
 
 // ── E7: Worktree isolation ──────────────────────────────────────────────────
+
+// ── E11: Subagent session persistence ────────────────────────────────────────
+
+describe("E2E — subagent session persistence", () => {
+	it("persists subagent sessions when persistSubagents is enabled", async () => {
+		const mock = createMockSessionFactory({ text: "persisted result" });
+		const ctx = createE2EContext(mock.createSession, { persistSubagents: true });
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+return await agent('summarize', { label: 'researcher' })`,
+			});
+
+			await waitForTask(ctx.taskManager, task.task_id);
+			expect(ctx.taskManager.get(task.task_id)?.status).toBe("finished");
+
+			// Check that session files were created
+			const subagentsDir = join(ctx.config.paths.runsDir, task.task_id, "debug", "subagents");
+			expect(existsSync(subagentsDir)).toBe(true);
+			const labelDir = join(subagentsDir, "researcher");
+			expect(existsSync(labelDir)).toBe(true);
+			const files = readdirSync(labelDir);
+			expect(files).toHaveLength(1);
+			expect(files[0]).toMatch(/\.jsonl$/);
+		} finally {
+			ctx.cleanup();
+		}
+	});
+
+	it("does not persist when persistSubagents is disabled", async () => {
+		const mock = createMockSessionFactory({ text: "result" });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+return await agent('work', { label: 'worker' })`,
+			});
+
+			await waitForTask(ctx.taskManager, task.task_id);
+
+			const subagentsDir = join(ctx.config.paths.runsDir, task.task_id, "debug", "subagents");
+			expect(existsSync(subagentsDir)).toBe(false);
+		} finally {
+			ctx.cleanup();
+		}
+	});
+
+	it("persists multiple agents with different labels", async () => {
+		let callCount = 0;
+		const mock = createMockSessionFactory({
+			handler: () => ({ type: "text", text: `result-${++callCount}` }),
+		});
+		const ctx = createE2EContext(mock.createSession, { persistSubagents: true });
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+const a = await agent('task A', { label: 'designer' })
+const b = await agent('task B', { label: 'developer' })
+return { a, b }`,
+			});
+
+			await waitForTask(ctx.taskManager, task.task_id);
+
+			const subagentsDir = join(ctx.config.paths.runsDir, task.task_id, "debug", "subagents");
+			expect(existsSync(join(subagentsDir, "designer"))).toBe(true);
+			expect(existsSync(join(subagentsDir, "developer"))).toBe(true);
+		} finally {
+			ctx.cleanup();
+		}
+	});
+
+	it("persisted session files contain valid JSONL with session header", async () => {
+		const mock = createMockSessionFactory({ text: "result" });
+		const ctx = createE2EContext(mock.createSession, { persistSubagents: true });
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+return await agent('analyze', { label: 'analyzer' })`,
+			});
+
+			await waitForTask(ctx.taskManager, task.task_id);
+
+			const labelDir = join(ctx.config.paths.runsDir, task.task_id, "debug", "subagents", "analyzer");
+			const file = readdirSync(labelDir)[0];
+			const content = readFileSync(join(labelDir, file), "utf8");
+			const lines = content.trim().split("\n");
+			expect(lines.length).toBeGreaterThanOrEqual(1);
+
+			// First line is session header
+			const header = JSON.parse(lines[0]);
+			expect(header.type).toBe("session");
+			expect(header.id).toBeDefined();
+			expect(header.cwd).toBeDefined();
+		} finally {
+			ctx.cleanup();
+		}
+	});
+
+	it("GET /tasks/:id/sessions lists persisted subagent sessions", async () => {
+		const mock = createMockSessionFactory({ text: "ok" });
+		const ctx = createE2EContext(mock.createSession, { persistSubagents: true });
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+await agent('task A', { label: 'alpha' })
+await agent('task B', { label: 'beta' })
+return 'done'`,
+			});
+
+			await waitForTask(ctx.taskManager, task.task_id);
+
+			const res = await ctx.app.request(`/tasks/${task.task_id}/sessions`);
+			expect(res.status).toBe(200);
+			const body = await res.json();
+			expect(body.sessions).toHaveLength(2);
+			expect(body.sessions.map((s: { label: string }) => s.label).sort()).toEqual(["alpha", "beta"]);
+		} finally {
+			ctx.cleanup();
+		}
+	});
+
+	it("GET /tasks/:id/sessions/:label returns session entries", async () => {
+		const mock = createMockSessionFactory({ text: "ok" });
+		const ctx = createE2EContext(mock.createSession, { persistSubagents: true });
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+return await agent('work', { label: 'worker' })`,
+			});
+
+			await waitForTask(ctx.taskManager, task.task_id);
+
+			const res = await ctx.app.request(`/tasks/${task.task_id}/sessions/worker`);
+			expect(res.status).toBe(200);
+			const body = await res.json();
+			expect(body.label).toBe("worker");
+			expect(body.entries).toBeDefined();
+			expect(body.entries.length).toBeGreaterThanOrEqual(1);
+		} finally {
+			ctx.cleanup();
+		}
+	});
+});
 
 describe("E2E — worktree isolation", () => {
 	it("agent with isolation:worktree runs in a worktree cwd", async () => {
