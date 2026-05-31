@@ -225,23 +225,32 @@ export async function runWorkflow<T = unknown>(
 		});
 	};
 
-	const parallel = async (thunks: Array<() => Promise<unknown>>) => {
+	const parallel = async (thunks: Array<() => Promise<unknown>>, parallelOpts?: { cache_lead?: boolean }) => {
 		throwIfAborted();
 		if (!Array.isArray(thunks)) throw new TypeError("parallel() expects an array of functions");
 		if (thunks.some((thunk) => typeof thunk !== "function")) {
 			throw new TypeError("parallel() expects an array of functions, not promises. Wrap each call: () => agent(...)");
 		}
-		return Promise.all(
-			thunks.map(async (thunk, index) => {
-				try {
-					return await thunk();
-				} catch (error) {
-					if (options.signal?.aborted) throw error;
-					log(`parallel[${index}] failed: ${error instanceof Error ? error.message : String(error)}`);
-					return null;
-				}
-			}),
-		);
+
+		const runThunk = async (thunk: () => Promise<unknown>, index: number) => {
+			try {
+				return await thunk();
+			} catch (error) {
+				if (options.signal?.aborted) throw error;
+				log(`parallel[${index}] failed: ${error instanceof Error ? error.message : String(error)}`);
+				return null;
+			}
+		};
+
+		// Lead-first: run the first thunk, wait for it to complete (warming prompt cache),
+		// then run the rest in parallel. Useful when all agents share the same role/model.
+		if (parallelOpts?.cache_lead && thunks.length >= 2) {
+			const first = await runThunk(thunks[0], 0);
+			const rest = await Promise.all(thunks.slice(1).map((t, i) => runThunk(t, i + 1)));
+			return [first, ...rest];
+		}
+
+		return Promise.all(thunks.map((t, i) => runThunk(t, i)));
 	};
 
 	const requestHuman = async (request: HumanRequest): Promise<HumanResponse> => {

@@ -370,3 +370,168 @@ return true`;
 		expect(files[1]).toMatch(/^02-/);
 	});
 });
+
+describe("parallel cache_lead option", () => {
+	it("parallel(thunks) without opts behaves as pure parallel (backward compatible)", async () => {
+		const order: string[] = [];
+		const script = `export const meta = { name: 'test', description: 'Test' }
+await parallel([
+  () => agent('a', { label: 'a' }),
+  () => agent('b', { label: 'b' }),
+  () => agent('c', { label: 'c' }),
+])
+return true`;
+
+		await runWorkflow(script, {
+			agent: {
+				run: async () => {
+					order.push(Date.now().toString());
+					return "x" as never;
+				},
+			},
+		});
+
+		expect(order).toHaveLength(3);
+	});
+
+	it("parallel(thunks, { cache_lead: true }) lead completes before rest start", async () => {
+		const timeline: Array<{ event: string; agent: string }> = [];
+		const script = `export const meta = { name: 'test', description: 'Test' }
+await parallel([
+  () => agent('a', { label: 'a' }),
+  () => agent('b', { label: 'b' }),
+  () => agent('c', { label: 'c' }),
+], { cache_lead: true })
+return true`;
+
+		let callCount = 0;
+		await runWorkflow(script, {
+			agent: {
+				run: async () => {
+					const id = String.fromCharCode(97 + callCount++); // a, b, c
+					timeline.push({ event: "start", agent: id });
+					await new Promise((r) => setTimeout(r, 10));
+					timeline.push({ event: "end", agent: id });
+					return "x" as never;
+				},
+			},
+		});
+
+		// Lead 'a' should end before 'b' and 'c' start
+		const aEnd = timeline.findIndex((e) => e.event === "end" && e.agent === "a");
+		const bStart = timeline.findIndex((e) => e.event === "start" && e.agent === "b");
+		const cStart = timeline.findIndex((e) => e.event === "start" && e.agent === "c");
+		expect(aEnd).toBeLessThan(bStart);
+		expect(aEnd).toBeLessThan(cStart);
+	});
+
+	it("parallel(thunks) without opts all start before any end", async () => {
+		const timeline: Array<{ event: string; agent: string }> = [];
+		const script = `export const meta = { name: 'test', description: 'Test' }
+await parallel([
+  () => agent('a', { label: 'a' }),
+  () => agent('b', { label: 'b' }),
+  () => agent('c', { label: 'c' }),
+])
+return true`;
+
+		let callCount = 0;
+		await runWorkflow(script, {
+			agent: {
+				run: async () => {
+					const id = String.fromCharCode(97 + callCount++);
+					timeline.push({ event: "start", agent: id });
+					await new Promise((r) => setTimeout(r, 10));
+					timeline.push({ event: "end", agent: id });
+					return "x" as never;
+				},
+			},
+		});
+
+		// Without cache_lead, all 3 start before any end
+		const starts = timeline.filter((e) => e.event === "start");
+		const firstEnd = timeline.findIndex((e) => e.event === "end");
+		expect(starts).toHaveLength(3);
+		// All starts should come before the first end
+		const lastStart = timeline.findIndex((e) => e.event === "start" && e.agent === "c");
+		expect(lastStart).toBeLessThan(firstEnd);
+	});
+
+	it("parallel(thunks, { cache_lead: false }) forces pure parallel", async () => {
+		const script = `export const meta = { name: 'test', description: 'Test' }
+await parallel([
+  () => agent('a', { label: 'a' }),
+  () => agent('b', { label: 'b' }),
+], { cache_lead: false })
+return true`;
+
+		let callCount = 0;
+		await runWorkflow(script, {
+			agent: {
+				run: async () => {
+					callCount++;
+					return "x" as never;
+				},
+			},
+		});
+
+		expect(callCount).toBe(2);
+	});
+
+	it("cache_lead: true returns results in correct order", async () => {
+		let callCount = 0;
+		const script = `export const meta = { name: 'test', description: 'Test' }
+const r = await parallel([
+  () => agent('a', { label: 'a' }),
+  () => agent('b', { label: 'b' }),
+  () => agent('c', { label: 'c' }),
+], { cache_lead: true })
+return r`;
+
+		const result = await runWorkflow(script, {
+			agent: {
+				run: async () => `result-${++callCount}` as never,
+			},
+		});
+
+		expect(result.result).toEqual(["result-1", "result-2", "result-3"]);
+	});
+
+	it("cache_lead: true with failing lead returns null and continues", async () => {
+		let callCount = 0;
+		const script = `export const meta = { name: 'test', description: 'Test' }
+const r = await parallel([
+  () => agent('a', { label: 'a' }),
+  () => agent('b', { label: 'b' }),
+], { cache_lead: true })
+return r`;
+
+		const result = await runWorkflow(script, {
+			agent: {
+				run: async () => {
+					callCount++;
+					if (callCount === 1) throw new Error("lead failed");
+					return "ok" as never;
+				},
+			},
+		});
+
+		expect(result.result).toEqual([null, "ok"]);
+	});
+
+	it("cache_lead: true with single thunk runs it directly", async () => {
+		const script = `export const meta = { name: 'test', description: 'Test' }
+const r = await parallel([
+  () => agent('a', { label: 'a' }),
+], { cache_lead: true })
+return r`;
+
+		const result = await runWorkflow(script, {
+			agent: {
+				run: async () => "single" as never,
+			},
+		});
+
+		expect(result.result).toEqual(["single"]);
+	});
+});

@@ -5,8 +5,8 @@
 ## 状态总览
 
 ```
-已完成 ███████████████████████████████  93%
-未完成 ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░   7%
+已完成 ████████████████████████████████  96%
+未完成 █░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   4%
 ```
 
 ---
@@ -114,17 +114,23 @@ GET /tasks/:id/sessions/:label    → 读单个 session jsonl
 
 ## P2 — 增强功能（可后续迭代）
 
-### 8. Parallel Cache 优化
+### 8. Parallel Cache 优化 ✅
 
-**现状**: `parallel()` 始终纯并行  
-**设计**: `docs/02-orchestrator.md §Prompt Caching 策略`
+**已完成**: `runtime.ts`
+- `parallel(thunks, { cache_lead: true })` — 先跑第一个建 cache，再并行跑其余
+- `cache_lead: false` 或省略 — 纯并行（向后兼容）
+- 测试：7 单元测试（含行为验证）
 
+**使用方式**:
+```js
+// 手动 hint — 当你知道所有 agent 同 role/model 时
+const reviews = await parallel(
+  files.map(f => () => agent(`Review ${f}`, { role: 'reviewer' })),
+  { cache_lead: true }
+)
 ```
-fan-out < 3           → 纯并行
-fan-out >= 3 + 同 role → lead-first（先跑一个建 cache，再并行）
-```
 
-**工作量**: 1 天
+**工作量**: 已完成
 
 ### 9. Announcer 框架
 
