@@ -52,6 +52,7 @@ export function startServer(config: KanadeConfig): ServerHandle {
 		config: config.cleanup,
 		paths: config.paths,
 		isolation: taskManager.isolationManager,
+		staleAfterDays: config.isolation.staleAfterDays,
 		logger: tracing.logger.forComponent("cleanup"),
 	});
 	cleanupScheduler.start();

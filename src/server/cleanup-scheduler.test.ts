@@ -137,7 +137,7 @@ describe("CleanupScheduler", () => {
 
 		expect(cleanupStaleWorktrees).toHaveBeenCalledTimes(1);
 		const calledWith = cleanupStaleWorktrees.mock.calls[0][0];
-		// Should be ~7 days before now (isolation.staleAfterDays default)
+		// Should be ~7 days before now (default staleAfterDays)
 		const expectedStale = now - 7 * 86400_000;
 		expect(Math.abs(calledWith - expectedStale)).toBeLessThan(1000);
 		expect(result.worktreesCleaned).toBeGreaterThanOrEqual(0);

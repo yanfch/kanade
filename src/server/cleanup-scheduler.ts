@@ -30,6 +30,8 @@ export interface CleanupSchedulerDeps {
 	config: CleanupConfig;
 	paths: KanadePaths;
 	isolation: { cleanupStaleWorktrees(beforeTs: number): Promise<void> };
+	/** Days before a worktree is considered stale. Default: 7 */
+	staleAfterDays?: number;
 	logger: CleanupSchedulerLogger;
 }
 
@@ -90,7 +92,8 @@ export class CleanupScheduler {
 
 		// 1. Stale worktrees
 		try {
-			const staleBefore = Date.now() - 7 * MS_PER_DAY; // TODO: use config.isolation.staleAfterDays
+			const staleDays = this.deps.staleAfterDays ?? 7;
+			const staleBefore = Date.now() - staleDays * MS_PER_DAY;
 			await this.deps.isolation.cleanupStaleWorktrees(staleBefore);
 			result.worktreesCleaned++; // count is approximate — cleanupStaleWorktrees doesn't return count
 		} catch (err) {
