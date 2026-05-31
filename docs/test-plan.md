@@ -300,11 +300,22 @@ function scoreCase(case_: EvalCase, result: WorkflowRunResult, metrics: RunMetri
 
 ## 5. 实施顺序
 
-| 阶段 | 内容 | 产出 |
-|------|------|------|
-| **Phase 1** | Mock E2E 框架 + P0 用例 (E1-E6) | `test/e2e-mock/` |
-| **Phase 2** | P1-P2 用例 (E7-E14) | 补充到同目录 |
-| **Phase 3** | P3 事件流用例 (E15-E18) | 补充到同目录 |
-| **Phase 4** | Eval 框架 + 初始 eval suite (10 cases) | `eval/` |
-| **Phase 5** | 真实 E2E 用例 (R1-R5) | `test/e2e-real/` |
-| **Phase 6** | 扩充 eval suite 到 30+ cases | 持续迭代 |
+| 阶段 | 内容 | 产出 | 状态 |
+|------|------|------|------|
+| **Phase 1** | Mock E2E 框架 + P0 用例 (E1-E6) | `test/e2e-mock/` | ✅ |
+| **Phase 2** | P1-P2 用例 (E7-E14) | 补充到同目录 | 75% (E9/E10/E11 缺) |
+| **Phase 3** | P3 事件流用例 (E15-E18) | 补充到同目录 | 75% |
+| **Phase 4** | Eval 框架 + 初始 eval suite (10 cases) | `eval/` | ✅ |
+| **Phase 5** | 真实 E2E 用例 (R1-R5) | `test/e2e-real/` | 40% (R3/R4/R5 缺) |
+| **Phase 6** | 扩充 eval suite 到 30+ cases | 持续迭代 | ❌ |
+
+### Phase 4 实现细节
+
+- `eval/types.ts` — EvalCase/EvalResult/EvalReport/RunMetrics 类型
+- `eval/scorer.ts` — 评分逻辑（completion/correctness/efficiency），17 单元测试
+- `eval/reporter.ts` — 终端彩色表格报告
+- `eval/runner.ts` — 执行器（支持 mock 和真实 LLM 两种模式）
+- `eval/suites/default.ts` — 10 cases（bugfix/research/refactor/feature/code_review）
+- `eval/run.ts` — 入口脚本
+- `npm run eval` — mock 模式（零成本，秒级）
+- `npx tsx eval/run.ts` — 真实 LLM 模式（~$0.30/次）
