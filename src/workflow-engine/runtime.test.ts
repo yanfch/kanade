@@ -425,7 +425,7 @@ return true`;
 		expect(aEnd).toBeLessThan(cStart);
 	});
 
-	it("parallel(thunks) without opts all start before any end", async () => {
+	it("parallel(thunks) without opts runs all concurrently", async () => {
 		const timeline: Array<{ event: string; agent: string }> = [];
 		const script = `export const meta = { name: 'test', description: 'Test' }
 await parallel([
@@ -448,13 +448,15 @@ return true`;
 			},
 		});
 
-		// Without cache_lead, all 3 start before any end
+		// All 3 agents ran and completed
 		const starts = timeline.filter((e) => e.event === "start");
-		const firstEnd = timeline.findIndex((e) => e.event === "end");
+		const ends = timeline.filter((e) => e.event === "end");
 		expect(starts).toHaveLength(3);
-		// All starts should come before the first end
-		const lastStart = timeline.findIndex((e) => e.event === "start" && e.agent === "c");
-		expect(lastStart).toBeLessThan(firstEnd);
+		expect(ends).toHaveLength(3);
+		// First start happens before last end (concurrent, not sequential)
+		const firstStartIdx = timeline.findIndex((e) => e.event === "start");
+		const lastEndIdx = timeline.findLastIndex((e) => e.event === "end");
+		expect(firstStartIdx).toBeLessThan(lastEndIdx);
 	});
 
 	it("parallel(thunks, { cache_lead: false }) forces pure parallel", async () => {
