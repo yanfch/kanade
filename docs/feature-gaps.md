@@ -5,8 +5,8 @@
 ## 状态总览
 
 ```
-已完成 ████████████████████████████░░  85%
-未完成 ████░░░░░░░░░░░░░░░░░░░░░░░░░░  15%
+已完成 ███████████████████████████████  93%
+未完成 ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░   7%
 ```
 
 ---
@@ -147,17 +147,15 @@ agent 开始/完成时更新 snapshot，供 UI 展示实时进度。
 
 **工作量**: 1 天
 
-### 11. 真实 LLM WorkflowAuthor 集成
+### 11. 真实 LLM WorkflowAuthor 集成 ✅
 
-**现状**: `LlmWorkflowAuthor` 代码已写，但无 auth 配置时 fallback 到 stub  
-**设计**: `docs/02-orchestrator.md §Workflow Router`
+**已完成**: `src/server/workflow-author.ts` + `test/real-llm/`
+- `LlmWorkflowAuthor` 用 pi SDK 创建 session + structured_output 获取脚本
+- `TaskManager.resolveAuthor()` 有 auth 时用 LLM，无 auth 时 fallback 到 stub
+- 真实 LLM 测试: `test/real-llm/test-generated.ts` + `test/real-llm/smoke.ts`
+- Prompt guidelines: `workflow-engine/prompt-guidelines.ts`
 
-需要：
-- 确保 pi auth 配置正确传递
-- 测试真实 LLM 生成脚本的质量
-- 可能需要迭代 prompt guidelines
-
-**工作量**: 1-2 天（含 prompt 调优）
+**工作量**: 已完成
 
 ---
 
