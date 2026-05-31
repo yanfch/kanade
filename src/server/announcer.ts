@@ -7,6 +7,7 @@
 
 import { execSync } from "node:child_process";
 import type { AnnouncerConfig } from "../config/config.ts";
+import type { Logger } from "../tracing/logger.ts";
 import type { ServerEvent } from "./event-bus.ts";
 
 export interface AnnounceContext {
@@ -102,24 +103,27 @@ export interface DispatchResult {
 	announcer?: string;
 }
 
-export interface AnnouncerLogger {
-	info(msg: string): void;
-	warn(msg: string): void;
-	error(msg: string): void;
-}
+const noopLogger: Logger = {
+	info: () => {},
+	warn: () => {},
+	error: () => {},
+	debug: () => {},
+	forTask: () => noopLogger,
+	forComponent: () => noopLogger,
+} as unknown as Logger;
 
 export class AnnouncerRegistry {
 	private readonly announcers: Map<string, AnnouncerConfig> = new Map();
 	private handlers: Record<string, AnnounceHandler> = { ...builtinHandlers };
 	private probeHandler: ProbeHandler = builtinProbe;
 	private disabledNames = new Set<string>();
-	private readonly logger: AnnouncerLogger;
+	private readonly logger: Logger;
 
-	constructor(configs: AnnouncerConfig[], logger?: AnnouncerLogger) {
+	constructor(configs: AnnouncerConfig[], logger?: Logger) {
 		for (const config of configs) {
 			this.announcers.set(config.name, config);
 		}
-		this.logger = logger ?? { info: () => {}, warn: () => {}, error: () => {} };
+		this.logger = logger ?? noopLogger;
 	}
 
 	/** Register a custom handler for an announcer type (for testing) */
@@ -170,10 +174,11 @@ export class AnnouncerRegistry {
 				}
 				this.logger.warn(`announcer returned false: ${name} ← ${event.type}`);
 			} catch (err) {
-				this.logger.error(`announcer handler error: ${name} ← ${event.type}: ${err}`);
+				this.logger.error(`announcer handler error: ${name} ← ${event.type}`, err instanceof Error ? err : undefined);
 			}
 			current = fallbackName ? this.announcers.get(fallbackName) : undefined;
 		}
+		this.logger.debug(`announcer: no match for ${event.type}`);
 		return { dispatched: false };
 	}
 
