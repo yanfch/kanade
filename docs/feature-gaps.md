@@ -5,7 +5,8 @@
 ## 状态总览
 
 ```
-已完成 ██████████████████████████████████ 100%
+核心功能 ██████████████████████████████████ 100%
+质量保障 ████░░░░░░░░░░░░░░░░░░░░░░░░░░░░  15% (Eval 框架待做)
 ```
 
 ---
@@ -179,12 +180,56 @@ const reviews = await parallel(
 
 ---
 
+## 下一阶段目标（Direction A: 质量 & 可靠性）
+
+### Phase 4: Eval 框架
+
+**目标**: 量化 workflow 执行的能力和质量
+
+| 任务 | 说明 | 工作量 |
+|------|------|--------|
+| EvalCase 类型定义 | `eval/types.ts` — case 结构、评分权重 | 半天 |
+| 评分逻辑 | `eval/scorer.ts` — completion/correctness/efficiency | 半天 |
+| 报告输出 | `eval/reporter.ts` — 终端表格输出 | 半天 |
+| 初始 eval suite (10 cases) | `eval/suites/` — 覆盖 bugfix/research/refactor | 1 天 |
+| `npm run eval` 命令 | 入口脚本 | 半天 |
+
+### Phase 2 补全: 缺失 E2E 用例
+
+| # | 用例 | 工作量 |
+|---|------|--------|
+| E9 | reuseBranch 复用 | 半天 |
+| E10 | abort 执行中取消（agent 延迟 + signal 传播） | 半天 |
+| E11 | token budget 耗尽 | 半天 |
+| E16 | 多 agent parallel 事件交错 | 半天 |
+
+### Phase 5 补全: 真实 E2E
+
+| # | 用例 | 工作量 |
+|---|------|--------|
+| R3 | 复杂 workflow（3+ agent, parallel + phase） | 半天 |
+| R4 | request_human 中断后恢复 | 半天 |
+| R5 | rerun 真实 journal 缓存 | 半天 |
+
+### Error Recovery
+
+| 任务 | 说明 | 工作量 |
+|------|------|--------|
+| agent 失败自动重试 | `agent()` 支持 `retry` 选项（max retries, backoff） | 1 天 |
+| workflow 级别 retry | `parallel()` 中单个 thunk 失败后重试 | 半天 |
+
+### Rate Limiting
+
+| 任务 | 说明 | 工作量 |
+|------|------|--------|
+| 并发 task 限制 | TaskManager 限制同时 running 的 task 数量 | 半天 |
+| agent 并发限制 | 已有 `concurrency` 选项，可加全局限流 | 半天 |
+
 ## 建议实施顺序
 
 ```
-Week 1:  ~~B1 + B2 bug fix → Tracing → Artifact Dump~~ ✅ 已完成
-Week 2:  ~~CLI 客户端~~ ✅ → Subagent Session 持久化 + Session 路由
-Week 3:  CleanupScheduler + Mock E2E 测试框架完善
-Week 4:  Eval 框架 + 初始 eval suite
-Week 5:  真实 LLM 端到端测试
+Week 1:  Eval 框架 (types + scorer + reporter + 10 cases)
+Week 2:  Phase 2 补全 (E9-E11, E16) + Error Recovery
+Week 3:  Phase 5 补全 (R3-R5) + Rate Limiting
+Week 4:  扩充 eval suite 到 30+ cases
 ```
