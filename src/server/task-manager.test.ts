@@ -10,14 +10,14 @@ import { TaskManager } from "./task-manager.ts";
 
 const SIMPLE_SCRIPT = "export const meta = { name: 'demo', description: 'Demo' }\nreturn { ok: true }";
 
-function setup() {
+function setup(author?: { generate(prompt: string, options?: { model?: string }): Promise<string> }) {
 	const root = mkdtempSync(join(tmpdir(), "kanade-server-"));
 	process.env.KANADE_DIR = root;
 	const config = loadConfig();
 	const store = new StateStore(config.paths.stateDb);
 	const events = new EventBus();
 	const humanGate = new HumanGate(store, { initialPollMs: 5 });
-	const manager = new TaskManager(config, store, events, humanGate);
+	const manager = new TaskManager(config, store, events, humanGate, author);
 	return { config, store, events, manager };
 }
 
@@ -336,6 +336,24 @@ describe("TaskManager — save", () => {
 });
 
 describe("TaskManager — create source:generated", () => {
+	it("dry-run generates a script without creating or running a task", async () => {
+		const generatedScript = "export const meta = { name: 'dry', description: 'Dry' }\nreturn { dry: true }";
+		const { store, manager } = setup({
+			async generate(prompt: string, options?: { model?: string }) {
+				expect(prompt).toBe("make workflow");
+				expect(options?.model).toBe("xiaomi/mimo-v2.5-pro");
+				return generatedScript;
+			},
+		});
+		try {
+			const result = await manager.generateWorkflow("make workflow", { model: "xiaomi/mimo-v2.5-pro" });
+			expect(result.script).toBe(generatedScript);
+			expect(manager.list()).toHaveLength(0);
+		} finally {
+			store.close();
+		}
+	});
+
 	it("generates a script, writes it to workflow.js, and runs to completion", async () => {
 		const { store, manager } = setup();
 		try {

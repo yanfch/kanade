@@ -37,6 +37,10 @@ export interface CreateTaskResult {
 	generated?: true;
 }
 
+export interface GenerateWorkflowResult {
+	script: string;
+}
+
 interface TaskTrace {
 	span: Span;
 	context: Context;
@@ -85,6 +89,11 @@ export class TaskManager {
 		this.tracer = tracing?.tracer ?? ({ startSpan: () => noopSpan } as unknown as Tracer);
 		this.isolationManager = this.isolation;
 		this.snapshotBuilder = new SnapshotBuilder(events);
+	}
+
+	async generateWorkflow(prompt: string, options?: TaskOptions): Promise<GenerateWorkflowResult> {
+		if (!prompt?.trim()) throw new AppError("prompt is required", 400);
+		return { script: await this.author.generate(prompt, { model: options?.model }) };
 	}
 
 	create(input: CreateTaskInput): CreateTaskResult {
@@ -140,8 +149,26 @@ export class TaskManager {
 		taskTrace: TaskTrace,
 	): Promise<void> {
 		try {
-			const script = await this.author.generate(prompt);
+			const authorSpan = this.tracer.startSpan(
+				"workflow.author",
+				{ attributes: { [Attrs.TASK_ID]: taskId, "kanade.author.model": options?.model ?? "" } },
+				taskTrace.context,
+			);
+			let script: string;
+			try {
+				script = await this.author.generate(prompt, { model: options?.model });
+				authorSpan.setStatus({ code: SpanStatusCode.OK });
+			} catch (error) {
+				authorSpan.setStatus({ code: SpanStatusCode.ERROR, message: String(error) });
+				if (error instanceof Error) authorSpan.recordException(error);
+				throw error;
+			} finally {
+				authorSpan.end();
+			}
 			writeFileSync(workflowPath, script, "utf8");
+			this.logger.forTask(taskId).withContext(taskTrace.context).info("workflow script generated", {
+				model: options?.model,
+			});
 			this.events.emit("task.script_generated", { taskId, workflowPath }, taskId);
 			await this.run(taskId, script, args, options, taskTrace);
 		} catch (error) {
@@ -634,11 +661,15 @@ export class TaskManager {
 		const agentDir = this.resolveAgentDir();
 		if (!agentDir) return new StubWorkflowAuthor();
 		try {
+			const persistDir = this.config.debug.persistSubagents
+				? join(this.config.paths.runsDir, "debug", "workflow-author")
+				: undefined;
 			return new LlmWorkflowAuthor({
 				agentDir,
 				authPath: this.config.models.authPath ?? undefined,
 				modelsPath: this.config.models.modelsPath ?? undefined,
 				model: this.config.defaults.model ?? undefined,
+				persistDir,
 			});
 		} catch {
 			return new StubWorkflowAuthor();

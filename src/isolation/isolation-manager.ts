@@ -226,7 +226,16 @@ export class IsolationManager {
 		const baseRepo = opts.baseRepo ?? this.config.defaultBaseRepo ?? process.cwd();
 		const baseBranch = opts.baseBranch ?? this.config.defaultBaseBranch;
 
-		// Reuse existing worktree?
+		// Reuse existing task-scoped worktree by default so phases/agents can hand off code changes.
+		const existingForTask = this.store
+			.findWorktreesByTask(opts.taskId)
+			.find((row) => (row.status === "active" || row.status === "inactive") && existsSync(row.worktree_path));
+		if (existingForTask) {
+			this.store.updateWorktree(existingForTask.id, { status: "active", last_used_at: Date.now() });
+			return this.makeContext(existingForTask);
+		}
+
+		// Explicit branch reuse is kept for callers that want to attach to an existing task branch.
 		if (opts.reuseBranch) {
 			const existing = this.store.findWorktreeByBranch(opts.taskId, opts.reuseBranch);
 			if (existing && existsSync(existing.worktree_path)) {
@@ -235,10 +244,10 @@ export class IsolationManager {
 			}
 		}
 
-		const branch = `${this.config.branchPrefix}/${opts.taskId}/${opts.label}`;
+		const branch = `${this.config.branchPrefix}/${opts.taskId}`;
 		const worktreeBaseDir = this.config.worktreeBaseDir ?? join(baseRepo, "..");
-		const worktreePath = join(worktreeBaseDir, `${opts.taskId}-worktrees`, opts.label);
-		mkdirSync(join(worktreePath, ".."), { recursive: true });
+		const worktreePath = join(worktreeBaseDir, opts.taskId);
+		mkdirSync(worktreeBaseDir, { recursive: true });
 
 		const git = simpleGit(baseRepo);
 		await git.raw(["worktree", "add", "-b", branch, worktreePath, baseBranch]);

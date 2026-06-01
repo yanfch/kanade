@@ -64,7 +64,9 @@ function createMockJournal(): AgentJournal & {
 	};
 }
 
-function createMockSessionFactory(opts: { structuredResult?: unknown } = {}): {
+function createMockSessionFactory(
+	opts: { structuredResult?: unknown; structuredResults?: unknown[]; sessionUsage?: unknown } = {},
+): {
 	createSession: CreateSession;
 	calls: CreateAgentSessionOptions[];
 	prompts: string[];
@@ -77,19 +79,21 @@ function createMockSessionFactory(opts: { structuredResult?: unknown } = {}): {
 		calls.push(options);
 		const sm = options.sessionManager;
 		if (sm?.isPersisted()) sm.newSession();
+		const assistantMsg: Record<string, unknown> = {
+			role: "assistant",
+			content: [{ type: "text", text: "final text" }],
+		};
+		if (opts.sessionUsage) assistantMsg.usage = opts.sessionUsage;
 		return {
 			session: {
-				messages: [
-					{
-						role: "assistant",
-						content: [{ type: "text", text: "final text" }],
-					},
-				],
+				messages: [assistantMsg as unknown as { role: string; content: Array<{ type: string; text: string }> }],
 				async prompt(text: string) {
+					const promptIndex = prompts.length;
 					prompts.push(text);
-					if (opts.structuredResult !== undefined) {
+					const structuredResult = opts.structuredResults ? opts.structuredResults[promptIndex] : opts.structuredResult;
+					if (structuredResult !== undefined) {
 						const tool = options.customTools?.find((item) => item.name === "structured_output");
-						await tool?.execute("call-1", opts.structuredResult, undefined, undefined, undefined as never);
+						await tool?.execute("call-1", structuredResult, undefined, undefined, undefined as never);
 					}
 				},
 				async abort() {},
@@ -160,6 +164,38 @@ describe("WorkflowAgent", () => {
 
 		const structuredTool = mock.calls[0].customTools?.find((tool) => tool.name === "structured_output");
 		expect(structuredTool?.parameters).toBe(callSchema);
+	});
+
+	it("asks a schema agent to correct missing structured_output once", async () => {
+		const schema = Type.Object({ ok: Type.Boolean() });
+		const mock = createMockSessionFactory({ structuredResults: [undefined, { ok: true }] });
+		const agent = new WorkflowAgent({
+			createSession: mock.createSession,
+			createCodingTools: () => [],
+		});
+
+		const result = await agent.run("Return structured", { label: "worker", schema });
+
+		expect(result).toEqual({ ok: true });
+		expect(mock.calls).toHaveLength(1);
+		expect(mock.prompts).toHaveLength(2);
+		expect(mock.prompts[1]).toContain("did not call structured_output");
+		expect(mock.prompts[1]).toContain("blocked");
+	});
+
+	it("fails when corrective structured_output retry is still missing", async () => {
+		const schema = Type.Object({ ok: Type.Boolean() });
+		const mock = createMockSessionFactory({ structuredResults: [undefined, undefined] });
+		const agent = new WorkflowAgent({
+			createSession: mock.createSession,
+			createCodingTools: () => [],
+		});
+
+		await expect(agent.run("Return structured", { label: "worker", schema })).rejects.toThrow(
+			/Subagent finished without calling structured_output/,
+		);
+		expect(mock.calls).toHaveLength(1);
+		expect(mock.prompts).toHaveLength(2);
 	});
 
 	it("inherits pi-style agent resources by default and allows agentDir override", async () => {
@@ -424,6 +460,49 @@ describe("WorkflowAgent — session persistence", () => {
 		// Without persistDir, should fall back to in-memory
 		await agent.run("do something", { label: "worker" });
 		expect(mock.calls[0].sessionManager?.isPersisted()).toBe(false);
+	});
+});
+
+describe("WorkflowAgent — usage", () => {
+	it("emits usage after session completes when onUsage is provided", async () => {
+		const usage = {
+			input: 100,
+			output: 50,
+			cacheRead: 200,
+			cacheWrite: 0,
+			totalTokens: 350,
+			cost: { input: 0.001, output: 0.002, cacheRead: 0.0003, cacheWrite: 0, total: 0.0033 },
+		};
+		const mock = createMockSessionFactory({ sessionUsage: usage });
+		const agent = new WorkflowAgent({
+			createSession: mock.createSession,
+			createCodingTools: () => [],
+		});
+
+		const collected: unknown[] = [];
+		await agent.run("do something", {
+			label: "worker",
+			onUsage: (u) => collected.push(u),
+		});
+
+		expect(collected).toHaveLength(1);
+		expect(collected[0]).toMatchObject({
+			input: 100,
+			output: 50,
+			cacheRead: 200,
+			cost: { total: 0.0033 },
+		});
+	});
+
+	it("does not fail when onUsage is not provided", async () => {
+		const mock = createMockSessionFactory();
+		const agent = new WorkflowAgent({
+			createSession: mock.createSession,
+			createCodingTools: () => [],
+		});
+
+		const result = await agent.run("do something");
+		expect(result).toBe("final text");
 	});
 });
 

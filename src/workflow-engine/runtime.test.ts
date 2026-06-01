@@ -100,9 +100,62 @@ describe("parseWorkflowScript", () => {
 			parseWorkflowScript("export const meta = { name: 'demo', description: 'desc' }\nreturn new Date()"),
 		).toThrow(/must be deterministic/);
 	});
+
+	it("allows prompts that mention nondeterministic API names", () => {
+		const parsed = parseWorkflowScript(`export const meta = { name: 'demo', description: 'desc' }
+return await agent('Catalog Date.now(), Math.random(), and new Date() usage', { label: 'scan' })`);
+		expect(parsed.body).toContain("Date.now()");
+	});
 });
 
 describe("runWorkflow", () => {
+	it("rejects non-string phase titles", async () => {
+		const script = `export const meta = { name: 'bad_phase', description: 'Bad phase' }
+phase(Promise.resolve('Scan'))
+return { ok: true }
+`;
+
+		await expect(runWorkflow(script)).rejects.toThrow(/phase title must be a string/);
+	});
+
+	it("rejects non-string agent prompts", async () => {
+		const script = `export const meta = { name: 'bad_agent_prompt', description: 'Bad agent prompt' }
+return await agent({ prompt: 'scan' }, { label: 'scan' })
+`;
+
+		await expect(runWorkflow(script)).rejects.toThrow(/agent prompt must be a string/);
+	});
+
+	it("rejects invalid agent option types", async () => {
+		const script = `export const meta = { name: 'bad_agent_options', description: 'Bad agent options' }
+return await agent('scan', { label: 123 })
+`;
+
+		await expect(runWorkflow(script)).rejects.toThrow(/agent label must be a string/);
+	});
+
+	it("rejects unawaited agent promises before returning", async () => {
+		let ended = 0;
+		const script = `export const meta = { name: 'promise_leak', description: 'Promise leak' }
+const scan = agent('scan', { label: 'scan' })
+return { scan }
+`;
+
+		await expect(
+			runWorkflow(script, {
+				agent: {
+					async run(prompt: string) {
+						return `result:${prompt}` as never;
+					},
+				},
+				onAgentEnd() {
+					ended++;
+				},
+			}),
+		).rejects.toThrow(/did you forget to await agent\(\), parallel\(\), or pipeline\(\)/);
+		expect(ended).toBe(1);
+	});
+
 	it("handles request_human through gate and journal", async () => {
 		const humanResponses = new Map<string, unknown>();
 		const created: Array<{ requestId: string; cacheKey: string; request: unknown }> = [];
@@ -185,6 +238,7 @@ return result
 `;
 
 		const result = await runWorkflow(script, {
+			model: "model-from-run",
 			agent: {
 				async run<TSchemaDef extends TSchema | undefined = undefined>(
 					prompt: string,
@@ -207,6 +261,100 @@ return result
 				instructions: "Workflow phase: Develop\nRequested model: model-from-script\nPrefer minimal diffs.",
 			},
 		});
+	});
+
+	it("uses run-level model as default for agent calls", async () => {
+		const calls: Array<{ prompt: string; options: AgentRunOptions<TSchema | undefined> }> = [];
+		const script = `export const meta = { name: 'model_default', description: 'Model default' }
+const direct = await agent('direct', { label: 'direct' })
+return direct
+`;
+
+		await runWorkflow(script, {
+			model: "xiaomi/mimo-v2.5-pro",
+			agent: {
+				async run<TSchemaDef extends TSchema | undefined = undefined>(
+					prompt: string,
+					options: AgentRunOptions<TSchemaDef> = {},
+				): Promise<AgentRunResult<TSchemaDef>> {
+					calls.push({ prompt, options });
+					return "done" as AgentRunResult<TSchemaDef>;
+				},
+			},
+		});
+
+		expect(calls).toHaveLength(1);
+		expect(calls[0].options.model).toBe("xiaomi/mimo-v2.5-pro");
+		expect(calls[0].options.instructions).toContain("Requested model: xiaomi/mimo-v2.5-pro");
+	});
+
+	it("collects usage from agent calls and invokes onUsage callback", async () => {
+		const usage = {
+			input: 100,
+			output: 50,
+			cacheRead: 200,
+			cacheWrite: 0,
+			totalTokens: 350,
+			cost: { input: 0.001, output: 0.002, cacheRead: 0.0003, cacheWrite: 0, total: 0.0033 },
+		};
+		const script = `export const meta = { name: 'usage_test', description: 'Usage test' }
+return await agent('do something', { label: 'worker' })
+`;
+
+		const collected: unknown[] = [];
+		await runWorkflow(script, {
+			agent: {
+				async run(_prompt: string, opts?: AgentRunOptions<TSchema | undefined>) {
+					opts?.onUsage?.(usage as never);
+					return "done" as never;
+				},
+			},
+			onUsage: (u) => collected.push(u),
+		});
+
+		expect(collected).toHaveLength(1);
+		expect(collected[0]).toMatchObject({ input: 100, output: 50, cost: { total: 0.0033 } });
+	});
+
+	it("aggregates usage from multiple agents into result.usage", async () => {
+		const usageA = {
+			input: 100,
+			output: 50,
+			cacheRead: 200,
+			cacheWrite: 0,
+			totalTokens: 350,
+			cost: { input: 0.001, output: 0.002, cacheRead: 0.0003, cacheWrite: 0, total: 0.0033 },
+		};
+		const usageB = {
+			input: 500,
+			output: 200,
+			cacheRead: 1000,
+			cacheWrite: 0,
+			totalTokens: 1700,
+			cost: { input: 0.005, output: 0.006, cacheRead: 0.002, cacheWrite: 0, total: 0.013 },
+		};
+		let callCount = 0;
+		const script = `export const meta = { name: 'usage_agg', description: 'Usage agg' }
+await agent('a', { label: 'a' })
+await agent('b', { label: 'b' })
+return true
+`;
+
+		const result = await runWorkflow(script, {
+			agent: {
+				async run(_prompt: string, opts?: AgentRunOptions<TSchema | undefined>) {
+					const u = callCount++ === 0 ? usageA : usageB;
+					opts?.onUsage?.(u as never);
+					return "ok" as never;
+				},
+			},
+		});
+
+		expect(result.usage.input).toBe(600);
+		expect(result.usage.output).toBe(250);
+		expect(result.usage.cacheRead).toBe(1200);
+		expect(result.usage.totalTokens).toBe(2050);
+		expect(result.usage.cost.total).toBeCloseTo(0.0163);
 	});
 });
 
@@ -261,20 +409,22 @@ return await agent('task', { label: 'dev' })`;
 		expect(existsSync(artifactsDir)).toBe(false);
 	});
 
-	it("skips dump when agent returns null (failed)", async () => {
+	it("dumps null then propagates agent failures", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "kanade-artifact-"));
 		const script = `export const meta = { name: 'test', description: 'Test' }
 return await agent('task', { label: 'dev' })`;
 
-		await runWorkflow(script, {
-			runDir: dir,
-			dumpArtifacts: true,
-			agent: {
-				async run() {
-					throw new Error("fail");
+		await expect(
+			runWorkflow(script, {
+				runDir: dir,
+				dumpArtifacts: true,
+				agent: {
+					async run() {
+						throw new Error("fail");
+					},
 				},
-			},
-		});
+			}),
+		).rejects.toThrow("fail");
 
 		const artifactsDir = join(dir, "debug", "artifacts");
 		// null results are still dumped (shows the agent was called)

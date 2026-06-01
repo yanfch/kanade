@@ -46,6 +46,15 @@ export function createApp(ctx: AppContext): Hono {
 		return c.json({ workflows: ctx.taskManager.listWorkflows() });
 	});
 
+	app.post("/workflows/generate", async (c) => {
+		const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+		if (typeof body.prompt !== "string" || !body.prompt.trim()) throw new AppError("prompt is required", 400);
+		const options =
+			body.options && typeof body.options === "object" ? (body.options as CreateTaskInput["options"]) : undefined;
+		const result = await ctx.taskManager.generateWorkflow(body.prompt, options);
+		return c.json(result);
+	});
+
 	app.get("/workflows/:name", (c) => {
 		const workflow = ctx.taskManager.getWorkflow(c.req.param("name"));
 		if (!workflow) return c.json({ error: "Workflow not found" }, 404);
