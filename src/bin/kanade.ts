@@ -540,14 +540,8 @@ async function cmdHealth() {
 }
 
 async function cmdStart(args: ReturnType<typeof parseArgs>["values"]) {
-	const dir = args.dir as string | undefined;
+	const dir = (args.dir as string | undefined) ?? "~/.kanade";
 	const port = args.port as string | undefined;
-
-	if (!dir) {
-		console.error(pc.red("✖ --dir is required"));
-		console.log(pc.dim("  Usage: kanade start --dir /tmp/my-instance [--port 7778]"));
-		process.exit(1);
-	}
 
 	const { mkdirSync, writeFileSync, existsSync } = await import("node:fs");
 	const { join: pathJoin } = await import("node:path");
@@ -569,8 +563,15 @@ async function cmdStart(args: ReturnType<typeof parseArgs>["values"]) {
 	console.log();
 
 	const { spawn } = await import("node:child_process");
-	const child = spawn("npx", ["tsx", "src/bin/server.ts"], {
-		cwd: import.meta.dirname ? pathJoin(import.meta.dirname, "..") : process.cwd(),
+	// Find project root by looking for package.json
+	let projectRoot = process.cwd();
+	while (projectRoot !== "/") {
+		if (existsSync(pathJoin(projectRoot, "package.json"))) break;
+		projectRoot = pathJoin(projectRoot, "..");
+	}
+	const tsxPath = pathJoin(projectRoot, "node_modules", ".bin", "tsx");
+	const child = spawn(tsxPath, ["src/bin/server.ts"], {
+		cwd: projectRoot,
 		env: { ...process.env, KANADE_DIR: resolvedDir },
 		stdio: "inherit",
 	});
