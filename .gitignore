@@ -56,7 +56,9 @@ journal.db-shm
 sessions/
 
 # Vendored fork (in case we add a marker)
-# (注意：fork 自 pi-dynamic-workflows 的代码会进 src/workflow-engine/，
+# (注意：fork 自 pi-dynamic-workflows 的代码会进 src/workflow-engine/
+
+# Personal workflows (stored in ~/.kanade/workflows/)，
 #  我们要 commit 它，所以这里不 ignore。LICENSE 和 NOTICE 保留。)
 
 # OS
