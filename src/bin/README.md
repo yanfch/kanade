@@ -1,29 +1,78 @@
-# bin
+# CLI
 
-CLI entrypoints. Two binaries:
+Two entry points:
 
-- `server.ts` — `kanade serve` / `npm run dev`: starts HTTP server, holds long-running process.
-- `kanade.ts` — `kanade <subcommand>`: client CLI that talks to the running server via HTTP.
+- `server.ts` — HTTP server (long-running)
+- `kanade.ts` — Client CLI (talks to server via HTTP)
 
-## CLI subcommands (see docs/10-isolation.md §CLI 命令汇总)
+## Commands
 
-- `kanade serve [--port N]` — start server
-- `kanade ls [--status=<state>]` — list tasks
-- `kanade show <task-id>` — task details (artifacts, agent_calls, worktrees, phases)
-- `kanade tail <task-id>` — follow SSE event stream
-- `kanade inbox` — pending NEEDS_HUMAN
-- `kanade respond <task-id> --decision <approve|reject> [--note "..."]`
-- `kanade abort <task-id>`
-- `kanade merge <task-id>` — merge worktree branch to base
-- `kanade reject <task-id> --reason "..."` — drop without merge
-- `kanade worktrees` — list active worktrees
-- `kanade worktree clean` — manual stale cleanup
-- `kanade worktree path <task-id>` — print worktree dir (for `cd`)
-- `kanade run <workflow-name> [--args '{...}']` — run a saved workflow
-- `kanade save <task-id> --as <name>` — save generated workflow.js to library
+```bash
+# Server
+kanade start --dir <path> --port <num>   # Start isolated instance
+kanade health                             # Check server status
 
-## Implementation notes
+# Tasks
+kanade ls [--status <state>] [--json]     # List tasks
+kanade show <task-id> [--json]            # Task details + journal
+kanade tail <task-id>                     # Follow SSE events
+kanade run <name> [--args '{}'] [--follow]  # Run saved workflow
+kanade iterate <id> --instructions '...'  # Iterate with new instructions
+kanade save <task-id> --as <name>         # Save script as workflow
 
-- Use `node:util.parseArgs` (built-in). No commander/yargs.
-- All commands hit local HTTP. No direct DB access from CLI process.
-- Output: human-readable by default, `--json` flag for machine-readable.
+# Lifecycle
+kanade abort <task-id>                    # Abort running task
+kanade merge <task-id>                    # Merge worktree branch
+kanade reject <task-id>                   # Reject, remove branch
+
+# Workflows
+kanade workflows [--json]                 # List saved workflows
+
+# Human gate
+kanade inbox [--json]                     # Pending requests
+kanade respond <id> --request <req-id> --decision <approve|reject>
+```
+
+## Options
+
+```
+--url, -u <url>    Server URL (default: http://127.0.0.1:7777)
+--json, -j         Output as JSON
+--status, -s       Filter by status (ls)
+--follow, -f       Follow events (run)
+--instructions     Iterate instructions
+```
+
+## Isolation
+
+Run multiple independent instances:
+
+```bash
+# Instance 1: default
+kanade start --dir ~/.kanade --port 7777
+
+# Instance 2: isolated task
+kanade start --dir /tmp/kanade-task-a --port 7778
+
+# Instance 3: another task
+kanade start --dir /tmp/kanade-task-b --port 7779
+
+# CLI targets specific instance
+kanade --url http://127.0.0.1:7778 ls
+kanade --url http://127.0.0.1:7779 run my-workflow
+```
+
+Each instance has its own database, worktrees, and config. No conflicts.
+
+## Environment
+
+```
+KANADE_URL    Server URL (overridden by --url)
+KANADE_DIR    Data directory (server only, default: ~/.kanade)
+```
+
+## Implementation
+
+- `node:util.parseArgs` (built-in, no deps)
+- All commands via HTTP, no direct DB access
+- Human-readable output by default, `--json` for machine-readable

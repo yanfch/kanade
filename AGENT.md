@@ -40,10 +40,20 @@ test/e2e-mock/        E2E tests (mock LLM)
 ## Development
 
 ```bash
-npm test              # 294 tests (unit + integration + E2E)
+npm test              # 304 tests (unit + integration + E2E + CLI)
 npm run lint          # Biome check
 npm run typecheck     # TypeScript check
 npm run eval          # Eval framework (mock mode)
+```
+
+## Running multiple instances
+
+Each instance uses a separate `KANADE_DIR` and port:
+
+```bash
+kanade start --dir ~/.kanade --port 7777          # default
+kanade start --dir /tmp/kanade-dev --port 7778    # isolated
+kanade --url http://127.0.0.1:7778 ls             # CLI targets specific instance
 ```
 
 Always run `npm run lint && npm run typecheck && npm test` before committing.
@@ -96,8 +106,23 @@ POST /tasks/T-0003/merge → merged to develop
 
 Args injected: `previousResult`, `previousTaskId`, `instructions`, `reuseBranch`.
 
+## CLI
+
+```bash
+kanade start --dir <path> --port <num>  # Start isolated server
+kanade health                           # Check server
+kanade ls [--status <s>] [--json]       # List tasks
+kanade show <id> [--json]               # Task details
+kanade run <workflow> [--args '{}']     # Run saved workflow
+kanade iterate <id> --instructions '..' # Iterate on task
+kanade workflows                        # List workflows
+kanade merge <id>                       # Merge worktree
+kanade reject <id>                     # Reject, cleanup
+```
+
 ## Docs
 
 - `docs/feature-gaps.md` — status and remaining tasks
 - `docs/test-plan.md` — test coverage breakdown
+- `src/bin/README.md` — CLI details
 - Design docs: `../gui-tui/docs/` (outside repo)
