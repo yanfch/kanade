@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env tsx
 import { loadConfig } from "../config/index.ts";
 import { startServer } from "../server/index.ts";
 

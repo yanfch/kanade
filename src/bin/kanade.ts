@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env tsx
 /**
  * kanade CLI — client that talks to the local server via HTTP.
  *
