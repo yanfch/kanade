@@ -74,8 +74,12 @@ export class IsolationManager {
 				await this.removeWorktree(row);
 				this.store.updateWorktree(row.id, { status: "abandoned", finished_at: Date.now() });
 			} else if (decision === "approved") {
-				// approved: remove worktree dir to save disk, keep branch for merge
-				await this.removeWorktreeDir(row);
+				// approved: keep worktree dir by default so users can inspect uncommitted changes.
+				// If cleanup is explicitly enabled, first commit dirty changes so the branch still carries them.
+				if (this.config.autoCleanupOnApprove ?? false) {
+					await this.commitDirtyWorktree(row);
+					await this.removeWorktreeDir(row);
+				}
 				this.store.updateWorktree(row.id, { status: "inactive", finished_at: Date.now() });
 			} else {
 				// rejected/aborted with cleanup disabled: keep everything
@@ -120,7 +124,13 @@ export class IsolationManager {
 		const currentBranch = (await git.branchLocal()).current;
 
 		try {
-			// 1. Checkout target
+			// 1. Persist dirty worktree changes before merging. Agents usually leave
+			// changes uncommitted; committing here makes merge/reject the user's only decision.
+			for (const row of rows) {
+				await this.commitDirtyWorktree(row);
+			}
+
+			// 2. Checkout target
 			await git.checkoutLocalBranch(target).catch(() => git.checkout(target));
 
 			// 2. Merge each branch
@@ -263,6 +273,15 @@ export class IsolationManager {
 				this.store.updateWorktree(row.id, { status: "inactive", last_used_at: Date.now() });
 			},
 		};
+	}
+
+	private async commitDirtyWorktree(row: WorktreeRow): Promise<void> {
+		if (!existsSync(row.worktree_path)) return;
+		const git = simpleGit(row.worktree_path);
+		const status = await git.status();
+		if (status.isClean()) return;
+		await git.add(".");
+		await git.commit(`kanade: save ${row.task_id} ${row.label} changes`);
 	}
 
 	private async removeWorktree(row: WorktreeRow): Promise<void> {

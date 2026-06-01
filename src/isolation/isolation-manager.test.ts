@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { simpleGit } from "simple-git";
@@ -151,11 +151,32 @@ describe("IsolationManager — mode:worktree", () => {
 		await second.cleanup();
 	});
 
-	it("finalizeWorktrees approved: removes worktree dir but keeps branch", async () => {
+	it("finalizeWorktrees approved keeps worktree dir by default for inspection", async () => {
 		const mgr = new IsolationManager(store, {
 			defaultBaseBranch: "develop",
 			branchPrefix: "kanade",
 			autoCleanupOnApprove: false,
+		});
+		const ctx = await mgr.prepare({ taskId: "T-0001", label: "dev", mode: "worktree", baseRepo });
+		writeFileSync(join(ctx.cwd, "feature.txt"), "uncommitted change");
+		await ctx.cleanup();
+
+		await mgr.finalizeWorktrees("T-0001", "approved");
+
+		const row = store.getWorktree(ctx.worktree!.id);
+		expect(row?.status).toBe("inactive");
+		expect(existsSync(row!.worktree_path)).toBe(true);
+		expect(readFileSync(join(row!.worktree_path, "feature.txt"), "utf8")).toBe("uncommitted change");
+
+		const branches = await simpleGit(baseRepo).branchLocal();
+		expect(branches.all).toContain("kanade/T-0001/dev");
+	});
+
+	it("finalizeWorktrees approved removes worktree dir when autoCleanupOnApprove=true", async () => {
+		const mgr = new IsolationManager(store, {
+			defaultBaseBranch: "develop",
+			branchPrefix: "kanade",
+			autoCleanupOnApprove: true,
 		});
 		const ctx = await mgr.prepare({ taskId: "T-0001", label: "dev", mode: "worktree", baseRepo });
 		await ctx.cleanup();
@@ -164,6 +185,7 @@ describe("IsolationManager — mode:worktree", () => {
 
 		const row = store.getWorktree(ctx.worktree!.id);
 		expect(row?.status).toBe("inactive");
+		expect(existsSync(row!.worktree_path)).toBe(false);
 
 		const branches = await simpleGit(baseRepo).branchLocal();
 		expect(branches.all).toContain("kanade/T-0001/dev");
@@ -419,6 +441,30 @@ describe("IsolationManager — merge", () => {
 
 		// Develop should have the feature file
 		expect(existsSync(join(baseRepo, "feature.txt"))).toBe(true);
+	});
+
+	it("commits dirty worktree changes before merging", async () => {
+		const mergeConfig = {
+			targetBranch: "develop",
+			useNoFf: true,
+			requireCleanLint: false,
+			requireCleanTest: false,
+			deleteBranchAfterMerge: true,
+			allowSkipReview: false,
+		};
+		const mgr = new IsolationManager(store, { defaultBaseBranch: "develop", branchPrefix: "kanade" }, mergeConfig);
+
+		const ctx = await mgr.prepare({ taskId: "T-0001", label: "dev", mode: "worktree", baseRepo });
+		writeFileSync(join(ctx.cwd, "dirty-feature.txt"), "hello from dirty worktree");
+		await ctx.cleanup();
+		await mgr.finalizeWorktrees("T-0001", "approved");
+
+		const result = await mgr.merge("T-0001");
+		expect(result.success).toBe(true);
+		expect(existsSync(join(baseRepo, "dirty-feature.txt"))).toBe(true);
+
+		const rows = store.findWorktreesByTask("T-0001");
+		expect(rows[0].status).toBe("merged");
 	});
 
 	it("returns error when no worktrees exist", async () => {

@@ -11,6 +11,7 @@
  *   taskLog.error('agent failed', error, { label: 'dev' });
  */
 
+import { type Context, context } from "@opentelemetry/api";
 import { SeverityNumber, logs } from "@opentelemetry/api-logs";
 
 export interface LogFields {
@@ -21,6 +22,7 @@ export class Logger {
 	constructor(
 		private readonly otelLogger: ReturnType<typeof logs.getLogger>,
 		private readonly defaultAttrs: Record<string, string> = {},
+		private readonly logContext?: Context,
 	) {}
 
 	info(message: string, fields?: LogFields): void {
@@ -47,12 +49,17 @@ export class Logger {
 
 	/** Return a child logger with task context pre-filled. */
 	forTask(taskId: string): Logger {
-		return new Logger(this.otelLogger, { ...this.defaultAttrs, "kanade.task.id": taskId });
+		return new Logger(this.otelLogger, { ...this.defaultAttrs, "kanade.task.id": taskId }, this.logContext);
 	}
 
 	/** Return a child logger with component context pre-filled. */
 	forComponent(component: string): Logger {
-		return new Logger(this.otelLogger, { ...this.defaultAttrs, "kanade.component": component });
+		return new Logger(this.otelLogger, { ...this.defaultAttrs, "kanade.component": component }, this.logContext);
+	}
+
+	/** Return a child logger that emits records with an explicit OTel context. */
+	withContext(logContext: Context): Logger {
+		return new Logger(this.otelLogger, this.defaultAttrs, logContext);
 	}
 
 	private emit(severityNumber: number, severityText: string, message: string, fields?: LogFields): void {
@@ -68,7 +75,7 @@ export class Logger {
 			severityText,
 			body: message,
 			attributes,
-			// traceId/spanId are injected automatically by OTel from the active context
+			context: this.logContext ?? context.active(),
 		});
 	}
 }

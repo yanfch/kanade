@@ -4,7 +4,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import vm from "node:vm";
-import { SpanStatusCode, type Tracer } from "@opentelemetry/api";
+import { type Context, SpanStatusCode, type Tracer } from "@opentelemetry/api";
 import type { Node } from "acorn";
 import { parse } from "acorn";
 import type { TSchema } from "typebox";
@@ -40,6 +40,8 @@ export interface WorkflowRunOptions extends Omit<WorkflowAgentOptions, "journal"
 	tokenBudget?: number | null;
 	signal?: AbortSignal;
 	tracer?: Tracer;
+	/** Parent trace context used for workflow child spans. */
+	traceContext?: Context;
 	/** Write each agent result to debug/artifacts/<seq>-<label>.json */
 	dumpArtifacts?: boolean;
 	/** Base directory for artifact dump (usually the run dir) */
@@ -161,12 +163,16 @@ export async function runWorkflow<T = unknown>(
 		if (!state.phases.includes(title)) state.phases.push(title);
 		options.onPhase?.(title);
 		options.tracer
-			?.startSpan("workflow.phase", {
-				attributes: {
-					[Attrs.PHASE_NAME]: title,
-					[Attrs.TASK_ID]: options.taskId ?? "",
+			?.startSpan(
+				"workflow.phase",
+				{
+					attributes: {
+						[Attrs.PHASE_NAME]: title,
+						[Attrs.TASK_ID]: options.taskId ?? "",
+					},
 				},
-			})
+				options.traceContext,
+			)
 			.end();
 	};
 
@@ -189,15 +195,19 @@ export async function runWorkflow<T = unknown>(
 		return limiter(async () => {
 			state.agentCount++;
 			const label = requestedLabel || defaultAgentLabel(assignedPhase, state.agentCount);
-			const agentSpan = options.tracer?.startSpan("workflow.agent", {
-				attributes: {
-					[Attrs.AGENT_LABEL]: label,
-					[Attrs.AGENT_ROLE]: agentOptions.role ?? "",
-					[Attrs.AGENT_MODEL]: agentOptions.model ?? "",
-					[Attrs.PHASE_NAME]: assignedPhase ?? "",
-					[Attrs.TASK_ID]: options.taskId ?? "",
+			const agentSpan = options.tracer?.startSpan(
+				"workflow.agent",
+				{
+					attributes: {
+						[Attrs.AGENT_LABEL]: label,
+						[Attrs.AGENT_ROLE]: agentOptions.role ?? "",
+						[Attrs.AGENT_MODEL]: agentOptions.model ?? "",
+						[Attrs.PHASE_NAME]: assignedPhase ?? "",
+						[Attrs.TASK_ID]: options.taskId ?? "",
+					},
 				},
-			});
+				options.traceContext,
+			);
 			options.onAgentStart?.({ label, phase: assignedPhase, prompt });
 			try {
 				throwIfAborted();
@@ -270,13 +280,17 @@ export async function runWorkflow<T = unknown>(
 		if (cached) return cached.response;
 
 		const requestId = `${options.taskId ?? "workflow"}_${ordinal}`;
-		const humanSpan = options.tracer?.startSpan("human.request", {
-			attributes: {
-				[Attrs.HUMAN_REQUEST_ID]: requestId,
-				[Attrs.TASK_ID]: options.taskId ?? "",
-				"human.title": request.title ?? "",
+		const humanSpan = options.tracer?.startSpan(
+			"human.request",
+			{
+				attributes: {
+					[Attrs.HUMAN_REQUEST_ID]: requestId,
+					[Attrs.TASK_ID]: options.taskId ?? "",
+					"human.title": request.title ?? "",
+				},
 			},
-		});
+			options.traceContext,
+		);
 		try {
 			await options.human.createRequest?.({ requestId, cacheKey, request });
 			options.onHumanRequest?.({ requestId, cacheKey, request });

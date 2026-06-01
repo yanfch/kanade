@@ -55,11 +55,12 @@ describe("CleanupScheduler", () => {
 			workflowsDir: join(root, "workflows"),
 			sharedExtensionsDir: join(root, "shared", "extensions"),
 			runsDir: join(root, "runs"),
+			worktreesDir: join(root, "worktrees"),
 			tracesDir: join(root, "traces"),
 			stateDb: join(root, "db", "state.db"),
 			logsDir: join(root, "logs"),
 		};
-		for (const dir of [paths.runsDir, paths.tracesDir, paths.logsDir, paths.dbDir]) {
+		for (const dir of [paths.runsDir, paths.worktreesDir, paths.tracesDir, paths.logsDir, paths.dbDir]) {
 			mkdirSync(dir, { recursive: true });
 		}
 		config = {

@@ -17,6 +17,7 @@ export interface KanadePaths {
 	readonly workflowsDir: string;
 	readonly sharedExtensionsDir: string;
 	readonly runsDir: string;
+	readonly worktreesDir: string;
 	readonly tracesDir: string;
 	readonly stateDb: string;
 	readonly logsDir: string;
@@ -166,6 +167,7 @@ function buildPaths(root: string): KanadePaths {
 		workflowsDir: join(root, "workflows"),
 		sharedExtensionsDir: join(root, "shared", "extensions"),
 		runsDir: join(root, "runs"),
+		worktreesDir: join(root, "worktrees"),
 		tracesDir: process.env.KANADE_TRACES_DIR ?? join(root, "traces"),
 		stateDb: join(root, "db", "state.db"),
 		logsDir: join(root, "logs"),
@@ -183,7 +185,7 @@ function defaultConfig(paths: KanadePaths): KanadeConfig {
 			defaultMode: "worktree",
 			defaultBaseBranch: "develop",
 			defaultBaseRepo: null,
-			worktreeBaseDir: paths.runsDir,
+			worktreeBaseDir: paths.worktreesDir,
 			branchPrefix: "kanade",
 			autoCleanupOnReject: true,
 			autoCleanupOnApprove: false,
@@ -280,6 +282,7 @@ export function loadConfig(): KanadeConfig {
 		paths.rolesDir,
 		paths.workflowsDir,
 		paths.runsDir,
+		paths.worktreesDir,
 		paths.tracesDir,
 		paths.logsDir,
 		dirname(paths.sharedExtensionsDir),
