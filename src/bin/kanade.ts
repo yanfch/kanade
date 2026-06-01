@@ -380,8 +380,6 @@ async function cmdAbort(taskId: string) {
 }
 
 async function cmdKill(taskId: string | undefined) {
-	const { execSync } = await import("node:child_process");
-
 	if (!taskId || taskId === "--all") {
 		// Kill all running tasks
 		const body = (await api("/tasks?status=running")) as { tasks: Array<{ id: string }> };
@@ -390,29 +388,44 @@ async function cmdKill(taskId: string | undefined) {
 			return;
 		}
 		for (const task of body.tasks) {
-			await killTask(task.id, execSync);
+			await killTask(task.id);
 		}
 		return;
 	}
-	await killTask(taskId, execSync);
+	await killTask(taskId);
 }
 
-async function killTask(taskId: string, execSync: typeof import("node:child_process").execSync) {
-	// 1. Abort via API
+async function cmdClean() {
+	const { execSync } = await import("node:child_process");
+	console.log(pc.yellow("Cleaning orphan processes..."));
+
+	// Kill orphan vitest workers
+	try {
+		execSync("pkill -9 -f 'node.*vitest'", { stdio: "ignore" });
+		console.log(pc.dim("  Killed orphan vitest processes"));
+	} catch {
+		console.log(pc.dim("  No orphan vitest processes"));
+	}
+
+	// Kill orphan tsx server processes
+	try {
+		execSync("pkill -9 -f 'tsx.*server.ts'", { stdio: "ignore" });
+		console.log(pc.dim("  Killed orphan server processes"));
+	} catch {
+		console.log(pc.dim("  No orphan server processes"));
+	}
+
+	console.log(pc.green("✔ Done."));
+}
+
+async function killTask(taskId: string) {
 	try {
 		await api(`/tasks/${taskId}/abort`, { method: "POST" });
 	} catch {
 		// Server might be stuck
 	}
-
-	// 2. Kill any node/tsx processes that might be running for this task
-	try {
-		execSync(`pkill -f "kanade.*${taskId}"`, { stdio: "ignore" });
-	} catch {
-		// no matching processes
-	}
-
 	console.log(pc.yellow(`⚑ Task ${pc.bold(taskId)} killed.`));
+	console.log(pc.dim("  If CPU is still high, run: kanade clean"));
 }
 
 async function cmdRun(workflowName: string | undefined, args: ReturnType<typeof parseArgs>["values"]) {
@@ -660,6 +673,8 @@ async function main() {
 			return cmdAbort(positionals[1] as string);
 		case "kill":
 			return cmdKill(positionals[1] as string | undefined);
+		case "clean":
+			return cmdClean();
 		case "merge":
 			return cmdMerge(positionals[1] as string | undefined);
 		case "reject":
@@ -707,6 +722,7 @@ ${pc.bold("Commands:")}
   ${pc.cyan("reject")}        ${pc.dim("<task-id>")}                     Reject, remove branch
   ${pc.cyan("abort")}         ${pc.dim("<task-id>")}                     Abort task
   ${pc.cyan("kill")}          ${pc.dim("<task-id> | --all")}              Force kill task(s)
+  ${pc.cyan("clean")}         ${pc.dim("")}                              Kill orphan processes (vitest, etc.)
   ${pc.cyan("inbox")}         ${pc.dim("[--json]")}                      Pending requests
   ${pc.cyan("respond")}       ${pc.dim("<task-id> --request <id> --decision <...>")}
 
