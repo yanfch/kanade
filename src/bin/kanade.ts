@@ -462,10 +462,13 @@ async function cmdWorkflows(args: ReturnType<typeof parseArgs>["values"]) {
 			render: (v) => pc.bold(pc.magenta(String(v))),
 		},
 		{
-			key: "description",
+			key: "meta",
 			label: "Description",
 			width: 40,
-			render: (v) => pc.white(String(v ?? "-")),
+			render: (v) => {
+				const meta = v as { description?: string } | undefined;
+				return pc.white(String(meta?.description ?? "-"));
+			},
 		},
 	]);
 
