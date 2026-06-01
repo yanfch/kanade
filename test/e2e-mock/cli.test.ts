@@ -188,6 +188,39 @@ describe("CLI — run", () => {
 		expect(out).toContain("Task");
 		expect(out).toContain("created");
 	});
+
+	it("uses current working directory when --cwd is not specified", async () => {
+		await fetch(`${BASE_URL}/workflows/cli-run-no-cwd`, {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				script: `export const meta = { name: 'cli-run-no-cwd', description: 'Test' }\nreturn { ran: true }`,
+			}),
+		});
+
+		const projectRoot = join(import.meta.dirname, "../..");
+		const out = cli("run cli-run-no-cwd");
+		expect(out).toContain("Task");
+		expect(out).toContain("created");
+		expect(out).toContain("Workspace:");
+		expect(out).toContain(projectRoot);
+	});
+
+	it("shows workspace info in output when --cwd is specified", async () => {
+		await fetch(`${BASE_URL}/workflows/cli-run-show-cwd`, {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				script: `export const meta = { name: 'cli-run-show-cwd', description: 'Test' }\nreturn { ran: true }`,
+			}),
+		});
+
+		const out = cli("run cli-run-show-cwd --cwd /tmp");
+		expect(out).toContain("Task");
+		expect(out).toContain("created");
+		expect(out).toContain("Workspace:");
+		expect(out).toContain("/tmp");
+	});
 });
 
 describe("CLI — iterate", () => {

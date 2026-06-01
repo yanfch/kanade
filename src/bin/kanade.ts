@@ -418,16 +418,12 @@ async function killTask(taskId: string, execSync: typeof import("node:child_proc
 async function cmdRun(workflowName: string | undefined, args: ReturnType<typeof parseArgs>["values"]) {
 	if (!workflowName) {
 		console.error(pc.red("✖ Workflow name required."));
-		console.log(pc.dim("  Usage: kanade run <name> --cwd /path [--args '{}'] [--follow]"));
+		console.log(pc.dim("  Usage: kanade run <name> [--cwd /path] [--args '{}'] [--follow]"));
 		process.exit(1);
 	}
 
-	const cwd = args.cwd as string | undefined;
-	if (!cwd) {
-		console.error(pc.red("✖ --cwd is required. Tasks must specify a workspace."));
-		console.log(pc.dim("  Usage: kanade run <name> --cwd /path [--args '{}']"));
-		process.exit(1);
-	}
+	// Use specified cwd or default to current working directory
+	const cwd = (args.cwd as string | undefined) ?? process.cwd();
 
 	const argsStr = args.args as string | undefined;
 	let parsedArgs: unknown;
@@ -590,7 +586,10 @@ async function cmdStart(args: ReturnType<typeof parseArgs>["values"]) {
 	mkdirSync(pathJoin(resolvedDir, "db"), { recursive: true });
 
 	const portNum = port ?? "7777";
-	writeFileSync(pathJoin(resolvedDir, "config.yml"), `server:\n  port: ${portNum}\n  bind: 127.0.0.1\n`);
+	const configPath = pathJoin(resolvedDir, "config.yml");
+	if (!existsSync(configPath)) {
+		writeFileSync(configPath, `server:\n  port: ${portNum}\n  bind: 127.0.0.1\n`);
+	}
 
 	console.log(pc.green("✔ Starting kanade server"));
 	console.log(pc.dim(`  Dir:  ${resolvedDir}`));
@@ -700,7 +699,7 @@ ${pc.bold("Commands:")}
   ${pc.cyan("ls")}            ${pc.dim("[--status <state>] [--json]")}     List tasks
   ${pc.cyan("show")}          ${pc.dim("<task-id> [--json]")}             Task details
   ${pc.cyan("tail")}          ${pc.dim("<task-id>")}                      Follow events (SSE)
-  ${pc.cyan("run")}           ${pc.dim("<name> [--args '{}'] [--follow]")} Run saved workflow
+  ${pc.cyan("run")}           ${pc.dim("<name> [--cwd /path] [--args '{}'] [--follow]")} Run saved workflow
   ${pc.cyan("iterate")}       ${pc.dim("<task-id> --instructions '...'")} Iterate on task
   ${pc.cyan("save")}          ${pc.dim("<task-id> --as <name>")}          Save script as workflow
   ${pc.cyan("workflows")}     ${pc.dim("[--json]")}                      List workflows
