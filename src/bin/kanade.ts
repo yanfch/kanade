@@ -8,7 +8,7 @@
 import { parseArgs } from "node:util";
 import pc from "picocolors";
 
-const BASE_URL = process.env.KANADE_URL ?? "http://127.0.0.1:7777";
+let BASE_URL = process.env.KANADE_URL ?? "http://127.0.0.1:7777";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -492,6 +492,27 @@ async function cmdReject(taskId: string | undefined) {
 	console.log(pc.yellow(`⚑ Task ${pc.bold(taskId)} rejected. Branch removed.`));
 }
 
+async function cmdIterate(taskId: string | undefined, args: ReturnType<typeof parseArgs>["values"]) {
+	if (!taskId) {
+		console.error(pc.red("✖ Task ID required. Usage: kanade iterate <task-id> --instructions '...'"));
+		process.exit(1);
+	}
+	const instructions = args.instructions as string | undefined;
+	if (!instructions) {
+		console.error(pc.red("✖ --instructions is required"));
+		process.exit(1);
+	}
+
+	const body = (await api(`/tasks/${taskId}/iterate`, {
+		method: "POST",
+		body: JSON.stringify({ instructions }),
+	})) as { task_id: string };
+
+	console.log(pc.green(`✔ Iteration task ${pc.bold(body.task_id)} created.`));
+	console.log(pc.dim(`  Parent: ${taskId}`));
+	console.log(pc.dim(`  Instructions: ${instructions}`));
+}
+
 async function cmdHealth() {
 	try {
 		const body = (await api("/health")) as { ok: boolean };
@@ -504,6 +525,46 @@ async function cmdHealth() {
 		console.log(pc.red("✖ Server is not reachable at ") + pc.cyan(BASE_URL));
 		process.exit(1);
 	}
+}
+
+async function cmdStart(args: ReturnType<typeof parseArgs>["values"]) {
+	const dir = args.dir as string | undefined;
+	const port = args.port as string | undefined;
+
+	if (!dir) {
+		console.error(pc.red("✖ --dir is required"));
+		console.log(pc.dim("  Usage: kanade start --dir /tmp/my-instance [--port 7778]"));
+		process.exit(1);
+	}
+
+	const { mkdirSync, writeFileSync, existsSync } = await import("node:fs");
+	const { join: pathJoin } = await import("node:path");
+
+	const resolvedDir = dir.replace(/^~/, process.env.HOME ?? "");
+	if (!existsSync(resolvedDir)) mkdirSync(resolvedDir, { recursive: true });
+	mkdirSync(pathJoin(resolvedDir, "db"), { recursive: true });
+
+	const portNum = port ?? "7777";
+	writeFileSync(pathJoin(resolvedDir, "config.yml"), `server:\n  port: ${portNum}\n  bind: 127.0.0.1\n`);
+
+	console.log(pc.green("✔ Starting kanade server"));
+	console.log(pc.dim(`  Dir:  ${resolvedDir}`));
+	console.log(pc.dim(`  Port: ${portNum}`));
+	console.log(pc.dim(`  URL:  http://127.0.0.1:${portNum}`));
+	console.log();
+	console.log(pc.dim(`  Use:  KANADE_URL=http://127.0.0.1:${portNum} kanade ls`));
+	console.log(pc.dim(`  Or:   kanade --url http://127.0.0.1:${portNum} ls`));
+	console.log();
+
+	const { spawn } = await import("node:child_process");
+	const child = spawn("npx", ["tsx", "src/bin/server.ts"], {
+		cwd: import.meta.dirname ? pathJoin(import.meta.dirname, "..") : process.cwd(),
+		env: { ...process.env, KANADE_DIR: resolvedDir },
+		stdio: "inherit",
+	});
+
+	process.on("SIGINT", () => child.kill("SIGINT"));
+	process.on("SIGTERM", () => child.kill("SIGTERM"));
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────
@@ -520,10 +581,14 @@ async function main() {
 			args: { type: "string" },
 			as: { type: "string" },
 			follow: { type: "boolean", short: "f" },
+			url: { type: "string", short: "u" },
 		},
 		strict: false,
 		allowPositionals: true,
 	});
+
+	const url = values.url as string | undefined;
+	if (url) BASE_URL = url;
 
 	const command = positionals[0];
 
@@ -546,12 +611,16 @@ async function main() {
 			return cmdReject(positionals[1] as string | undefined);
 		case "run":
 			return cmdRun(positionals[1] as string | undefined, values);
+		case "iterate":
+			return cmdIterate(positionals[1] as string | undefined, values);
 		case "save":
 			return cmdSave(positionals[1] as string, values);
 		case "workflows":
 			return cmdWorkflows(values);
 		case "health":
 			return cmdHealth();
+		case "start":
+			return cmdStart(values);
 		case "help":
 		case undefined:
 			printUsage();
@@ -570,27 +639,30 @@ ${pc.bold("kanade")} — ${pc.dim("Multi-agent workflow runtime CLI")}
 ${pc.bold("Usage:")}  kanade <command> [options]
 
 ${pc.bold("Commands:")}
-  ${pc.cyan("ls")}           ${pc.dim("[--status <state>] [--json]")}    List tasks
-  ${pc.cyan("show")}         ${pc.dim("<task-id> [--json]")}            Show task details
-  ${pc.cyan("tail")}         ${pc.dim("<task-id>")}                     Follow task events (SSE)
-  ${pc.cyan("inbox")}        ${pc.dim("[--json]")}                      List pending human requests
-  ${pc.cyan("respond")}      ${pc.dim("<task-id> --request <id> --decision <approve|reject>")}
-  ${pc.cyan("abort")}        ${pc.dim("<task-id>")}                    Abort a running task
-  ${pc.cyan("merge")}        ${pc.dim("<task-id>")}                    Merge task branch into develop
-  ${pc.cyan("reject")}        ${pc.dim("<task-id>")}                    Reject task, remove branch
-  ${pc.cyan("run")}          ${pc.dim("<name> [--args '{}'] [--follow]")}  Run a saved workflow
-  ${pc.cyan("save")}         ${pc.dim("<task-id> --as <name>")}        Save task script as workflow
-  ${pc.cyan("workflows")}    ${pc.dim("[--json]")}                     List saved workflows
-  ${pc.cyan("health")}       ${pc.dim("")}                             Check server status
-  ${pc.cyan("help")}         ${pc.dim("")}                             Show this help
+  ${pc.cyan("start")}         ${pc.dim("--dir <path> [--port <num>]")}     Start isolated server
+  ${pc.cyan("health")}        ${pc.dim("")}                              Check server status
+  ${pc.cyan("ls")}            ${pc.dim("[--status <state>] [--json]")}     List tasks
+  ${pc.cyan("show")}          ${pc.dim("<task-id> [--json]")}             Task details
+  ${pc.cyan("tail")}          ${pc.dim("<task-id>")}                      Follow events (SSE)
+  ${pc.cyan("run")}           ${pc.dim("<name> [--args '{}'] [--follow]")} Run saved workflow
+  ${pc.cyan("iterate")}       ${pc.dim("<task-id> --instructions '...'")} Iterate on task
+  ${pc.cyan("save")}          ${pc.dim("<task-id> --as <name>")}          Save script as workflow
+  ${pc.cyan("workflows")}     ${pc.dim("[--json]")}                      List workflows
+  ${pc.cyan("merge")}         ${pc.dim("<task-id>")}                     Merge branch
+  ${pc.cyan("reject")}        ${pc.dim("<task-id>")}                     Reject, remove branch
+  ${pc.cyan("abort")}         ${pc.dim("<task-id>")}                     Abort task
+  ${pc.cyan("inbox")}         ${pc.dim("[--json]")}                      Pending requests
+  ${pc.cyan("respond")}       ${pc.dim("<task-id> --request <id> --decision <...>")}
 
 ${pc.bold("Options:")}
-  ${pc.dim("--json, -j")}      Output as JSON
-  ${pc.dim("--status, -s")}    Filter by status (for ls)
-  ${pc.dim("--follow, -f")}    Follow events after run
+  ${pc.dim("--url, -u <url>")}   Server URL ${pc.dim("(default: http://127.0.0.1:7777)")}
+  ${pc.dim("--json, -j")}       Output as JSON
+  ${pc.dim("--status, -s")}     Filter by status
+  ${pc.dim("--follow, -f")}     Follow events after run
 
-${pc.bold("Environment:")}
-  ${pc.dim("KANADE_URL")}      Server URL ${pc.dim("(default: http://127.0.0.1:7777)")}
+${pc.bold("Isolation:")}
+  ${pc.dim("kanade start --dir /tmp/proj-a --port 7778")}
+  ${pc.dim("kanade --url http://127.0.0.1:7778 ls")}
 `);
 }
 
