@@ -380,6 +380,8 @@ async function cmdAbort(taskId: string) {
 }
 
 async function cmdKill(taskId: string | undefined) {
+	const { execSync } = await import("node:child_process");
+
 	if (!taskId || taskId === "--all") {
 		// Kill all running tasks
 		const body = (await api("/tasks?status=running")) as { tasks: Array<{ id: string }> };
@@ -388,16 +390,28 @@ async function cmdKill(taskId: string | undefined) {
 			return;
 		}
 		for (const task of body.tasks) {
-			try {
-				await api(`/tasks/${task.id}/abort`, { method: "POST" });
-				console.log(pc.yellow(`⚑ Killed ${pc.bold(task.id)}`));
-			} catch {
-				console.log(pc.red(`✖ Failed to kill ${task.id}`));
-			}
+			await killTask(task.id, execSync);
 		}
 		return;
 	}
-	await api(`/tasks/${taskId}/abort`, { method: "POST" });
+	await killTask(taskId, execSync);
+}
+
+async function killTask(taskId: string, execSync: typeof import("node:child_process").execSync) {
+	// 1. Abort via API
+	try {
+		await api(`/tasks/${taskId}/abort`, { method: "POST" });
+	} catch {
+		// Server might be stuck
+	}
+
+	// 2. Kill any node/tsx processes that might be running for this task
+	try {
+		execSync(`pkill -f "kanade.*${taskId}"`, { stdio: "ignore" });
+	} catch {
+		// no matching processes
+	}
+
 	console.log(pc.yellow(`⚑ Task ${pc.bold(taskId)} killed.`));
 }
 
