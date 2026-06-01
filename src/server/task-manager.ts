@@ -477,6 +477,7 @@ export class TaskManager {
 				concurrency: options.concurrency ?? this.config.defaults.concurrency,
 				tokenBudget: options.token_budget ?? this.config.defaults.tokenBudget,
 				signal: controller.signal,
+				tracer: this.tracer,
 				rolesDir: this.config.paths.rolesDir,
 				agentDir: this.resolveAgentDir(),
 				...(this.createSession ? { createSession: this.createSession } : {}),

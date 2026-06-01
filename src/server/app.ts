@@ -94,8 +94,12 @@ export function createApp(ctx: AppContext): Hono {
 		const taskId = c.req.param("id");
 		if (!ctx.taskManager.get(taskId)) return c.json({ error: "Task not found" }, 404);
 		return streamSSE(c, async (stream) => {
-			const off = ctx.events.onTask(taskId, (event) => void writeEvent(stream, event));
-			await waitForClose(c.req.raw.signal, off, stream);
+			const { past, unsubscribe } = ctx.events.replayAndSubscribe(taskId, (event) => void writeEvent(stream, event));
+			// Replay stored events
+			for (const event of past) {
+				await writeEvent(stream, event);
+			}
+			await waitForClose(c.req.raw.signal, unsubscribe, stream);
 		});
 	});
 
@@ -257,7 +261,7 @@ async function writeEvent(
 	stream: { writeSSE(message: { event?: string; data: string; id?: string }): Promise<void> },
 	event: ServerEvent,
 ) {
-	await stream.writeSSE({ event: event.type, id: String(event.ts), data: JSON.stringify(event) });
+	await stream.writeSSE({ event: event.type, id: String(event.id), data: JSON.stringify(event) });
 }
 
 async function waitForClose(

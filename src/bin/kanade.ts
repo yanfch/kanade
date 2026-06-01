@@ -277,6 +277,7 @@ async function cmdTail(taskId: string) {
 
 	const decoder = new TextDecoder();
 	let buffer = "";
+	const seenIds = new Set<number>();
 
 	try {
 		while (true) {
@@ -291,6 +292,11 @@ async function cmdTail(taskId: string) {
 				if (line.startsWith("data: ")) {
 					try {
 						const event = JSON.parse(line.slice(6));
+						// Deduplicate: skip events already seen (replay overlap)
+						if (event.id != null) {
+							if (seenIds.has(event.id)) continue;
+							seenIds.add(event.id);
+						}
 						const ts = event.ts ? pc.dim(new Date(event.ts).toLocaleTimeString()) : "";
 						const type = formatEventType(event.type);
 						console.log(`${ts}  ${type}`);

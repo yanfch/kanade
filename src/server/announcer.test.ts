@@ -4,6 +4,7 @@ import type { ServerEvent } from "./event-bus.ts";
 
 function fakeEvent(overrides: Partial<ServerEvent> = {}): ServerEvent {
 	return {
+		id: 1,
 		type: "task.finished",
 		ts: Date.now(),
 		taskId: "T-0001",

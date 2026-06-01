@@ -608,6 +608,68 @@ describe("error handling", () => {
 	});
 });
 
+describe("GET /tasks/:id/events replay", () => {
+	it("replays past events and streams live ones with stable ids", async () => {
+		const { store, taskManager, events, app } = setup();
+		try {
+			const created = taskManager.create({ source: "inline", script: SIMPLE_SCRIPT });
+			// Wait for task to finish so events accumulate
+			await vi.waitFor(() => expect(taskManager.get(created.task_id)?.status).toBe("finished"));
+
+			// Collect past event ids from the bus
+			const pastIds = events.getTaskEvents(created.task_id).map((e) => e.id);
+			expect(pastIds.length).toBeGreaterThan(0);
+
+			// Request the SSE endpoint — the response will stream. We can read
+			// the initial body that includes the replayed events.
+			const ac = new AbortController();
+			const res = await app.request(`/tasks/${created.task_id}/events`, {
+				headers: { Accept: "text/event-stream" },
+				signal: ac.signal,
+			});
+			expect(res.status).toBe(200);
+
+			// Read SSE chunks until we've seen all past events (or timeout)
+			const reader = res.body?.getReader();
+			expect(reader).toBeDefined();
+			const decoder = new TextDecoder();
+			let accumulated = "";
+			const deadline = Date.now() + 2000;
+			while (Date.now() < deadline) {
+				const result = await Promise.race([
+					reader!.read(),
+					new Promise<{ done: true; value: undefined }>((r) =>
+						setTimeout(() => r({ done: true, value: undefined }), 500),
+					),
+				]);
+				if (result.done) break;
+				accumulated += decoder.decode(result.value, { stream: true });
+				// Check if we have all past events
+				const lines = accumulated.split("\n").filter((l) => l.startsWith("data: "));
+				if (lines.length >= pastIds.length) break;
+			}
+
+			const dataLines = accumulated.split("\n").filter((l) => l.startsWith("data: "));
+			expect(dataLines.length).toBeGreaterThanOrEqual(pastIds.length);
+
+			// Parse the replayed events and verify they have stable ids
+			const replayedIds = dataLines.map((l) => JSON.parse(l.slice(6)).id as number);
+			// All past ids should appear in the replayed stream
+			for (const pid of pastIds) {
+				expect(replayedIds).toContain(pid);
+			}
+			// Ids are strictly increasing
+			for (let i = 1; i < replayedIds.length; i++) {
+				expect(replayedIds[i]).toBeGreaterThan(replayedIds[i - 1]);
+			}
+
+			ac.abort();
+		} finally {
+			store.close();
+		}
+	});
+});
+
 describe("GET /health", () => {
 	it("returns ok", async () => {
 		const { store, app } = setup();
