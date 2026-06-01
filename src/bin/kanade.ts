@@ -379,6 +379,28 @@ async function cmdAbort(taskId: string) {
 	console.log(pc.yellow(`⚑ Task ${pc.bold(taskId)} aborted.`));
 }
 
+async function cmdKill(taskId: string | undefined) {
+	if (!taskId || taskId === "--all") {
+		// Kill all running tasks
+		const body = (await api("/tasks?status=running")) as { tasks: Array<{ id: string }> };
+		if (body.tasks.length === 0) {
+			console.log(pc.dim("No running tasks."));
+			return;
+		}
+		for (const task of body.tasks) {
+			try {
+				await api(`/tasks/${task.id}/abort`, { method: "POST" });
+				console.log(pc.yellow(`⚑ Killed ${pc.bold(task.id)}`));
+			} catch {
+				console.log(pc.red(`✖ Failed to kill ${task.id}`));
+			}
+		}
+		return;
+	}
+	await api(`/tasks/${taskId}/abort`, { method: "POST" });
+	console.log(pc.yellow(`⚑ Task ${pc.bold(taskId)} killed.`));
+}
+
 async function cmdRun(workflowName: string | undefined, args: ReturnType<typeof parseArgs>["values"]) {
 	if (!workflowName) {
 		console.error(pc.red("✖ Workflow name required."));
@@ -627,6 +649,8 @@ async function main() {
 			return cmdRespond(positionals[1] as string, values);
 		case "abort":
 			return cmdAbort(positionals[1] as string);
+		case "kill":
+			return cmdKill(positionals[1] as string | undefined);
 		case "merge":
 			return cmdMerge(positionals[1] as string | undefined);
 		case "reject":
@@ -673,6 +697,7 @@ ${pc.bold("Commands:")}
   ${pc.cyan("merge")}         ${pc.dim("<task-id>")}                     Merge branch
   ${pc.cyan("reject")}        ${pc.dim("<task-id>")}                     Reject, remove branch
   ${pc.cyan("abort")}         ${pc.dim("<task-id>")}                     Abort task
+  ${pc.cyan("kill")}          ${pc.dim("<task-id> | --all")}              Force kill task(s)
   ${pc.cyan("inbox")}         ${pc.dim("[--json]")}                      Pending requests
   ${pc.cyan("respond")}       ${pc.dim("<task-id> --request <id> --decision <...>")}
 
