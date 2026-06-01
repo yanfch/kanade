@@ -382,7 +382,14 @@ async function cmdAbort(taskId: string) {
 async function cmdRun(workflowName: string | undefined, args: ReturnType<typeof parseArgs>["values"]) {
 	if (!workflowName) {
 		console.error(pc.red("✖ Workflow name required."));
-		console.log(pc.dim("  Usage: kanade run <name> [--args '{...}'] [--follow]"));
+		console.log(pc.dim("  Usage: kanade run <name> --cwd /path [--args '{}'] [--follow]"));
+		process.exit(1);
+	}
+
+	const cwd = args.cwd as string | undefined;
+	if (!cwd) {
+		console.error(pc.red("✖ --cwd is required. Tasks must specify a workspace."));
+		console.log(pc.dim("  Usage: kanade run <name> --cwd /path [--args '{}']"));
 		process.exit(1);
 	}
 
@@ -397,13 +404,18 @@ async function cmdRun(workflowName: string | undefined, args: ReturnType<typeof 
 		}
 	}
 
+	const model = args.model as string | undefined;
+	const options: Record<string, unknown> = { cwd };
+	if (model) options.model = model;
+
 	const body = (await api("/tasks", {
 		method: "POST",
-		body: JSON.stringify({ source: "saved", workflow_name: workflowName, args: parsedArgs }),
+		body: JSON.stringify({ source: "saved", workflow_name: workflowName, args: parsedArgs, options }),
 	})) as { task_id: string };
 
 	console.log(pc.green(`✔ Task ${pc.bold(body.task_id)} created.`));
 	console.log(pc.dim(`  Workflow: ${workflowName}`));
+	console.log(pc.dim(`  Workspace: ${cwd}`));
 
 	if (args.follow) {
 		console.log();
@@ -582,6 +594,8 @@ async function main() {
 			as: { type: "string" },
 			follow: { type: "boolean", short: "f" },
 			url: { type: "string", short: "u" },
+			cwd: { type: "string" },
+			model: { type: "string", short: "m" },
 		},
 		strict: false,
 		allowPositionals: true,

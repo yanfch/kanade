@@ -184,7 +184,7 @@ describe("CLI — run", () => {
 			}),
 		});
 
-		const out = cli("run cli-run-test");
+		const out = cli("run cli-run-test --cwd /tmp");
 		expect(out).toContain("Task");
 		expect(out).toContain("created");
 	});
