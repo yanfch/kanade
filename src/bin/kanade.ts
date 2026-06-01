@@ -386,12 +386,7 @@ async function cmdRun(workflowName: string | undefined, args: ReturnType<typeof 
 		process.exit(1);
 	}
 
-	const cwd = args.cwd as string | undefined;
-	if (!cwd) {
-		console.error(pc.red("✖ --cwd is required. Tasks must specify a workspace."));
-		console.log(pc.dim("  Usage: kanade run <name> --cwd /path [--args '{}']"));
-		process.exit(1);
-	}
+	const cwd = (args.cwd as string | undefined) ?? process.cwd();
 
 	const argsStr = args.args as string | undefined;
 	let parsedArgs: unknown;
@@ -545,6 +540,7 @@ async function cmdHealth() {
 async function cmdStart(args: ReturnType<typeof parseArgs>["values"]) {
 	const dir = (args.dir as string | undefined) ?? "~/.kanade";
 	const port = args.port as string | undefined;
+	const explicitCmd = args.cmd as string | undefined;
 
 	const { mkdirSync, writeFileSync, existsSync } = await import("node:fs");
 	const { join: pathJoin } = await import("node:path");
@@ -556,25 +552,32 @@ async function cmdStart(args: ReturnType<typeof parseArgs>["values"]) {
 	const portNum = port ?? "7777";
 	writeFileSync(pathJoin(resolvedDir, "config.yml"), `server:\n  port: ${portNum}\n  bind: 127.0.0.1\n`);
 
+	// Resolve the command to use for starting the server
+	const { resolveStartCmd } = await import("./start-cmd.ts");
+	const resolved = resolveStartCmd({
+		cmd: explicitCmd,
+		kanadeScriptPath: process.argv[1],
+	});
+
 	console.log(pc.green("✔ Starting kanade server"));
-	console.log(pc.dim(`  Dir:  ${resolvedDir}`));
-	console.log(pc.dim(`  Port: ${portNum}`));
-	console.log(pc.dim(`  URL:  http://127.0.0.1:${portNum}`));
+	console.log(pc.dim(`  Dir:      ${resolvedDir}`));
+	console.log(pc.dim(`  Port:     ${portNum}`));
+	console.log(pc.dim(`  URL:      http://127.0.0.1:${portNum}`));
+	console.log(pc.dim(`  Work Dir: ${resolved.cwd}`));
+	console.log(pc.dim(`  Command:  ${resolved.cmd}`));
 	console.log();
 	console.log(pc.dim(`  Use:  KANADE_URL=http://127.0.0.1:${portNum} kanade ls`));
 	console.log(pc.dim(`  Or:   kanade --url http://127.0.0.1:${portNum} ls`));
 	console.log();
 
 	const { spawn } = await import("node:child_process");
-	// Find project root by looking for package.json
-	let projectRoot = process.cwd();
-	while (projectRoot !== "/") {
-		if (existsSync(pathJoin(projectRoot, "package.json"))) break;
-		projectRoot = pathJoin(projectRoot, "..");
-	}
-	const tsxPath = pathJoin(projectRoot, "node_modules", ".bin", "tsx");
-	const child = spawn(tsxPath, ["src/bin/server.ts"], {
-		cwd: projectRoot,
+	// Parse the resolved command
+	const cmdParts = resolved.cmd.split(/\s+/);
+	const executable = cmdParts[0];
+	const cmdArgs = cmdParts.slice(1);
+
+	const child = spawn(executable, cmdArgs, {
+		cwd: resolved.cwd,
 		env: { ...process.env, KANADE_DIR: resolvedDir },
 		stdio: "inherit",
 	});
@@ -600,6 +603,7 @@ async function main() {
 			url: { type: "string", short: "u" },
 			cwd: { type: "string" },
 			model: { type: "string", short: "m" },
+			cmd: { type: "string" },
 		},
 		strict: false,
 		allowPositionals: true,
