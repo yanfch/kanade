@@ -172,7 +172,7 @@ describe("IsolationManager — mode:worktree", () => {
 		expect(branches.all).toContain("kanade/T-0001");
 	});
 
-	it("finalizeWorktrees approved removes worktree dir when autoCleanupOnApprove=true", async () => {
+	it("finalizeWorktrees approved never removes worktree dir regardless of autoCleanupOnApprove", async () => {
 		const mgr = new IsolationManager(store, {
 			defaultBaseBranch: "develop",
 			branchPrefix: "kanade",
@@ -185,7 +185,8 @@ describe("IsolationManager — mode:worktree", () => {
 
 		const row = store.getWorktree(ctx.worktree!.id);
 		expect(row?.status).toBe("inactive");
-		expect(existsSync(row!.worktree_path)).toBe(false);
+		// Worktree dir is ALWAYS preserved on approval — user must explicitly merge or reject
+		expect(existsSync(row!.worktree_path)).toBe(true);
 
 		const branches = await simpleGit(baseRepo).branchLocal();
 		expect(branches.all).toContain("kanade/T-0001");
