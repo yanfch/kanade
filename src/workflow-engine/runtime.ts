@@ -442,6 +442,12 @@ export async function runWorkflow<T = unknown>(
 	});
 
 	const wrapped = `(async () => {\n${body}\n})()`;
+	// Validate syntax before executing
+	try {
+		new vm.Script(wrapped, { filename: `${meta.name || "workflow"}.js` });
+	} catch (error) {
+		throw new Error(`Workflow script syntax error: ${error instanceof Error ? error.message : String(error)}`);
+	}
 	const result = await new vm.Script(wrapped, { filename: `${meta.name || "workflow"}.js` }).runInContext(context);
 	await Promise.allSettled([...pendingAgentRuns]);
 	assertStructuredCloneable(result, "workflow result");

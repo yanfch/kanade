@@ -687,3 +687,22 @@ return r`;
 		expect(result.result).toEqual(["single"]);
 	});
 });
+
+describe("runWorkflow — script syntax validation", () => {
+	it("rejects script with unterminated string constant", async () => {
+		const script = `export const meta = { name: 'test', description: 'Test' }
+const x = 'hello
+world'`;
+		await expect(runWorkflow(script)).rejects.toThrow(/Unterminated string/i);
+	});
+
+	it("rejects script with multiline single-quoted string in agent prompt", async () => {
+		const script = `export const meta = { name: 'test', description: 'Test' }
+const r = await agent('this prompt
+spans multiple lines', { label: 'test' })
+return r`;
+		await expect(runWorkflow(script, { agent: { run: async () => "ok" } as any })).rejects.toThrow(
+			/Unterminated string/i,
+		);
+	});
+});

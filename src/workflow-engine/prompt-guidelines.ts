@@ -16,6 +16,7 @@ export const WORKFLOW_AUTHOR_GUIDELINES = [
 	"Review agents use { label, agentType: 'review', isolation: 'worktree', schema }. Review is read-only, does not modify files.",
 	"All agents in the same task share one task-scoped worktree. Run code-changing agents sequentially, never in parallel.",
 	"Do not read existing workflow files. Generate from scratch. Return compact JSON; always await agent()/parallel()/pipeline().",
+	"agent() prompts must use backtick template literals (not single quotes) when they span multiple lines. Single-line prompts may use single quotes.",
 ] as const;
 
 export function buildWorkflowAuthorPrompt(taskPrompt: string): string {
