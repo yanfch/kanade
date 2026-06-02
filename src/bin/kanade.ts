@@ -236,7 +236,7 @@ async function cmdShow(taskId: string, args: ReturnType<typeof parseArgs>["value
 	console.log(`  ${pc.dim("Duration:")}  ${duration(t.started_at as number, t.finished_at as number)}`);
 
 	// Base branch and isolation info
-	console.log(`  ${pc.dim("Base branch:")} ${t.base_branch ?? pc.dim("-")}`);
+	console.log(`  ${pc.dim("Base Branch:")} ${t.base_branch ?? pc.dim("-")}`);
 	if (worktrees.worktrees.length > 0) {
 		const wt = worktrees.worktrees[0];
 		console.log(`  ${pc.dim("Isolation:")}   ${pc.cyan("worktree")}`);
