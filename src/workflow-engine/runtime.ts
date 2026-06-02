@@ -34,7 +34,7 @@ export interface WorkflowRunOptions extends Omit<WorkflowAgentOptions, "journal"
 	agent?: Pick<WorkflowAgent, "run">;
 	journal?: WorkflowJournal;
 	agentJournal?: WorkflowAgentOptions["journal"];
-	isolationManager?: Pick<IsolationManager, "prepare">;
+	isolationManager?: Pick<IsolationManager, "prepare" | "commitDirtyWorktree">;
 	human?: WorkflowHumanGate;
 	concurrency?: number;
 	tokenBudget?: number | null;

@@ -331,13 +331,17 @@ export class IsolationManager {
 		};
 	}
 
-	private async commitDirtyWorktree(row: WorktreeRow): Promise<void> {
-		if (!existsSync(row.worktree_path)) return;
-		const git = simpleGit(row.worktree_path);
+	/** Commit dirty changes in a worktree. Safe to call multiple times. */
+	async commitDirtyWorktree(rowOrPath: WorktreeRow | string, label?: string): Promise<void> {
+		const worktreePath = typeof rowOrPath === "string" ? rowOrPath : rowOrPath.worktree_path;
+		const taskLabel = typeof rowOrPath === "string" ? "" : rowOrPath.task_id;
+		const agentLabel = label ?? (typeof rowOrPath === "string" ? "" : rowOrPath.label);
+		if (!existsSync(worktreePath)) return;
+		const git = simpleGit(worktreePath);
 		const status = await git.status();
 		if (status.isClean()) return;
 		await git.add(".");
-		await git.commit(`kanade: save ${row.task_id} ${row.label} changes`);
+		await git.commit(`kanade: save ${taskLabel} ${agentLabel} changes`);
 	}
 
 	private async removeWorktree(row: WorktreeRow): Promise<void> {

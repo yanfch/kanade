@@ -59,7 +59,7 @@ export interface WorkflowAgentOptions {
 	disableSubagentCompaction?: boolean;
 	journal?: AgentJournal;
 	/** IsolationManager instance for worktree isolation. */
-	isolationManager?: Pick<IsolationManager, "prepare">;
+	isolationManager?: Pick<IsolationManager, "prepare" | "commitDirtyWorktree">;
 	/** Task ID passed to IsolationManager.prepare(). */
 	taskId?: string;
 	/** Persist subagent sessions to disk. Default: false */
@@ -129,7 +129,7 @@ export class WorkflowAgent {
 	private readonly inheritPiSettings: boolean;
 	private readonly disableSubagentCompaction: boolean;
 	private readonly journal?: AgentJournal;
-	private readonly isolationManager?: Pick<IsolationManager, "prepare">;
+	private readonly isolationManager?: Pick<IsolationManager, "prepare" | "commitDirtyWorktree">;
 	private readonly taskId?: string;
 	private readonly persistSubagents: boolean;
 	private readonly persistFilter?: (label: string) => boolean;
@@ -196,6 +196,7 @@ export class WorkflowAgent {
 		const retry = options.retry;
 		const maxAttempts = 1 + (retry?.maxRetries ?? 0);
 		const backoffMs = retry?.backoffMs ?? 1000;
+		let agentResult: unknown;
 
 		try {
 			let lastError: unknown;
@@ -263,6 +264,7 @@ export class WorkflowAgent {
 
 					this.journal?.write(cacheKey, { result, tokens: estimateTokens(result) });
 					this.emitSessionUsage(session, options.onUsage);
+					agentResult = result;
 					return result;
 				} catch (err) {
 					lastError = err;
@@ -275,6 +277,16 @@ export class WorkflowAgent {
 			}
 			throw lastError;
 		} finally {
+			// Auto-commit dirty worktree changes after each agent run
+			if (isoCtx?.worktree && this.isolationManager) {
+				try {
+					// Build meaningful commit message from agent result
+					const summary = this.extractCommitSummary(agentResult, label);
+					await this.isolationManager.commitDirtyWorktree(isoCtx.worktree.path, summary);
+				} catch {
+					// best effort — don't fail the agent run
+				}
+			}
 			await isoCtx?.cleanup();
 		}
 	}
@@ -382,6 +394,22 @@ export class WorkflowAgent {
 			});
 			return;
 		}
+	}
+
+	private extractCommitSummary(result: unknown, label: string): string {
+		if (result && typeof result === "object") {
+			const r = result as Record<string, unknown>;
+			// Use structured output summary if available
+			if (typeof r.summary === "string" && r.summary.trim()) {
+				const summary = r.summary.trim().slice(0, 120);
+				return `[${label}] ${summary}`;
+			}
+			// Use status + filesChanged if available
+			if (r.status && Array.isArray(r.filesChanged) && r.filesChanged.length > 0) {
+				return `[${label}] ${r.status}: ${r.filesChanged.join(", ")}`;
+			}
+		}
+		return `[${label}] auto-commit`;
 	}
 
 	private lastAssistantText(messages: unknown[]): string {
