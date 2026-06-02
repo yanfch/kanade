@@ -886,7 +886,7 @@ return await agent('work', { label: 'dev', isolation: 'worktree' })`,
 			expect(ctx.taskManager.get(task.task_id)?.status).toBe("finished");
 
 			// Branch should still exist (kept for merge/reject)
-			const branches = execSync("git branch", { encoding: "utf8", cwd: process.cwd() });
+			const branches = execSync("git branch | grep kanade/", { encoding: "utf8", cwd: process.cwd() });
 			expect(branches).toContain(`kanade/${task.task_id}`);
 		} finally {
 			ctx.cleanup();
@@ -910,8 +910,8 @@ return await agent('work', { label: 'dev', isolation: 'worktree' })`,
 			ctx.taskManager.abort(task.task_id);
 			await waitForTask(ctx.taskManager, task.task_id, "aborted", 5000);
 
-			// Branch should be deleted after abort (only check test branches)
-			const branches = execSync("git branch 2>/dev/null | grep kanade/X- || true", {
+			// Branch should be deleted after abort
+			const branches = execSync("git branch 2>/dev/null | grep kanade/ || true", {
 				encoding: "utf8",
 				cwd: process.cwd(),
 			});

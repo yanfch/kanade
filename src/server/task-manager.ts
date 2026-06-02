@@ -333,10 +333,6 @@ export class TaskManager {
 		}
 	}
 
-	listWorktreesForTask(taskId: string): import("../store/index.ts").WorktreeRow[] {
-		return this.store.findWorktreesByTask(taskId);
-	}
-
 	getIteration(taskId: string): {
 		iteration: import("../store/index.ts").TaskIterationRow | null;
 		chain: string[];

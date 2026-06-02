@@ -697,32 +697,6 @@ describe("GET /tasks/:id/events replay", () => {
 	});
 });
 
-describe("GET /tasks/:id/worktrees", () => {
-	it("returns 404 for unknown task", async () => {
-		const { store, app } = setup();
-		try {
-			const res = await app.request("/tasks/T-9999/worktrees");
-			expect(res.status).toBe(404);
-		} finally {
-			store.close();
-		}
-	});
-
-	it("returns empty array when no worktrees exist", async () => {
-		const { store, taskManager, app } = setup();
-		try {
-			const created = taskManager.create({ source: "inline", script: SIMPLE_SCRIPT });
-			await vi.waitFor(() => expect(taskManager.get(created.task_id)?.status).toBe("finished"));
-			const res = await app.request(`/tasks/${created.task_id}/worktrees`);
-			const body = (await res.json()) as { worktrees: unknown[] };
-			expect(res.status).toBe(200);
-			expect(body.worktrees).toEqual([]);
-		} finally {
-			store.close();
-		}
-	});
-});
-
 describe("GET /health", () => {
 	it("returns ok", async () => {
 		const { store, app } = setup();
