@@ -155,6 +155,13 @@ export function createApp(ctx: AppContext): Hono {
 		return c.json({ snapshot });
 	});
 
+	app.get("/tasks/:id/worktrees", (c) => {
+		const taskId = c.req.param("id");
+		if (!ctx.taskManager.get(taskId)) return c.json({ error: "Task not found" }, 404);
+		const worktrees = ctx.taskManager.getWorktrees(taskId);
+		return c.json({ worktrees });
+	});
+
 	app.post("/tasks/:id/rerun", async (c) => {
 		if (!ctx.taskManager.get(c.req.param("id"))) return c.json({ error: "Task not found" }, 404);
 		const body = (await c.req.json().catch(() => ({}))) as {

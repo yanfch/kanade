@@ -6,7 +6,7 @@ import type { KanadeConfig } from "../config/index.ts";
 import type { HumanGate } from "../human/index.ts";
 import { IsolationManager } from "../isolation/index.ts";
 import { Journal, type JournalAllEntries } from "../journal/index.ts";
-import type { NeedsHumanRow, StateStore, TaskRow, TaskStatus, WorkflowSource } from "../store/index.ts";
+import type { NeedsHumanRow, StateStore, TaskRow, TaskStatus, WorkflowSource, WorktreeRow } from "../store/index.ts";
 import * as Attrs from "../tracing/attributes.ts";
 import type { TracingHandle, Logger as TracingLogger } from "../tracing/index.ts";
 import { runWorkflow } from "../workflow-engine/index.ts";
@@ -667,6 +667,11 @@ export class TaskManager {
 	/** Get the current snapshot for a task (real-time progress). */
 	getSnapshot(taskId: string): WorkflowSnapshot | null {
 		return this.snapshotBuilder.get(taskId);
+	}
+
+	/** Get worktrees for a task. */
+	getWorktrees(taskId: string): WorktreeRow[] {
+		return this.store.findWorktreesByTask(taskId);
 	}
 
 	private parseScriptMeta(script: string): { name: string; description: string } | null {
