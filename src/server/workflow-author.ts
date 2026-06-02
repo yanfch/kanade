@@ -1,3 +1,4 @@
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import {
 	AuthStorage,
@@ -5,6 +6,7 @@ import {
 	SessionManager,
 	SettingsManager,
 	createAgentSession,
+	createReadOnlyTools,
 	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
@@ -12,12 +14,12 @@ import { createStructuredOutputTool } from "../workflow-engine/index.ts";
 import { buildWorkflowAuthorPrompt } from "../workflow-engine/prompt-guidelines.ts";
 
 export interface WorkflowAuthor {
-	generate(prompt: string): Promise<string>;
+	generate(prompt: string, options?: { model?: string }): Promise<string>;
 }
 
 /** Stub used in tests and when no LLM is configured. Wraps the raw prompt as a minimal valid script. */
 export class StubWorkflowAuthor implements WorkflowAuthor {
-	async generate(prompt: string): Promise<string> {
+	async generate(prompt: string, _options?: { model?: string }): Promise<string> {
 		// Produce a minimal valid script whose body is the raw prompt text.
 		// This lets unit tests exercise the full create→run path without a real LLM.
 		const body = prompt.trim().startsWith("return ") ? prompt.trim() : "return {}";
@@ -40,11 +42,13 @@ export class LlmWorkflowAuthor implements WorkflowAuthor {
 			authPath?: string;
 			modelsPath?: string;
 			model?: string;
+			persistDir?: string;
 		} = {},
 	) {}
 
-	async generate(prompt: string): Promise<string> {
+	async generate(prompt: string, options?: { model?: string }): Promise<string> {
 		const agentDir = this.opts.agentDir ?? getAgentDir();
+		const requestedModel = options?.model ?? this.opts.model;
 		const authStorage = AuthStorage.create(this.opts.authPath ?? join(agentDir, "auth.json"));
 		const modelRegistry = ModelRegistry.create(authStorage, this.opts.modelsPath ?? join(agentDir, "models.json"));
 		const settingsManager = SettingsManager.inMemory();
@@ -63,12 +67,17 @@ export class LlmWorkflowAuthor implements WorkflowAuthor {
 			agentDir,
 			authStorage,
 			modelRegistry,
-			sessionManager: SessionManager.inMemory(),
-			customTools: [outputTool as never],
+			sessionManager: this.opts.persistDir
+				? (() => {
+						if (!existsSync(this.opts.persistDir)) mkdirSync(this.opts.persistDir, { recursive: true });
+						return SessionManager.create(process.cwd(), this.opts.persistDir);
+					})()
+				: SessionManager.inMemory(),
+			customTools: [...createReadOnlyTools(process.cwd()), outputTool as never],
 			settingsManager,
-			...(this.opts.model
+			...(requestedModel
 				? {
-						model: this.resolveModel(modelRegistry) as never,
+						model: this.resolveModel(modelRegistry, requestedModel) as never,
 					}
 				: {}),
 		});
@@ -102,22 +111,20 @@ export class LlmWorkflowAuthor implements WorkflowAuthor {
 		}
 	}
 
-	private resolveModel(modelRegistry: ModelRegistry): unknown {
-		if (!this.opts.model) return undefined;
-
+	private resolveModel(modelRegistry: ModelRegistry, modelName: string): unknown {
 		// Support provider/model or provider:model format
-		const colon = this.opts.model.indexOf(":");
-		const slash = this.opts.model.indexOf("/");
+		const colon = modelName.indexOf(":");
+		const slash = modelName.indexOf("/");
 		const sep = colon > 0 ? colon : slash > 0 ? slash : -1;
 
 		if (sep > 0) {
-			const provider = this.opts.model.slice(0, sep);
-			const modelId = this.opts.model.slice(sep + 1);
+			const provider = modelName.slice(0, sep);
+			const modelId = modelName.slice(sep + 1);
 			const found = modelRegistry.find(provider, modelId);
 			if (found) return found;
 		}
 
 		// Fallback: search by id or name
-		return modelRegistry.getAll().find((m) => m.id === this.opts.model || m.name === this.opts.model);
+		return modelRegistry.getAll().find((m) => m.id === modelName || m.name === modelName);
 	}
 }

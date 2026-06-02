@@ -82,6 +82,15 @@ function timestamp(ms: number | null): string {
 	return new Date(ms).toLocaleString();
 }
 
+function formatTimestampWithMs(ms: number): string {
+	const d = new Date(ms);
+	const hours = String(d.getHours()).padStart(2, "0");
+	const minutes = String(d.getMinutes()).padStart(2, "0");
+	const seconds = String(d.getSeconds()).padStart(2, "0");
+	const milliseconds = String(d.getMilliseconds()).padStart(3, "0");
+	return `${hours}:${minutes}:${seconds}.${milliseconds}`;
+}
+
 function duration(start: number | null, end: number | null): string {
 	if (!start || !end) return pc.dim("-");
 	const ms = end - start;
@@ -206,9 +215,10 @@ async function cmdShow(taskId: string, args: ReturnType<typeof parseArgs>["value
 	const json = args.json as boolean;
 	const task = (await api(`/tasks/${taskId}`)) as { task: Record<string, unknown> };
 	const journal = (await api(`/tasks/${taskId}/journal`)) as { agents: unknown[]; humans: unknown[] };
+	const worktrees = (await api(`/tasks/${taskId}/worktrees`)) as { worktrees: Record<string, unknown>[] };
 
 	if (json) {
-		console.log(JSON.stringify({ task: task.task, journal }, null, 2));
+		console.log(JSON.stringify({ task: task.task, journal, worktrees: worktrees.worktrees }, null, 2));
 		return;
 	}
 
@@ -225,8 +235,15 @@ async function cmdShow(taskId: string, args: ReturnType<typeof parseArgs>["value
 	console.log(`  ${pc.dim("Finished:")}  ${timestamp(t.finished_at as number)}`);
 	console.log(`  ${pc.dim("Duration:")}  ${duration(t.started_at as number, t.finished_at as number)}`);
 
-	if (t.base_branch) {
-		console.log(`  ${pc.dim("Branch:")}    ${t.base_branch}`);
+	// Base branch and isolation info
+	console.log(`  ${pc.dim("Base Branch:")} ${t.base_branch ?? pc.dim("-")}`);
+	if (worktrees.worktrees.length > 0) {
+		const wt = worktrees.worktrees[0];
+		console.log(`  ${pc.dim("Isolation:")}   ${pc.cyan("worktree")}`);
+		console.log(`  ${pc.dim("Git Branch:")}     ${pc.white(String(wt.branch))}`);
+		console.log(`  ${pc.dim("Worktree:")}   ${pc.dim(String(wt.worktree_path))}`);
+	} else {
+		console.log(`  ${pc.dim("Isolation:")}   ${pc.dim("none")}`);
 	}
 
 	if (t.error) {
@@ -297,7 +314,7 @@ async function cmdTail(taskId: string) {
 							if (seenIds.has(event.id)) continue;
 							seenIds.add(event.id);
 						}
-						const ts = event.ts ? pc.dim(new Date(event.ts).toLocaleTimeString()) : "";
+						const ts = event.ts ? pc.dim(formatTimestampWithMs(event.ts)) : "";
 						const type = formatEventType(event.type);
 						console.log(`${ts}  ${type}`);
 					} catch {
@@ -434,10 +451,59 @@ async function killTask(taskId: string) {
 	console.log(pc.dim("  If CPU is still high, run: kanade clean"));
 }
 
+async function cmdGenerateWorkflow(args: ReturnType<typeof parseArgs>["values"]) {
+	const prompt = args.prompt as string | undefined;
+	if (!prompt?.trim()) {
+		console.error(pc.red("✖ --prompt is required."));
+		console.log(pc.dim("  Usage: kanade generate-workflow --prompt '...'"));
+		process.exit(1);
+	}
+
+	const model = args.model as string | undefined;
+	const body = (await api("/workflows/generate", {
+		method: "POST",
+		body: JSON.stringify({ prompt, ...(model ? { options: { model } } : {}) }),
+	})) as { script: string };
+
+	if (args.json) {
+		console.log(JSON.stringify(body, null, 2));
+		return;
+	}
+	console.log(body.script);
+}
+
 async function cmdRun(workflowName: string | undefined, args: ReturnType<typeof parseArgs>["values"]) {
+	const prompt = args.prompt as string | undefined;
+
+	// kanade run --prompt '...' → source: generated
+	if (!workflowName && prompt?.trim()) {
+		const model = args.model as string | undefined;
+		const cwd = (args.cwd as string | undefined) ?? process.cwd();
+		const options: Record<string, unknown> = { cwd };
+		if (model) options.model = model;
+
+		const body = (await api("/tasks", {
+			method: "POST",
+			body: JSON.stringify({ source: "generated", prompt, options }),
+		})) as { task_id: string; generated?: boolean };
+
+		console.log(pc.green(`✔ Task ${pc.bold(body.task_id)} created.`));
+		console.log(pc.dim("  Source: generated"));
+		console.log(pc.dim(`  Workspace: ${cwd}`));
+
+		if (args.follow) {
+			console.log();
+			await cmdTail(body.task_id);
+		} else {
+			console.log(pc.dim(`  Run 'kanade tail ${body.task_id}' to follow progress.`));
+		}
+		return;
+	}
+
 	if (!workflowName) {
-		console.error(pc.red("✖ Workflow name required."));
+		console.error(pc.red("✖ Workflow name or --prompt required."));
 		console.log(pc.dim("  Usage: kanade run <name> [--cwd /path] [--args '{}'] [--follow]"));
+		console.log(pc.dim("  Usage: kanade run --prompt '...' [--model xiaomi/mimo-v2.5-pro] [--follow]"));
 		process.exit(1);
 	}
 
@@ -654,6 +720,7 @@ async function main() {
 			url: { type: "string", short: "u" },
 			cwd: { type: "string" },
 			model: { type: "string", short: "m" },
+			prompt: { type: "string", short: "p" },
 		},
 		strict: false,
 		allowPositionals: true,
@@ -685,6 +752,8 @@ async function main() {
 			return cmdMerge(positionals[1] as string | undefined);
 		case "reject":
 			return cmdReject(positionals[1] as string | undefined);
+		case "generate-workflow":
+			return cmdGenerateWorkflow(values);
 		case "run":
 			return cmdRun(positionals[1] as string | undefined, values);
 		case "iterate":
@@ -721,6 +790,8 @@ ${pc.bold("Commands:")}
   ${pc.cyan("show")}          ${pc.dim("<task-id> [--json]")}             Task details
   ${pc.cyan("tail")}          ${pc.dim("<task-id>")}                      Follow events (SSE)
   ${pc.cyan("run")}           ${pc.dim("<name> [--cwd /path] [--args '{}'] [--follow]")} Run saved workflow
+                      ${pc.dim("--prompt '...' [--model ...] [--follow]")}        Generate workflow and run
+  ${pc.cyan("generate-workflow")} ${pc.dim("--prompt '...' [--json]")}              Generate workflow script without running
   ${pc.cyan("iterate")}       ${pc.dim("<task-id> --instructions '...'")} Iterate on task
   ${pc.cyan("save")}          ${pc.dim("<task-id> --as <name>")}          Save script as workflow
   ${pc.cyan("workflows")}     ${pc.dim("[--json]")}                      List workflows

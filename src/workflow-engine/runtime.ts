@@ -4,7 +4,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import vm from "node:vm";
-import { SpanStatusCode, type Tracer } from "@opentelemetry/api";
+import { type Context, SpanStatusCode, type Tracer } from "@opentelemetry/api";
 import type { Node } from "acorn";
 import { parse } from "acorn";
 import type { TSchema } from "typebox";
@@ -12,7 +12,7 @@ import type { HumanRequest, HumanResponse } from "../human/index.ts";
 import type { IsolationManager } from "../isolation/index.ts";
 import { hashHumanRequest } from "../journal/index.ts";
 import * as Attrs from "../tracing/attributes.ts";
-import { WorkflowAgent, type WorkflowAgentOptions } from "./workflow-agent.ts";
+import { type SessionUsage, WorkflowAgent, type WorkflowAgentOptions } from "./workflow-agent.ts";
 
 export interface WorkflowMetaPhase {
 	title: string;
@@ -34,12 +34,16 @@ export interface WorkflowRunOptions extends Omit<WorkflowAgentOptions, "journal"
 	agent?: Pick<WorkflowAgent, "run">;
 	journal?: WorkflowJournal;
 	agentJournal?: WorkflowAgentOptions["journal"];
-	isolationManager?: Pick<IsolationManager, "prepare">;
+	isolationManager?: Pick<IsolationManager, "prepare" | "commitDirtyWorktree">;
 	human?: WorkflowHumanGate;
 	concurrency?: number;
 	tokenBudget?: number | null;
+	/** Per-task cost limit in USD. Task throws when exceeded. */
+	costBudget?: number | null;
 	signal?: AbortSignal;
 	tracer?: Tracer;
+	/** Parent trace context used for workflow child spans. */
+	traceContext?: Context;
 	/** Write each agent result to debug/artifacts/<seq>-<label>.json */
 	dumpArtifacts?: boolean;
 	/** Base directory for artifact dump (usually the run dir) */
@@ -49,6 +53,7 @@ export interface WorkflowRunOptions extends Omit<WorkflowAgentOptions, "journal"
 	/** Filter which subagent labels get persisted. Return true to persist. */
 	persistFilter?: (label: string) => boolean;
 	onLog?: (message: string) => void;
+	onUsage?: (usage: SessionUsage) => void;
 	onPhase?: (title: string) => void;
 	onHumanRequest?: (event: { requestId: string; cacheKey: string; request: HumanRequest }) => void;
 	onAgentStart?: (event: { label: string; phase?: string; prompt: string }) => void;
@@ -65,6 +70,21 @@ export interface WorkflowHumanGate {
 	wait(requestId: string, signal?: AbortSignal): Promise<HumanResponse>;
 }
 
+export interface WorkflowUsage {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	totalTokens: number;
+	cost: {
+		input: number;
+		output: number;
+		cacheRead: number;
+		cacheWrite: number;
+		total: number;
+	};
+}
+
 export interface WorkflowRunResult<T = unknown> {
 	meta: WorkflowMeta;
 	result: T;
@@ -72,6 +92,7 @@ export interface WorkflowRunResult<T = unknown> {
 	phases: string[];
 	agentCount: number;
 	durationMs: number;
+	usage: WorkflowUsage;
 }
 
 export interface AgentOptions<TSchemaDef extends TSchema | undefined = TSchema | undefined> {
@@ -100,6 +121,7 @@ interface RuntimeState {
 }
 
 type AnyNode = Node & {
+	[key: string]: unknown;
 	body?: AnyNode[];
 	declaration?: AnyNode | null;
 	kind?: string;
@@ -124,7 +146,8 @@ interface TemplateElementValue {
 	raw: string;
 }
 
-const DETERMINISM_BLOCKLIST = /\bDate\s*\.\s*now\b|\bMath\s*\.\s*random\b|\bnew\s+Date\s*\(\s*\)/;
+const NONDETERMINISM_ERROR =
+	"Workflow scripts must be deterministic: Date.now()/Math.random()/new Date() are unavailable";
 
 export async function runWorkflow<T = unknown>(
 	script: string,
@@ -149,6 +172,27 @@ export async function runWorkflow<T = unknown>(
 		Math.min(options.concurrency ?? Math.max(1, (globalThis.navigator?.hardwareConcurrency ?? 8) - 2), 16),
 	);
 	const limiter = createLimiter(concurrency);
+	const pendingAgentRuns = new Set<Promise<unknown>>();
+	const workflowUsage: WorkflowUsage = {
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 0,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	};
+	const collectUsage = (usage: SessionUsage) => {
+		workflowUsage.input += usage.input;
+		workflowUsage.output += usage.output;
+		workflowUsage.cacheRead += usage.cacheRead;
+		workflowUsage.cacheWrite += usage.cacheWrite;
+		workflowUsage.totalTokens += usage.totalTokens;
+		workflowUsage.cost.input += usage.cost.input;
+		workflowUsage.cost.output += usage.cost.output;
+		workflowUsage.cost.cacheRead += usage.cost.cacheRead;
+		workflowUsage.cost.cacheWrite += usage.cost.cacheWrite;
+		workflowUsage.cost.total += usage.cost.total;
+	};
 
 	const log = (message: string) => {
 		const text = String(message);
@@ -156,17 +200,22 @@ export async function runWorkflow<T = unknown>(
 		options.onLog?.(text);
 	};
 
-	const phase = (title: string) => {
-		state.currentPhase = title;
-		if (!state.phases.includes(title)) state.phases.push(title);
-		options.onPhase?.(title);
+	const phase = (title: unknown) => {
+		const text = requireString(title, "phase title");
+		state.currentPhase = text;
+		if (!state.phases.includes(text)) state.phases.push(text);
+		options.onPhase?.(text);
 		options.tracer
-			?.startSpan("workflow.phase", {
-				attributes: {
-					[Attrs.PHASE_NAME]: title,
-					[Attrs.TASK_ID]: options.taskId ?? "",
+			?.startSpan(
+				"workflow.phase",
+				{
+					attributes: {
+						[Attrs.PHASE_NAME]: text,
+						[Attrs.TASK_ID]: options.taskId ?? "",
+					},
 				},
-			})
+				options.traceContext,
+			)
 			.end();
 	};
 
@@ -181,36 +230,69 @@ export async function runWorkflow<T = unknown>(
 		if (options.signal?.aborted) throw new Error("workflow aborted");
 	};
 
-	const agent = async (prompt: string, agentOptions: AgentOptions = {}) => {
+	const agent = async (prompt: unknown, agentOptions: unknown = {}) => {
 		throwIfAborted();
 		if (budget.total !== null && budget.remaining() <= 0) throw new Error("workflow token budget exhausted");
-		const assignedPhase = agentOptions.phase ?? state.currentPhase;
-		const requestedLabel = agentOptions.label?.trim();
-		return limiter(async () => {
+		const taskPrompt = requireString(prompt, "agent prompt");
+		const normalizedOptions = normalizeAgentOptions(agentOptions);
+		const assignedPhase = normalizedOptions.phase ?? state.currentPhase;
+		const requestedLabel = normalizedOptions.label?.trim();
+		const effectiveModel = normalizedOptions.model ?? options.model;
+		const run = limiter(async () => {
 			state.agentCount++;
 			const label = requestedLabel || defaultAgentLabel(assignedPhase, state.agentCount);
-			const agentSpan = options.tracer?.startSpan("workflow.agent", {
-				attributes: {
-					[Attrs.AGENT_LABEL]: label,
-					[Attrs.AGENT_ROLE]: agentOptions.role ?? "",
-					[Attrs.AGENT_MODEL]: agentOptions.model ?? "",
-					[Attrs.PHASE_NAME]: assignedPhase ?? "",
-					[Attrs.TASK_ID]: options.taskId ?? "",
+			const agentSpan = options.tracer?.startSpan(
+				"workflow.agent",
+				{
+					attributes: {
+						[Attrs.AGENT_LABEL]: label,
+						[Attrs.AGENT_ROLE]: normalizedOptions.role ?? "",
+						[Attrs.AGENT_MODEL]: effectiveModel ?? "",
+						[Attrs.GEN_AI_USAGE_INPUT_TOKENS]: 0,
+						[Attrs.GEN_AI_USAGE_OUTPUT_TOKENS]: 0,
+						[Attrs.GEN_AI_USAGE_CACHE_READ]: 0,
+						[Attrs.GEN_AI_USAGE_CACHE_CREATION]: 0,
+						[Attrs.GEN_AI_USAGE_TOTAL_TOKENS]: 0,
+						[Attrs.PHASE_NAME]: assignedPhase ?? "",
+						[Attrs.TASK_ID]: options.taskId ?? "",
+					},
 				},
-			});
-			options.onAgentStart?.({ label, phase: assignedPhase, prompt });
+				options.traceContext,
+			);
+			options.onAgentStart?.({ label, phase: assignedPhase, prompt: taskPrompt });
 			try {
 				throwIfAborted();
-				const result = await agentRunner.run(prompt, {
+				const result = await agentRunner.run(taskPrompt, {
 					label,
-					role: agentOptions.role,
-					model: agentOptions.model,
-					schema: agentOptions.schema,
+					role: normalizedOptions.role,
+					model: effectiveModel,
+					schema: normalizedOptions.schema,
 					signal: options.signal,
-					instructions: buildAgentInstructions(assignedPhase, agentOptions),
-					isolation: agentOptions.isolation,
-					reuseBranch: agentOptions.reuseBranch,
-					...(agentOptions.retry ? { retry: agentOptions.retry } : {}),
+					instructions: buildAgentInstructions(assignedPhase, { ...normalizedOptions, model: effectiveModel }),
+					isolation: normalizedOptions.isolation,
+					reuseBranch: normalizedOptions.reuseBranch,
+					...(normalizedOptions.retry ? { retry: normalizedOptions.retry } : {}),
+					onUsage: (usage: SessionUsage) => {
+						collectUsage(usage);
+						// Check per-task cost budget
+						if (options.costBudget != null && workflowUsage.cost.total > options.costBudget) {
+							throw new Error(
+								`Cost budget exceeded: $${workflowUsage.cost.total.toFixed(4)} > $${options.costBudget.toFixed(2)} limit. Task paused. Worktree preserved.`,
+							);
+						}
+						if (agentSpan) {
+							agentSpan.setAttribute(Attrs.GEN_AI_USAGE_INPUT_TOKENS, usage.input);
+							agentSpan.setAttribute(Attrs.GEN_AI_USAGE_OUTPUT_TOKENS, usage.output);
+							agentSpan.setAttribute(Attrs.GEN_AI_USAGE_CACHE_READ, usage.cacheRead);
+							agentSpan.setAttribute(Attrs.GEN_AI_USAGE_CACHE_CREATION, usage.cacheWrite);
+							agentSpan.setAttribute(Attrs.GEN_AI_USAGE_TOTAL_TOKENS, usage.totalTokens);
+							agentSpan.setAttribute(Attrs.GEN_AI_USAGE_COST_USD, usage.cost.total);
+							agentSpan.setAttribute(Attrs.GEN_AI_USAGE_COST_INPUT_USD, usage.cost.input);
+							agentSpan.setAttribute(Attrs.GEN_AI_USAGE_COST_OUTPUT_USD, usage.cost.output);
+							agentSpan.setAttribute(Attrs.GEN_AI_USAGE_COST_CACHE_READ_USD, usage.cost.cacheRead);
+						}
+						options.onUsage?.(usage);
+					},
 				});
 				throwIfAborted();
 				state.spent += estimateTokens(result);
@@ -225,11 +307,17 @@ export async function runWorkflow<T = unknown>(
 				log(`agent ${label} failed: ${error instanceof Error ? error.message : String(error)}`);
 				options.onAgentEnd?.({ label, phase: assignedPhase, result: null });
 				dumpArtifact(options, state, label, null);
-				return null;
+				throw error;
 			} finally {
 				agentSpan?.end();
 			}
 		});
+		pendingAgentRuns.add(run);
+		run.then(
+			() => pendingAgentRuns.delete(run),
+			() => pendingAgentRuns.delete(run),
+		);
+		return run;
 	};
 
 	const parallel = async (thunks: Array<() => Promise<unknown>>, parallelOpts?: { cache_lead?: boolean }) => {
@@ -270,13 +358,17 @@ export async function runWorkflow<T = unknown>(
 		if (cached) return cached.response;
 
 		const requestId = `${options.taskId ?? "workflow"}_${ordinal}`;
-		const humanSpan = options.tracer?.startSpan("human.request", {
-			attributes: {
-				[Attrs.HUMAN_REQUEST_ID]: requestId,
-				[Attrs.TASK_ID]: options.taskId ?? "",
-				"human.title": request.title ?? "",
+		const humanSpan = options.tracer?.startSpan(
+			"human.request",
+			{
+				attributes: {
+					[Attrs.HUMAN_REQUEST_ID]: requestId,
+					[Attrs.TASK_ID]: options.taskId ?? "",
+					"human.title": request.title ?? "",
+				},
 			},
-		});
+			options.traceContext,
+		);
 		try {
 			await options.human.createRequest?.({ requestId, cacheKey, request });
 			options.onHumanRequest?.({ requestId, cacheKey, request });
@@ -350,7 +442,15 @@ export async function runWorkflow<T = unknown>(
 	});
 
 	const wrapped = `(async () => {\n${body}\n})()`;
+	// Validate syntax before executing
+	try {
+		new vm.Script(wrapped, { filename: `${meta.name || "workflow"}.js` });
+	} catch (error) {
+		throw new Error(`Workflow script syntax error: ${error instanceof Error ? error.message : String(error)}`);
+	}
 	const result = await new vm.Script(wrapped, { filename: `${meta.name || "workflow"}.js` }).runInContext(context);
+	await Promise.allSettled([...pendingAgentRuns]);
+	assertStructuredCloneable(result, "workflow result");
 	return {
 		meta,
 		result: result as T,
@@ -358,14 +458,11 @@ export async function runWorkflow<T = unknown>(
 		phases: state.phases,
 		agentCount: state.agentCount,
 		durationMs: Date.now() - started,
+		usage: workflowUsage,
 	};
 }
 
 export function parseWorkflowScript(script: string): { meta: WorkflowMeta; body: string } {
-	if (DETERMINISM_BLOCKLIST.test(script)) {
-		throw new Error("Workflow scripts must be deterministic: Date.now()/Math.random()/new Date() are unavailable");
-	}
-
 	const ast = parse(script, {
 		ecmaVersion: "latest",
 		sourceType: "module",
@@ -373,6 +470,8 @@ export function parseWorkflowScript(script: string): { meta: WorkflowMeta; body:
 		allowReturnOutsideFunction: true,
 		ranges: false,
 	}) as unknown as AnyNode;
+
+	assertDeterministicAst(ast);
 
 	const first = ast.body?.[0] as AnyNode | undefined;
 	if (first?.type !== "ExportNamedDeclaration") {
@@ -471,6 +570,110 @@ function validateMeta(meta: unknown): asserts meta is WorkflowMeta {
 				throw new Error("each meta phase must have a title string");
 			}
 		}
+	}
+}
+
+function assertDeterministicAst(node: AnyNode): void {
+	if (isDateNowCall(node) || isMathRandomCall(node) || isNewDateExpression(node)) {
+		throw new Error(NONDETERMINISM_ERROR);
+	}
+	for (const child of astChildren(node)) assertDeterministicAst(child);
+}
+
+function astChildren(node: AnyNode): AnyNode[] {
+	const children: AnyNode[] = [];
+	for (const value of Object.values(node)) {
+		if (Array.isArray(value)) children.push(...value.filter(isAstNode));
+		else if (isAstNode(value)) children.push(value);
+	}
+	return children;
+}
+
+function isAstNode(value: unknown): value is AnyNode {
+	return !!value && typeof value === "object" && typeof (value as AnyNode).type === "string";
+}
+
+function isDateNowCall(node: AnyNode): boolean {
+	return node.type === "CallExpression" && isMemberExpression(node.callee as AnyNode | undefined, "Date", "now");
+}
+
+function isMathRandomCall(node: AnyNode): boolean {
+	return node.type === "CallExpression" && isMemberExpression(node.callee as AnyNode | undefined, "Math", "random");
+}
+
+function isNewDateExpression(node: AnyNode): boolean {
+	const callee = node.callee as AnyNode | undefined;
+	return node.type === "NewExpression" && callee?.type === "Identifier" && callee.name === "Date";
+}
+
+function isMemberExpression(node: AnyNode | undefined, objectName: string, propertyName: string): boolean {
+	const object = node?.object as AnyNode | undefined;
+	if (node?.type !== "MemberExpression" || object?.type !== "Identifier" || object.name !== objectName) {
+		return false;
+	}
+	return propertyNameOf(node) === propertyName;
+}
+
+function propertyNameOf(node: AnyNode): string | undefined {
+	const property = node.property as AnyNode | undefined;
+	if (!node.computed && property?.type === "Identifier") return property.name;
+	return staticStringOf(property);
+}
+
+function staticStringOf(node: AnyNode | undefined): string | undefined {
+	if (node?.type === "Literal" && typeof node.value === "string") return node.value;
+	if (node?.type === "TemplateLiteral" && (node.expressions?.length ?? 0) === 0) {
+		return (node.quasis ?? [])
+			.map((quasi: AnyNode) => {
+				const value = quasi.value as TemplateElementValue;
+				return value.cooked ?? value.raw;
+			})
+			.join("");
+	}
+	if (node?.type === "BinaryExpression" && node.operator === "+") {
+		const left = staticStringOf(node.left as AnyNode | undefined);
+		const right = staticStringOf(node.right as AnyNode | undefined);
+		if (left !== undefined && right !== undefined) return left + right;
+	}
+	return undefined;
+}
+
+function requireString(value: unknown, name: string): string {
+	if (typeof value !== "string") throw new TypeError(`${name} must be a string`);
+	return value;
+}
+
+function optionalString(value: unknown, name: string): string | undefined {
+	if (value === undefined) return undefined;
+	return requireString(value, name);
+}
+
+function normalizeAgentOptions(value: unknown): AgentOptions {
+	if (!value || typeof value !== "object") throw new TypeError("agent options must be an object");
+	const options = value as AgentOptions;
+	if (options.isolation !== undefined && options.isolation !== "worktree") {
+		throw new TypeError("agent isolation must be 'worktree'");
+	}
+	return {
+		...options,
+		label: optionalString(options.label, "agent label"),
+		phase: optionalString(options.phase, "agent phase"),
+		role: optionalString(options.role, "agent role"),
+		model: optionalString(options.model, "agent model"),
+		instructions: optionalString(options.instructions, "agent instructions"),
+		reuseBranch: optionalString(options.reuseBranch, "agent reuseBranch"),
+		agentType: optionalString(options.agentType, "agent type"),
+	};
+}
+
+function assertStructuredCloneable(value: unknown, name: string): void {
+	try {
+		structuredClone(value);
+	} catch (error) {
+		const detail = error instanceof Error ? ` ${error.message}` : "";
+		throw new Error(
+			`${name} must be structured-cloneable; did you forget to await agent(), parallel(), or pipeline()?${detail}`,
+		);
 	}
 }
 

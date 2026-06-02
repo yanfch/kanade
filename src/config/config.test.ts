@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -37,6 +37,9 @@ describe("loadConfig", () => {
 			inheritPiSettings: true,
 			disableSubagentCompaction: true,
 		});
+		expect(config.paths.worktreesDir).toBe(join(root, "worktrees"));
+		expect(config.isolation.worktreeBaseDir).toBe(config.paths.worktreesDir);
+		expect(existsSync(config.paths.worktreesDir)).toBe(true);
 	});
 
 	it("merges explicit kanade model config", () => {

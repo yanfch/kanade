@@ -12,33 +12,37 @@ import { describe, expect, it } from "vitest";
 import { createMockSessionFactory } from "./mock-session.ts";
 import { createE2EContext, waitForTask } from "./setup.ts";
 
-/** Clean up git worktrees and branches created by worktree tests */
+/**
+ * Clean up git worktrees and branches created by worktree tests.
+ * Test task IDs use "X-" prefix, so we only delete branches matching "kanade/X-".
+ */
 function cleanupBranches() {
+	const testBranches: string[] = [];
 	try {
-		// First remove worktrees
-		const wtOut = execSync("git worktree list", { encoding: "utf8", cwd: process.cwd() });
-		for (const line of wtOut.split("\n")) {
-			const parts = line.split(/\s+/);
-			const wtPath = parts[0];
-			if (wtPath.includes("kanade") || wtPath.includes("worktrees")) {
-				try {
-					execSync(`git worktree remove --force ${wtPath}`, { cwd: process.cwd(), stdio: "ignore" });
-				} catch {}
-			}
-		}
+		execSync("git worktree prune", { cwd: process.cwd(), stdio: "ignore" });
 	} catch {}
 	try {
-		// Then delete branches
 		const out = execSync("git branch", { encoding: "utf8", cwd: process.cwd() });
 		for (const line of out.split("\n")) {
-			const branch = line.replace(/^\*?\s*/, "").trim();
-			if (branch.startsWith("kanade/")) {
-				try {
-					execSync(`git branch -D ${branch}`, { cwd: process.cwd(), stdio: "ignore" });
-				} catch {}
-			}
+			const branch = line.replace(/^[*+]\s*/, "").trim();
+			if (branch.startsWith("kanade/X-")) testBranches.push(branch);
 		}
 	} catch {}
+	for (const branch of testBranches) {
+		try {
+			const wtOut = execSync("git worktree list", { encoding: "utf8", cwd: process.cwd() });
+			for (const line of wtOut.split("\n")) {
+				const parts = line.split(/\s+/);
+				const wtBranch = parts[2]?.replace(/^\[/g, "").replace(/\]$/g, "");
+				if (wtBranch === branch && parts[0]) {
+					execSync(`git worktree remove "${parts[0]}" --force`, { cwd: process.cwd(), stdio: "ignore" });
+				}
+			}
+		} catch {}
+		try {
+			execSync(`git branch -D ${branch}`, { cwd: process.cwd(), stdio: "ignore" });
+		} catch {}
+	}
 }
 
 // ── E1: Single agent with structured output ─────────────────────────────────
@@ -209,7 +213,7 @@ return decision`,
 // ── E5: Agent failure ───────────────────────────────────────────────────────
 
 describe("E2E — agent failure", () => {
-	it("returns null for failed agent, workflow continues", async () => {
+	it("agent failure propagates error and task fails", async () => {
 		const mock = createMockSessionFactory({ error: new Error("LLM rate limited") });
 		const ctx = createE2EContext(mock.createSession);
 		try {
@@ -220,10 +224,10 @@ const r = await agent('this will fail', { label: 'failing' })
 return { result: r, failed: r === null }`,
 			});
 
-			await waitForTask(ctx.taskManager, task.task_id);
-			const result = JSON.parse(ctx.taskManager.get(task.task_id)?.result ?? "null");
-			expect(result.result).toBeNull();
-			expect(result.failed).toBe(true);
+			await waitForTask(ctx.taskManager, task.task_id, "failed", 5000);
+			const row = ctx.taskManager.get(task.task_id);
+			expect(row?.status).toBe("failed");
+			expect(row?.error).toContain("LLM rate limited");
 		} finally {
 			ctx.cleanup();
 		}
@@ -578,9 +582,10 @@ const r = await agent('will fail', { label: 'broken' })
 return { r }`,
 			});
 
-			await waitForTask(ctx.taskManager, task.task_id);
+			await waitForTask(ctx.taskManager, task.task_id, "failed", 5000);
 
 			const snap = ctx.taskManager.getSnapshot(task.task_id);
+			expect(snap).not.toBeNull();
 			expect(snap!.agents).toHaveLength(1);
 			expect(snap!.agents[0].status).toBe("error");
 			expect(snap!.errorCount).toBe(1);
@@ -866,7 +871,7 @@ return { a, b }`,
 // ── Worktree cleanup verification ───────────────────────────────────────────
 
 describe("E2E — worktree cleanup", () => {
-	it("task finish removes worktree dir but keeps branch", async () => {
+	it("task finish keeps worktree dir and branch for inspection", async () => {
 		cleanupBranches();
 		const mock = createMockSessionFactory({ text: "ok" });
 		const ctx = createE2EContext(mock.createSession);
@@ -880,9 +885,9 @@ return await agent('work', { label: 'dev', isolation: 'worktree' })`,
 			await waitForTask(ctx.taskManager, task.task_id);
 			expect(ctx.taskManager.get(task.task_id)?.status).toBe("finished");
 
-			// Branch should still exist (kept for merge)
+			// Branch should still exist (kept for merge/reject)
 			const branches = execSync("git branch | grep kanade/", { encoding: "utf8", cwd: process.cwd() });
-			expect(branches).toContain(`kanade/${task.task_id}/dev`);
+			expect(branches).toContain(`kanade/${task.task_id}`);
 		} finally {
 			ctx.cleanup();
 			cleanupBranches();
@@ -937,7 +942,7 @@ return await agent('setup', { label: 'dev', isolation: 'worktree' })`,
 			const task2 = ctx.taskManager.create({
 				source: "inline",
 				script: `export const meta = { name: 'test', description: 'Test' }
-return await agent('iterate', { label: 'dev-v2', isolation: 'worktree', reuseBranch: 'kanade/${task1.task_id}/dev' })`,
+return await agent('iterate', { label: 'dev-v2', isolation: 'worktree', reuseBranch: 'kanade/${task1.task_id}' })`,
 			});
 			await waitForTask(ctx.taskManager, task2.task_id);
 			expect(ctx.taskManager.get(task2.task_id)?.status).toBe("finished");

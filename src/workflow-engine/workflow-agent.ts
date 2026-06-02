@@ -59,7 +59,7 @@ export interface WorkflowAgentOptions {
 	disableSubagentCompaction?: boolean;
 	journal?: AgentJournal;
 	/** IsolationManager instance for worktree isolation. */
-	isolationManager?: Pick<IsolationManager, "prepare">;
+	isolationManager?: Pick<IsolationManager, "prepare" | "commitDirtyWorktree">;
 	/** Task ID passed to IsolationManager.prepare(). */
 	taskId?: string;
 	/** Persist subagent sessions to disk. Default: false */
@@ -77,6 +77,21 @@ export interface RetryOptions {
 	backoffMs?: number;
 }
 
+export interface SessionUsage {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	totalTokens: number;
+	cost: {
+		input: number;
+		output: number;
+		cacheRead: number;
+		cacheWrite: number;
+		total: number;
+	};
+}
+
 export interface AgentRunOptions<TSchemaDef extends TSchema | undefined = undefined> {
 	label?: string;
 	schema?: TSchemaDef;
@@ -91,6 +106,8 @@ export interface AgentRunOptions<TSchemaDef extends TSchema | undefined = undefi
 	baseBranch?: string;
 	/** Retry configuration for transient failures */
 	retry?: RetryOptions;
+	/** Callback to receive cumulative session usage after each prompt. */
+	onUsage?: (usage: SessionUsage) => void;
 }
 
 export type AgentRunResult<TSchemaDef extends TSchema | undefined> = TSchemaDef extends TSchema
@@ -112,7 +129,7 @@ export class WorkflowAgent {
 	private readonly inheritPiSettings: boolean;
 	private readonly disableSubagentCompaction: boolean;
 	private readonly journal?: AgentJournal;
-	private readonly isolationManager?: Pick<IsolationManager, "prepare">;
+	private readonly isolationManager?: Pick<IsolationManager, "prepare" | "commitDirtyWorktree">;
 	private readonly taskId?: string;
 	private readonly persistSubagents: boolean;
 	private readonly persistFilter?: (label: string) => boolean;
@@ -179,6 +196,7 @@ export class WorkflowAgent {
 		const retry = options.retry;
 		const maxAttempts = 1 + (retry?.maxRetries ?? 0);
 		const backoffMs = retry?.backoffMs ?? 1000;
+		let agentResult: unknown;
 
 		try {
 			let lastError: unknown;
@@ -229,6 +247,11 @@ export class WorkflowAgent {
 					await session.prompt(this.buildPrompt(prompt, options, roleConfig, Boolean(schema), additionalInstructions));
 					if (options.signal?.aborted) throw new Error("Subagent was aborted");
 
+					if (schema && !capture.called) {
+						await session.prompt(this.buildStructuredOutputCorrectionPrompt());
+						if (options.signal?.aborted) throw new Error("Subagent was aborted");
+					}
+
 					let result: AgentRunResult<TSchemaDef>;
 					if (schema) {
 						if (!capture.called) {
@@ -240,6 +263,8 @@ export class WorkflowAgent {
 					}
 
 					this.journal?.write(cacheKey, { result, tokens: estimateTokens(result) });
+					this.emitSessionUsage(session, options.onUsage);
+					agentResult = result;
 					return result;
 				} catch (err) {
 					lastError = err;
@@ -252,6 +277,16 @@ export class WorkflowAgent {
 			}
 			throw lastError;
 		} finally {
+			// Auto-commit dirty worktree changes after each agent run
+			if (isoCtx?.worktree && this.isolationManager) {
+				try {
+					// Build meaningful commit message from agent result
+					const summary = this.extractCommitSummary(agentResult, label);
+					await this.isolationManager.commitDirtyWorktree(isoCtx.worktree.path, summary);
+				} catch {
+					// best effort — don't fail the agent run
+				}
+			}
 			await isoCtx?.cleanup();
 		}
 	}
@@ -324,6 +359,57 @@ export class WorkflowAgent {
 			hasSchema: structured,
 			additionalInstructions,
 		});
+	}
+
+	private buildStructuredOutputCorrectionPrompt(): string {
+		return [
+			"Your previous response did not call structured_output, so the workflow cannot use your result.",
+			"You must now call structured_output exactly once with JSON matching the provided schema.",
+			"If the task is complete, summarize the completed work in structured_output.",
+			"If you are blocked or did not complete the task, call structured_output with status='blocked' when the schema supports it and explain why.",
+			"Do not answer in prose.",
+		].join("\n");
+	}
+
+	private emitSessionUsage(session: { messages: unknown[] }, onUsage?: (usage: SessionUsage) => void): void {
+		if (!onUsage) return;
+		for (let i = session.messages.length - 1; i >= 0; i--) {
+			const msg = session.messages[i] as Record<string, unknown> | undefined;
+			if (msg?.role !== "assistant" || !msg.usage) continue;
+			const u = msg.usage as Record<string, unknown>;
+			const cost = (u.cost ?? {}) as Record<string, number>;
+			onUsage({
+				input: Number(u.input ?? 0),
+				output: Number(u.output ?? 0),
+				cacheRead: Number(u.cacheRead ?? 0),
+				cacheWrite: Number(u.cacheWrite ?? 0),
+				totalTokens: Number(u.totalTokens ?? 0),
+				cost: {
+					input: Number(cost.input ?? 0),
+					output: Number(cost.output ?? 0),
+					cacheRead: Number(cost.cacheRead ?? 0),
+					cacheWrite: Number(cost.cacheWrite ?? 0),
+					total: Number(cost.total ?? 0),
+				},
+			});
+			return;
+		}
+	}
+
+	private extractCommitSummary(result: unknown, label: string): string {
+		if (result && typeof result === "object") {
+			const r = result as Record<string, unknown>;
+			// Use structured output summary if available
+			if (typeof r.summary === "string" && r.summary.trim()) {
+				const summary = r.summary.trim().slice(0, 120);
+				return `[${label}] ${summary}`;
+			}
+			// Use status + filesChanged if available
+			if (r.status && Array.isArray(r.filesChanged) && r.filesChanged.length > 0) {
+				return `[${label}] ${r.status}: ${r.filesChanged.join(", ")}`;
+			}
+		}
+		return `[${label}] auto-commit`;
 	}
 
 	private lastAssistantText(messages: unknown[]): string {

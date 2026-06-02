@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@earendil-works/pi-coding-agent";
-import { SpanStatusCode, type Tracer } from "@opentelemetry/api";
+import { type Context, type Span, SpanStatusCode, type Tracer, context, trace } from "@opentelemetry/api";
 import type { KanadeConfig } from "../config/index.ts";
 import type { HumanGate } from "../human/index.ts";
 import { IsolationManager } from "../isolation/index.ts";
@@ -22,6 +22,8 @@ export interface TaskOptions {
 	model?: string;
 	concurrency?: number;
 	token_budget?: number;
+	/** Per-task cost limit in USD. Overrides global default. */
+	cost_budget?: number;
 }
 
 export type CreateTaskInput =
@@ -37,6 +39,15 @@ export interface CreateTaskResult {
 	generated?: true;
 }
 
+export interface GenerateWorkflowResult {
+	script: string;
+}
+
+interface TaskTrace {
+	span: Span;
+	context: Context;
+}
+
 export class TaskManager {
 	private nextTaskSeq = 1;
 	private readonly controllers = new Map<string, AbortController>();
@@ -45,6 +56,10 @@ export class TaskManager {
 	private readonly isolation: IsolationManager;
 	/** Exposed for CleanupScheduler access. */
 	readonly isolationManager: IsolationManager;
+
+	// Daily cost tracking
+	private dailyCostDate = new Date().toISOString().slice(0, 10);
+	private dailyCostTotal = 0;
 
 	private readonly logger: TracingLogger;
 	private readonly tracer: Tracer;
@@ -80,6 +95,11 @@ export class TaskManager {
 		this.tracer = tracing?.tracer ?? ({ startSpan: () => noopSpan } as unknown as Tracer);
 		this.isolationManager = this.isolation;
 		this.snapshotBuilder = new SnapshotBuilder(events);
+	}
+
+	async generateWorkflow(prompt: string, options?: TaskOptions): Promise<GenerateWorkflowResult> {
+		if (!prompt?.trim()) throw new AppError("prompt is required", 400);
+		return { script: await this.author.generate(prompt, { model: options?.model }) };
 	}
 
 	create(input: CreateTaskInput): CreateTaskResult {
@@ -119,9 +139,10 @@ export class TaskManager {
 			result: null,
 		});
 
+		const taskTrace = this.startTaskTrace(taskId, "generated");
 		this.events.emit("task.created", { taskId, runDir, workflowPath }, taskId);
-		this.logger.forTask(taskId).info("task created", { source: "generated" });
-		void this.runGenerated(taskId, workflowPath, prompt, args, options).catch(() => undefined);
+		this.logger.forTask(taskId).withContext(taskTrace.context).info("task created", { source: "generated" });
+		void this.runGenerated(taskId, workflowPath, prompt, args, options, taskTrace).catch(() => undefined);
 		return { task_id: taskId, run_dir: runDir, workflow_path: workflowPath, generated: true };
 	}
 
@@ -131,16 +152,40 @@ export class TaskManager {
 		prompt: string,
 		args: unknown,
 		options: TaskOptions | undefined,
+		taskTrace: TaskTrace,
 	): Promise<void> {
 		try {
-			const script = await this.author.generate(prompt);
+			const authorSpan = this.tracer.startSpan(
+				"workflow.author",
+				{ attributes: { [Attrs.TASK_ID]: taskId, "kanade.author.model": options?.model ?? "" } },
+				taskTrace.context,
+			);
+			let script: string;
+			try {
+				script = await this.author.generate(prompt, { model: options?.model });
+				authorSpan.setStatus({ code: SpanStatusCode.OK });
+			} catch (error) {
+				authorSpan.setStatus({ code: SpanStatusCode.ERROR, message: String(error) });
+				if (error instanceof Error) authorSpan.recordException(error);
+				throw error;
+			} finally {
+				authorSpan.end();
+			}
 			writeFileSync(workflowPath, script, "utf8");
+			this.logger.forTask(taskId).withContext(taskTrace.context).info("workflow script generated", {
+				model: options?.model,
+			});
 			this.events.emit("task.script_generated", { taskId, workflowPath }, taskId);
-			await this.run(taskId, script, args, options);
+			await this.run(taskId, script, args, options, taskTrace);
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);
 			this.store.updateTask(taskId, { status: "failed", finished_at: Date.now(), error: msg });
 			this.events.emit("task.failed", { taskId, error: msg }, taskId);
+			taskTrace.span.setStatus({ code: SpanStatusCode.ERROR, message: msg });
+			taskTrace.span.setAttribute(Attrs.TASK_STATUS, "failed");
+			if (error instanceof Error) taskTrace.span.recordException(error);
+			this.logger.forTask(taskId).withContext(taskTrace.context).info("task failed", { error: msg });
+			taskTrace.span.end();
 		}
 	}
 
@@ -175,9 +220,10 @@ export class TaskManager {
 			result: null,
 		});
 
+		const taskTrace = this.startTaskTrace(taskId, source);
 		this.events.emit("task.created", { taskId, runDir, workflowPath }, taskId);
-		this.logger.forTask(taskId).info("task created", { source });
-		void this.run(taskId, script, args, options).catch(() => undefined);
+		this.logger.forTask(taskId).withContext(taskTrace.context).info("task created", { source });
+		void this.run(taskId, script, args, options, taskTrace).catch(() => undefined);
 		return { task_id: taskId, run_dir: runDir, workflow_path: workflowPath };
 	}
 
@@ -242,12 +288,16 @@ export class TaskManager {
 			{ taskId: newTaskId, runDir: newRunDir, workflowPath, iterateFrom: parentTaskId },
 			newTaskId,
 		);
-		this.logger.forTask(newTaskId).info("task created", {
-			source: "iterate",
-			parent: parentTaskId,
-			instructions: options.instructions ?? "",
-		});
-		void this.run(newTaskId, script, iterateArgs, parentOptions).catch(() => undefined);
+		const taskTrace = this.startTaskTrace(newTaskId, parentTask.workflow_source);
+		this.logger
+			.forTask(newTaskId)
+			.withContext(taskTrace.context)
+			.info("task created", {
+				source: "iterate",
+				parent: parentTaskId,
+				instructions: options.instructions ?? "",
+			});
+		void this.run(newTaskId, script, iterateArgs, parentOptions, taskTrace).catch(() => undefined);
 		return { task_id: newTaskId, run_dir: newRunDir, workflow_path: workflowPath };
 	}
 
@@ -362,8 +412,12 @@ export class TaskManager {
 			{ taskId: newTaskId, runDir: newRunDir, workflowPath, rerunOf: taskId },
 			newTaskId,
 		);
-		this.logger.forTask(newTaskId).info("task created", { source: "rerun", rerunOf: taskId });
-		void this.run(newTaskId, script, overrides.args, mergedOptions).catch(() => undefined);
+		const taskTrace = this.startTaskTrace(newTaskId, task.workflow_source);
+		this.logger
+			.forTask(newTaskId)
+			.withContext(taskTrace.context)
+			.info("task created", { source: "rerun", rerunOf: taskId });
+		void this.run(newTaskId, script, overrides.args, mergedOptions, taskTrace).catch(() => undefined);
 		return { task_id: newTaskId, run_dir: newRunDir, workflow_path: workflowPath, rerun_of: taskId };
 	}
 
@@ -436,7 +490,13 @@ export class TaskManager {
 		return this.controllers.size;
 	}
 
-	private async run(taskId: string, script: string, args: unknown, options: TaskOptions = {}): Promise<void> {
+	private async run(
+		taskId: string,
+		script: string,
+		args: unknown,
+		options: TaskOptions = {},
+		taskTrace = this.startTaskTrace(taskId, this.store.getTask(taskId)?.workflow_source ?? "unknown"),
+	): Promise<void> {
 		// Rate limiting
 		const max = this.config.defaults.maxConcurrentTasks;
 		if (max > 0 && this.runningCount >= max) {
@@ -451,17 +511,13 @@ export class TaskManager {
 		const runDir = join(this.config.paths.runsDir, taskId);
 		const journal = new Journal(join(runDir, "journal.db"));
 
-		const taskLog = this.logger.forTask(taskId);
-		taskLog.info("task running");
-
-		const span = this.tracer.startSpan("workflow.task", {
-			attributes: {
-				[Attrs.TASK_ID]: taskId,
-				[Attrs.TASK_SOURCE]: this.store.getTask(taskId)?.workflow_source ?? "unknown",
-			},
-		});
+		const span = taskTrace.span;
+		const traceContext = taskTrace.context;
+		const taskLog = this.logger.forTask(taskId).withContext(traceContext);
 
 		try {
+			this.checkDailyBudget();
+			taskLog.info("task running");
 			this.store.updateTask(taskId, { status: "running", started_at: Date.now() });
 			this.events.emit("task.running", { taskId }, taskId);
 
@@ -476,8 +532,10 @@ export class TaskManager {
 				model: options.model ?? this.config.defaults.model ?? undefined,
 				concurrency: options.concurrency ?? this.config.defaults.concurrency,
 				tokenBudget: options.token_budget ?? this.config.defaults.tokenBudget,
+				costBudget: options.cost_budget ?? this.config.defaults.costBudget,
 				signal: controller.signal,
 				tracer: this.tracer,
+				traceContext,
 				rolesDir: this.config.paths.rolesDir,
 				agentDir: this.resolveAgentDir(),
 				...(this.createSession ? { createSession: this.createSession } : {}),
@@ -506,7 +564,7 @@ export class TaskManager {
 						});
 						this.store.updateTask(taskId, { status: "needs_human" });
 						this.events.emit("task.needs_human", { taskId, requestId, request }, taskId);
-						this.logger.forTask(taskId).info("needs human input", { requestId });
+						taskLog.info("needs human input", { requestId });
 					},
 					wait: (requestId, signal) => this.humanGate.wait(requestId, signal),
 				},
@@ -518,6 +576,9 @@ export class TaskManager {
 				},
 				onAgentStart: (event) => this.events.emit("workflow.agent_started", { taskId, ...event }, taskId),
 				onAgentEnd: (event) => this.events.emit("workflow.agent_completed", { taskId, ...event }, taskId),
+				onUsage: (usage) => {
+					this.addDailyCost(usage.cost.total);
+				},
 			});
 
 			this.store.endCurrentPhase(taskId, Date.now());
@@ -555,15 +616,52 @@ export class TaskManager {
 		}
 	}
 
+	private startTaskTrace(taskId: string, source: string): TaskTrace {
+		const span = this.tracer.startSpan("workflow.task", {
+			attributes: {
+				[Attrs.TASK_ID]: taskId,
+				[Attrs.TASK_SOURCE]: source,
+			},
+		});
+		return { span, context: trace.setSpan(context.active(), span) };
+	}
+
 	private allocateTaskId(): string {
+		const prefix = this.config.defaults.taskIdPrefix ?? "T";
 		while (true) {
-			const id = `T-${String(this.nextTaskSeq++).padStart(4, "0")}`;
+			const id = `${prefix}-${String(this.nextTaskSeq++).padStart(4, "0")}`;
 			if (!this.store.getTask(id) && !existsSync(join(this.config.paths.runsDir, id))) return id;
 		}
 	}
 
 	private resolveAgentDir(): string | undefined {
 		return this.config.models.agentDir ?? this.config.models.piAgentDir ?? undefined;
+	}
+
+	/** Add cost to daily tracker (never throws). */
+	private addDailyCost(cost: number): void {
+		const today = new Date().toISOString().slice(0, 10);
+		if (today !== this.dailyCostDate) {
+			this.dailyCostDate = today;
+			this.dailyCostTotal = 0;
+		}
+		this.dailyCostTotal += cost;
+	}
+
+	/** Check if daily budget is exceeded. Call before starting a new task. */
+	private checkDailyBudget(): void {
+		const today = new Date().toISOString().slice(0, 10);
+		if (today !== this.dailyCostDate) {
+			this.dailyCostDate = today;
+			this.dailyCostTotal = 0;
+		}
+		const limit = this.config.defaults.dailyCostBudget;
+		if (limit > 0 && this.dailyCostTotal > limit) {
+			throw new AppError(
+				`Daily cost budget exceeded: $${this.dailyCostTotal.toFixed(4)} > $${limit.toFixed(2)} daily limit. No more tasks will run until tomorrow or budget is increased.`,
+				429,
+			);
+		}
 	}
 
 	/** Get the current snapshot for a task (real-time progress). */
@@ -601,11 +699,15 @@ export class TaskManager {
 		const agentDir = this.resolveAgentDir();
 		if (!agentDir) return new StubWorkflowAuthor();
 		try {
+			const persistDir = this.config.debug.persistSubagents
+				? join(this.config.paths.runsDir, "debug", "workflow-author")
+				: undefined;
 			return new LlmWorkflowAuthor({
 				agentDir,
 				authPath: this.config.models.authPath ?? undefined,
 				modelsPath: this.config.models.modelsPath ?? undefined,
 				model: this.config.defaults.model ?? undefined,
+				persistDir,
 			});
 		} catch {
 			return new StubWorkflowAuthor();
@@ -633,6 +735,7 @@ function createNoopLogger(): TracingLogger {
 		debug: noop,
 		forTask: () => self,
 		forComponent: () => self,
+		withContext: () => self,
 	} as unknown as TracingLogger;
 	return self;
 }

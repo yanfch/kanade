@@ -32,6 +32,7 @@ export interface MergeResult {
 	success: boolean;
 	mergeCommit?: string;
 	error?: string;
+	conflicts?: string[];
 }
 
 export interface PrepareOptions {
@@ -62,23 +63,30 @@ export class IsolationManager {
 		return this.prepareWorktree(opts);
 	}
 
+	/**
+	 * Finalize worktrees after task completion.
+	 *
+	 * IMPORTANT: "approved" never deletes the worktree. The user must explicitly
+	 * call merge() or reject() to decide the worktree's fate.
+	 *
+	 * - approved: mark inactive (keep dir + branch for inspection/merge)
+	 * - rejected + autoCleanupOnReject: remove dir + branch
+	 * - aborted + autoCleanupOnAbort: remove dir + branch
+	 * - rejected/aborted without cleanup: mark status only
+	 */
 	async finalizeWorktrees(taskId: string, decision: "approved" | "rejected" | "aborted"): Promise<void> {
 		const rows = this.store.findWorktreesByTask(taskId);
 		for (const row of rows) {
 			if (decision === "rejected" && (this.config.autoCleanupOnReject ?? true)) {
-				// rejected + cleanup enabled: remove worktree dir + branch
 				await this.removeWorktree(row);
 				this.store.updateWorktree(row.id, { status: "rejected", finished_at: Date.now() });
 			} else if (decision === "aborted" && (this.config.autoCleanupOnAbort ?? true)) {
-				// aborted + cleanup enabled: remove worktree dir + branch
 				await this.removeWorktree(row);
 				this.store.updateWorktree(row.id, { status: "abandoned", finished_at: Date.now() });
 			} else if (decision === "approved") {
-				// approved: remove worktree dir to save disk, keep branch for merge
-				await this.removeWorktreeDir(row);
+				// NEVER delete worktree on approval. User must explicitly merge or reject.
 				this.store.updateWorktree(row.id, { status: "inactive", finished_at: Date.now() });
 			} else {
-				// rejected/aborted with cleanup disabled: keep everything
 				this.store.updateWorktree(row.id, {
 					status: decision === "rejected" ? "rejected" : "abandoned",
 					finished_at: Date.now(),
@@ -98,12 +106,16 @@ export class IsolationManager {
 	/**
 	 * Merge a task's worktree branch into the target branch (typically develop).
 	 *
+	 * SAFETY: worktree is only deleted on successful merge. On failure, the
+	 * worktree and branch are preserved so the user can inspect/fix manually.
+	 *
 	 * Steps:
-	 * 1. Checkout target branch
-	 * 2. git merge --no-ff <branch>
-	 * 3. Run lint + test guards (if configured)
-	 * 4. On success: delete worktree dir + branch (if configured)
-	 * 5. On failure: git reset --hard to undo the merge
+	 * 1. Validate worktree dir and branch exist
+	 * 2. Commit dirty worktree changes
+	 * 3. Checkout target branch in base repo
+	 * 4. git merge --no-ff <branch>
+	 * 5. On success: delete worktree dir + branch (if configured)
+	 * 6. On failure: restore original branch, preserve worktree
 	 */
 	async merge(taskId: string): Promise<MergeResult> {
 		const rows = this.store.findWorktreesByTask(taskId);
@@ -111,25 +123,60 @@ export class IsolationManager {
 
 		const target = this.mergeConfig?.targetBranch ?? this.config.defaultBaseBranch;
 		const useNoFf = this.mergeConfig?.useNoFf ?? true;
-
-		// Use the first worktree's base_repo
 		const baseRepo = rows[0].base_repo;
 		const git = simpleGit(baseRepo);
-
-		// Save current branch to restore on failure
 		const currentBranch = (await git.branchLocal()).current;
 
 		try {
-			// 1. Checkout target
-			await git.checkoutLocalBranch(target).catch(() => git.checkout(target));
-
-			// 2. Merge each branch
+			// 1. Validate worktree integrity
 			for (const row of rows) {
-				const mergeArgs = useNoFf ? ["merge", "--no-ff", row.branch] : ["merge", row.branch];
-				await git.raw(mergeArgs);
+				if (!existsSync(row.worktree_path)) {
+					return { success: false, error: `Worktree directory missing: ${row.worktree_path}` };
+				}
+				const branches = await git.branchLocal();
+				if (!branches.all.includes(row.branch)) {
+					return { success: false, error: `Branch ${row.branch} not found in ${baseRepo}` };
+				}
 			}
 
-			// 3. Run lint guard
+			// 2. Commit dirty worktree changes
+			for (const row of rows) {
+				await this.commitDirtyWorktree(row);
+			}
+
+			// 3. Checkout target
+			await git.checkoutLocalBranch(target).catch(() => git.checkout(target));
+
+			// 4. Merge each branch
+			for (const row of rows) {
+				const mergeArgs = useNoFf ? ["merge", "--no-ff", row.branch] : ["merge", row.branch];
+				try {
+					await git.raw(mergeArgs);
+				} catch (mergeErr) {
+					// Merge failed — check if it's a conflict
+					await git.raw(["merge", "--abort"]).catch(() => {});
+					await git.checkout(currentBranch).catch(() => {});
+					const msg = mergeErr instanceof Error ? mergeErr.message : String(mergeErr);
+					return {
+						success: false,
+						error: `Merge conflict for ${row.branch}: ${msg}`,
+						conflicts: [msg],
+					};
+				}
+				// Verify merge didn't leave unresolved conflicts
+				const status = await git.status();
+				if (status.conflicted.length > 0) {
+					await git.raw(["merge", "--abort"]).catch(() => {});
+					await git.checkout(currentBranch).catch(() => {});
+					return {
+						success: false,
+						error: `Merge conflict in: ${status.conflicted.join(", ")}`,
+						conflicts: status.conflicted,
+					};
+				}
+			}
+
+			// 5. Run lint guard
 			if (this.mergeConfig?.requireCleanLint) {
 				try {
 					const { execSync } = await import("node:child_process");
@@ -140,7 +187,7 @@ export class IsolationManager {
 				}
 			}
 
-			// 4. Run test guard
+			// 6. Run test guard
 			if (this.mergeConfig?.requireCleanTest) {
 				try {
 					const { execSync } = await import("node:child_process");
@@ -151,11 +198,11 @@ export class IsolationManager {
 				}
 			}
 
-			// 5. Get merge commit hash
+			// 7. Success: get merge commit hash
 			const log = await git.log({ maxCount: 1 });
 			const mergeCommit = log.latest?.hash ?? "";
 
-			// 6. Update worktree status
+			// 8. Update worktree status and cleanup
 			for (const row of rows) {
 				this.store.updateWorktree(row.id, {
 					status: "merged",
@@ -163,7 +210,7 @@ export class IsolationManager {
 					finished_at: Date.now(),
 				});
 
-				// Delete worktree dir
+				// Delete worktree dir ONLY on success
 				await this.removeWorktreeDir(row);
 
 				// Delete branch if configured
@@ -178,24 +225,25 @@ export class IsolationManager {
 
 			return { success: true, mergeCommit };
 		} catch (err) {
-			// Rollback: reset to the state before merge
-			try {
-				await git.raw(["reset", "--hard", "HEAD~1"]);
-			} catch {
-				// reset may fail if merge didn't actually happen
-			}
-
-			// Restore original branch
+			// SAFETY: On failure, restore original branch. NEVER delete worktree.
 			try {
 				await git.checkout(currentBranch);
 			} catch {
 				// best effort
 			}
 
-			return {
-				success: false,
-				error: err instanceof Error ? err.message : String(err),
-			};
+			const msg = err instanceof Error ? err.message : String(err);
+			const isConflict = /CONFLICT|merge.*fail|cannot be merged|not something we can merge/i.test(msg);
+
+			if (isConflict) {
+				return {
+					success: false,
+					error: `Merge conflict. Resolve conflicts manually in ${baseRepo}, then run: kanade merge ${taskId}`,
+					conflicts: [msg],
+				};
+			}
+
+			return { success: false, error: msg };
 		}
 	}
 
@@ -214,9 +262,27 @@ export class IsolationManager {
 
 	private async prepareWorktree(opts: PrepareOptions): Promise<IsolationContext> {
 		const baseRepo = opts.baseRepo ?? this.config.defaultBaseRepo ?? process.cwd();
-		const baseBranch = opts.baseBranch ?? this.config.defaultBaseBranch;
+		// If no explicit baseBranch, use the current branch of the base repo, falling back to config default
+		let baseBranch = opts.baseBranch;
+		if (!baseBranch) {
+			try {
+				const git = simpleGit(baseRepo);
+				baseBranch = (await git.branchLocal()).current;
+			} catch {
+				baseBranch = this.config.defaultBaseBranch;
+			}
+		}
 
-		// Reuse existing worktree?
+		// Reuse existing task-scoped worktree by default so phases/agents can hand off code changes.
+		const existingForTask = this.store
+			.findWorktreesByTask(opts.taskId)
+			.find((row) => (row.status === "active" || row.status === "inactive") && existsSync(row.worktree_path));
+		if (existingForTask) {
+			this.store.updateWorktree(existingForTask.id, { status: "active", last_used_at: Date.now() });
+			return this.makeContext(existingForTask);
+		}
+
+		// Explicit branch reuse is kept for callers that want to attach to an existing task branch.
 		if (opts.reuseBranch) {
 			const existing = this.store.findWorktreeByBranch(opts.taskId, opts.reuseBranch);
 			if (existing && existsSync(existing.worktree_path)) {
@@ -225,10 +291,10 @@ export class IsolationManager {
 			}
 		}
 
-		const branch = `${this.config.branchPrefix}/${opts.taskId}/${opts.label}`;
+		const branch = `${this.config.branchPrefix}/${opts.taskId}`;
 		const worktreeBaseDir = this.config.worktreeBaseDir ?? join(baseRepo, "..");
-		const worktreePath = join(worktreeBaseDir, `${opts.taskId}-worktrees`, opts.label);
-		mkdirSync(join(worktreePath, ".."), { recursive: true });
+		const worktreePath = join(worktreeBaseDir, opts.taskId);
+		mkdirSync(worktreeBaseDir, { recursive: true });
 
 		const git = simpleGit(baseRepo);
 		await git.raw(["worktree", "add", "-b", branch, worktreePath, baseBranch]);
@@ -265,9 +331,21 @@ export class IsolationManager {
 		};
 	}
 
+	/** Commit dirty changes in a worktree. Safe to call multiple times. */
+	async commitDirtyWorktree(rowOrPath: WorktreeRow | string, label?: string): Promise<void> {
+		const worktreePath = typeof rowOrPath === "string" ? rowOrPath : rowOrPath.worktree_path;
+		const taskLabel = typeof rowOrPath === "string" ? "" : rowOrPath.task_id;
+		const agentLabel = label ?? (typeof rowOrPath === "string" ? "" : rowOrPath.label);
+		if (!existsSync(worktreePath)) return;
+		const git = simpleGit(worktreePath);
+		const status = await git.status();
+		if (status.isClean()) return;
+		await git.add(".");
+		await git.commit(`kanade: save ${taskLabel} ${agentLabel} changes`);
+	}
+
 	private async removeWorktree(row: WorktreeRow): Promise<void> {
 		await this.removeWorktreeDir(row);
-		// delete branch
 		try {
 			const git = simpleGit(row.base_repo);
 			await git.deleteLocalBranch(row.branch, true);

@@ -17,6 +17,7 @@ export interface KanadePaths {
 	readonly workflowsDir: string;
 	readonly sharedExtensionsDir: string;
 	readonly runsDir: string;
+	readonly worktreesDir: string;
 	readonly tracesDir: string;
 	readonly stateDb: string;
 	readonly logsDir: string;
@@ -79,6 +80,12 @@ export interface TracingConfig {
 export interface DefaultsConfig {
 	model: string | null;
 	tokenBudget: number;
+	/** Per-task cost limit in USD. Task pauses when exceeded. */
+	costBudget: number;
+	/** Daily total cost limit in USD across all tasks. */
+	dailyCostBudget: number;
+	/** Task ID prefix. Default: "T". Tests use "X" to avoid collisions. */
+	taskIdPrefix?: string;
 	concurrency: number;
 	/** Maximum number of tasks running simultaneously. 0 = unlimited. */
 	maxConcurrentTasks: number;
@@ -166,6 +173,7 @@ function buildPaths(root: string): KanadePaths {
 		workflowsDir: join(root, "workflows"),
 		sharedExtensionsDir: join(root, "shared", "extensions"),
 		runsDir: join(root, "runs"),
+		worktreesDir: join(root, "worktrees"),
 		tracesDir: process.env.KANADE_TRACES_DIR ?? join(root, "traces"),
 		stateDb: join(root, "db", "state.db"),
 		logsDir: join(root, "logs"),
@@ -183,7 +191,7 @@ function defaultConfig(paths: KanadePaths): KanadeConfig {
 			defaultMode: "worktree",
 			defaultBaseBranch: "develop",
 			defaultBaseRepo: null,
-			worktreeBaseDir: paths.runsDir,
+			worktreeBaseDir: paths.worktreesDir,
 			branchPrefix: "kanade",
 			autoCleanupOnReject: true,
 			autoCleanupOnApprove: false,
@@ -220,6 +228,8 @@ function defaultConfig(paths: KanadePaths): KanadeConfig {
 		defaults: {
 			model: null,
 			tokenBudget: 2_000_000,
+			costBudget: 5.0,
+			dailyCostBudget: 100.0,
 			concurrency: 16,
 			maxConcurrentTasks: 0,
 		},
@@ -280,6 +290,7 @@ export function loadConfig(): KanadeConfig {
 		paths.rolesDir,
 		paths.workflowsDir,
 		paths.runsDir,
+		paths.worktreesDir,
 		paths.tracesDir,
 		paths.logsDir,
 		dirname(paths.sharedExtensionsDir),
