@@ -226,7 +226,7 @@ async function cmdShow(taskId: string, args: ReturnType<typeof parseArgs>["value
 	console.log(`  ${pc.dim("Duration:")}  ${duration(t.started_at as number, t.finished_at as number)}`);
 
 	if (t.base_branch) {
-		console.log(`  ${pc.dim("Branch:")}    ${t.base_branch}`);
+		console.log(`  ${pc.dim("Base Branch:")}    ${t.base_branch}`);
 	}
 
 	if (t.error) {
