@@ -14,27 +14,20 @@ import { createE2EContext, waitForTask } from "./setup.ts";
 
 /**
  * Clean up git worktrees and branches created by worktree tests.
- * Only removes worktrees whose branch starts with the test prefix "kanade/T-"
- * to avoid deleting real task worktrees (e.g. kanade/T-0032).
+ * Test task IDs use "X-" prefix, so we only delete branches matching "kanade/X-".
  */
 function cleanupBranches() {
 	const testBranches: string[] = [];
 	try {
-		// Prune stale worktree references first
 		execSync("git worktree prune", { cwd: process.cwd(), stdio: "ignore" });
 	} catch {}
 	try {
-		// Collect test branches
 		const out = execSync("git branch", { encoding: "utf8", cwd: process.cwd() });
 		for (const line of out.split("\n")) {
 			const branch = line.replace(/^[*+]\s*/, "").trim();
-			// Only clean up branches matching test task IDs (T-0001, T-0002, etc.)
-			if (/^kanade\/T-\d{4}$/.test(branch)) {
-				testBranches.push(branch);
-			}
+			if (branch.startsWith("kanade/X-")) testBranches.push(branch);
 		}
 	} catch {}
-	// Remove worktrees for test branches only
 	for (const branch of testBranches) {
 		try {
 			const wtOut = execSync("git worktree list", { encoding: "utf8", cwd: process.cwd() });
@@ -46,7 +39,6 @@ function cleanupBranches() {
 				}
 			}
 		} catch {}
-		// Force delete the branch even if worktree removal failed
 		try {
 			execSync(`git branch -D ${branch}`, { cwd: process.cwd(), stdio: "ignore" });
 		} catch {}

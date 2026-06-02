@@ -84,6 +84,8 @@ export interface DefaultsConfig {
 	costBudget: number;
 	/** Daily total cost limit in USD across all tasks. */
 	dailyCostBudget: number;
+	/** Task ID prefix. Default: "T". Tests use "X" to avoid collisions. */
+	taskIdPrefix?: string;
 	concurrency: number;
 	/** Maximum number of tasks running simultaneously. 0 = unlimited. */
 	maxConcurrentTasks: number;

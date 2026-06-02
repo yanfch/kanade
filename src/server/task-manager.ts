@@ -627,8 +627,9 @@ export class TaskManager {
 	}
 
 	private allocateTaskId(): string {
+		const prefix = this.config.defaults.taskIdPrefix ?? "T";
 		while (true) {
-			const id = `T-${String(this.nextTaskSeq++).padStart(4, "0")}`;
+			const id = `${prefix}-${String(this.nextTaskSeq++).padStart(4, "0")}`;
 			if (!this.store.getTask(id) && !existsSync(join(this.config.paths.runsDir, id))) return id;
 		}
 	}

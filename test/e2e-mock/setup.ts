@@ -48,6 +48,7 @@ export function createE2EContext(
 	const config = loadConfig();
 	// Use current git branch as base for worktree tests
 	config.isolation.defaultBaseBranch = currentBranch();
+	config.defaults.taskIdPrefix = "X";
 	if (opts.persistSubagents) {
 		config.debug.persistSubagents = true;
 	}
