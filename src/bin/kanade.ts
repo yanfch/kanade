@@ -240,7 +240,7 @@ async function cmdShow(taskId: string, args: ReturnType<typeof parseArgs>["value
 	if (worktrees.worktrees.length > 0) {
 		const wt = worktrees.worktrees[0];
 		console.log(`  ${pc.dim("Isolation:")}   ${pc.cyan("worktree")}`);
-		console.log(`  ${pc.dim("Branch:")}     ${pc.white(String(wt.branch))}`);
+		console.log(`  ${pc.dim("Git Branch:")}     ${pc.white(String(wt.branch))}`);
 		console.log(`  ${pc.dim("Worktree:")}   ${pc.dim(String(wt.worktree_path))}`);
 	} else {
 		console.log(`  ${pc.dim("Isolation:")}   ${pc.dim("none")}`);
