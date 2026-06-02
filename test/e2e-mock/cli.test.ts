@@ -135,14 +135,31 @@ describe("CLI — show", () => {
 		expect(out).toContain("Journal");
 	});
 
+	it("displays Base branch and Isolation info", async () => {
+		const taskId = await createTask(
+			`export const meta = { name: 'cli-show-isolation', description: 'Test' }\nreturn { ok: true }`,
+		);
+		const out = cli(`show ${taskId}`);
+		expect(out).toContain("Base branch:");
+		expect(out).toContain("develop");
+		expect(out).toContain("Isolation:");
+		expect(out).toContain("none");
+	});
+
 	it("--json returns full task object", async () => {
 		const taskId = await createTask(
 			`export const meta = { name: 'cli-show-json', description: 'Test' }\nreturn 'done'`,
 		);
-		const body = cliJson(`show ${taskId}`) as { task: { id: string; status: string }; journal: unknown };
+		const body = cliJson(`show ${taskId}`) as {
+			task: { id: string; status: string };
+			journal: unknown;
+			worktrees: unknown[];
+		};
 		expect(body.task.id).toBe(taskId);
 		expect(body.task.status).toBe("finished");
 		expect(body).toHaveProperty("journal");
+		expect(body).toHaveProperty("worktrees");
+		expect(Array.isArray(body.worktrees)).toBe(true);
 	});
 });
 
