@@ -150,7 +150,30 @@ export class IsolationManager {
 			// 4. Merge each branch
 			for (const row of rows) {
 				const mergeArgs = useNoFf ? ["merge", "--no-ff", row.branch] : ["merge", row.branch];
-				await git.raw(mergeArgs);
+				try {
+					await git.raw(mergeArgs);
+				} catch (mergeErr) {
+					// Merge failed — check if it's a conflict
+					await git.raw(["merge", "--abort"]).catch(() => {});
+					await git.checkout(currentBranch).catch(() => {});
+					const msg = mergeErr instanceof Error ? mergeErr.message : String(mergeErr);
+					return {
+						success: false,
+						error: `Merge conflict for ${row.branch}: ${msg}`,
+						conflicts: [msg],
+					};
+				}
+				// Verify merge didn't leave unresolved conflicts
+				const status = await git.status();
+				if (status.conflicted.length > 0) {
+					await git.raw(["merge", "--abort"]).catch(() => {});
+					await git.checkout(currentBranch).catch(() => {});
+					return {
+						success: false,
+						error: `Merge conflict in: ${status.conflicted.join(", ")}`,
+						conflicts: status.conflicted,
+					};
+				}
 			}
 
 			// 5. Run lint guard
