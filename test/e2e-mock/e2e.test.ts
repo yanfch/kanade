@@ -12,33 +12,40 @@ import { describe, expect, it } from "vitest";
 import { createMockSessionFactory } from "./mock-session.ts";
 import { createE2EContext, waitForTask } from "./setup.ts";
 
-/** Clean up git worktrees and branches created by worktree tests */
+/**
+ * Clean up git worktrees and branches created by worktree tests.
+ * Only removes worktrees whose branch starts with the test prefix "kanade/T-"
+ * to avoid deleting real task worktrees (e.g. kanade/T-0032).
+ */
 function cleanupBranches() {
+	const testBranches: string[] = [];
 	try {
-		// First remove worktrees
-		const wtOut = execSync("git worktree list", { encoding: "utf8", cwd: process.cwd() });
-		for (const line of wtOut.split("\n")) {
-			const parts = line.split(/\s+/);
-			const wtPath = parts[0];
-			if (wtPath.includes("kanade") || wtPath.includes("worktrees")) {
-				try {
-					execSync(`git worktree remove --force ${wtPath}`, { cwd: process.cwd(), stdio: "ignore" });
-				} catch {}
-			}
-		}
-	} catch {}
-	try {
-		// Then delete branches
+		// Collect test branches first
 		const out = execSync("git branch", { encoding: "utf8", cwd: process.cwd() });
 		for (const line of out.split("\n")) {
 			const branch = line.replace(/^\*?\s*/, "").trim();
-			if (branch.startsWith("kanade/")) {
-				try {
-					execSync(`git branch -D ${branch}`, { cwd: process.cwd(), stdio: "ignore" });
-				} catch {}
+			// Only clean up branches matching test task IDs (T-0001, T-0002, etc.)
+			if (/^kanade\/T-\d{4}$/.test(branch)) {
+				testBranches.push(branch);
 			}
 		}
 	} catch {}
+	// Remove worktrees for test branches only
+	for (const branch of testBranches) {
+		try {
+			const wtOut = execSync("git worktree list", { encoding: "utf8", cwd: process.cwd() });
+			for (const line of wtOut.split("\n")) {
+				const parts = line.split(/\s+/);
+				const wtBranch = parts[2]?.replace(/^[\[\]]/g, "");
+				if (wtBranch === branch) {
+					execSync(`git worktree remove --force ${parts[0]}`, { cwd: process.cwd(), stdio: "ignore" });
+				}
+			}
+		} catch {}
+		try {
+			execSync(`git branch -D ${branch}`, { cwd: process.cwd(), stdio: "ignore" });
+		} catch {}
+	}
 }
 
 // ── E1: Single agent with structured output ─────────────────────────────────
