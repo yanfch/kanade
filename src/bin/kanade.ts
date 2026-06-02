@@ -213,16 +213,26 @@ async function cmdLs(args: ReturnType<typeof parseArgs>["values"]) {
 
 async function cmdShow(taskId: string, args: ReturnType<typeof parseArgs>["values"]) {
 	const json = args.json as boolean;
-	const task = (await api(`/tasks/${taskId}`)) as { task: Record<string, unknown> };
+	const taskResponse = (await api(`/tasks/${taskId}`)) as {
+		task: Record<string, unknown>;
+		usage: Record<string, unknown> | null;
+	};
 	const journal = (await api(`/tasks/${taskId}/journal`)) as { agents: unknown[]; humans: unknown[] };
 	const worktrees = (await api(`/tasks/${taskId}/worktrees`)) as { worktrees: Record<string, unknown>[] };
 
 	if (json) {
-		console.log(JSON.stringify({ task: task.task, journal, worktrees: worktrees.worktrees }, null, 2));
+		console.log(
+			JSON.stringify(
+				{ task: taskResponse.task, usage: taskResponse.usage, journal, worktrees: worktrees.worktrees },
+				null,
+				2,
+			),
+		);
 		return;
 	}
 
-	const t = task.task;
+	const t = taskResponse.task;
+	const usage = taskResponse.usage;
 
 	header(`Task ${pc.bold(String(t.id))}`);
 
@@ -263,6 +273,30 @@ async function cmdShow(taskId: string, args: ReturnType<typeof parseArgs>["value
 	console.log(
 		`  ${pc.dim("Journal:")}   ${pc.white(String(journal.agents.length))} agent entries, ${pc.white(String(journal.humans.length))} human entries`,
 	);
+
+	console.log();
+	header("Usage & Cost");
+	const inputTokens = Number(usage?.input ?? 0);
+	const outputTokens = Number(usage?.output ?? 0);
+	const cacheRead = Number(usage?.cacheRead ?? 0);
+	const cacheWrite = Number(usage?.cacheWrite ?? 0);
+	const totalTokens = Number(usage?.totalTokens ?? inputTokens + outputTokens + cacheRead + cacheWrite);
+	const costTotal = Number(
+		usage && typeof usage.cost === "object" && usage.cost !== null
+			? ((usage.cost as Record<string, unknown>).total ?? 0)
+			: 0,
+	);
+	const hasUsage = totalTokens > 0 || costTotal > 0;
+	if (!usage || !hasUsage) {
+		console.log(pc.dim("  No usage data recorded yet."));
+	} else {
+		console.log(`  ${pc.dim("Input Tokens:")}  ${pc.white(String(inputTokens))}`);
+		console.log(`  ${pc.dim("Output Tokens:")} ${pc.white(String(outputTokens))}`);
+		console.log(`  ${pc.dim("Cache Read:")}    ${pc.white(String(cacheRead))}`);
+		console.log(`  ${pc.dim("Cache Write:")}   ${pc.white(String(cacheWrite))}`);
+		console.log(`  ${pc.dim("Total Tokens:")}  ${pc.bold(String(totalTokens))}`);
+		console.log(`  ${pc.dim("Cost:")}          ${pc.white(`$${costTotal.toFixed(4)}`)}`);
+	}
 
 	if (journal.agents.length > 0) {
 		console.log();

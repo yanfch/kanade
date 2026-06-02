@@ -45,7 +45,7 @@ describe("server app — existing", () => {
 				payload: { title: "Approve?", options: ["yes"] },
 				status: "pending",
 			});
-			taskManager.abort(created.task_id);
+			await taskManager.abort(created.task_id);
 		} finally {
 			store.close();
 		}
@@ -87,6 +87,49 @@ describe("GET /tasks/:id/script", () => {
 			const body = (await res.json()) as { script: string };
 			expect(res.status).toBe(200);
 			expect(body.script).toBe(SIMPLE_SCRIPT);
+		} finally {
+			store.close();
+		}
+	});
+});
+
+describe("POST /tasks/:id/iterate", () => {
+	it("creates an iteration for a saved task with structured previousResult and reuseBranch", async () => {
+		const { store, taskManager, app } = setup();
+		try {
+			taskManager.putWorkflow(
+				"iter-saved",
+				"export const meta = { name: 'iter_saved', description: 'Iter saved' }\nreturn { ok: true, review: { status: 'approved' }, checks: ['lint'] }",
+			);
+			const created = taskManager.create({
+				source: "saved",
+				workflow_name: "iter-saved",
+				options: { cwd: process.cwd(), model: "xiaomi/mimo-v2.5-pro" },
+			});
+			await vi.waitFor(() => expect(taskManager.get(created.task_id)?.status).toBe("finished"));
+			store.insertWorktree({
+				id: `wt-${created.task_id}`,
+				task_id: created.task_id,
+				label: "implement",
+				branch: `kanade/${created.task_id}`,
+				base_branch: "main",
+				worktree_path: `/tmp/${created.task_id}`,
+				status: "inactive",
+				base_repo: process.cwd(),
+				created_at: Date.now(),
+				last_used_at: Date.now(),
+				finished_at: Date.now(),
+				merge_commit: null,
+			});
+
+			const res = await app.request(`/tasks/${created.task_id}/iterate`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ instructions: "refine the API shape" }),
+			});
+			const body = (await res.json()) as { task_id: string };
+			expect(res.status).toBe(202);
+			expect(body.task_id).not.toBe(created.task_id);
 		} finally {
 			store.close();
 		}
@@ -448,6 +491,20 @@ describe("POST /tasks source:saved", () => {
 			store.close();
 		}
 	});
+
+	it("returns 400 when workflow_name is missing", async () => {
+		const { store, app } = setup();
+		try {
+			const res = await app.request("/tasks", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ source: "saved" }),
+			});
+			expect(res.status).toBe(400);
+		} finally {
+			store.close();
+		}
+	});
 });
 
 describe("POST /workflows/generate", () => {
@@ -512,7 +569,21 @@ describe("POST /tasks source:generated", () => {
 			expect(
 				existsSync(taskManager.getScript(body.task_id) !== null ? taskManager.get(body.task_id)!.workflow_path : ""),
 			).toBe(true);
-			taskManager.abort(body.task_id);
+			await taskManager.abort(body.task_id);
+		} finally {
+			store.close();
+		}
+	});
+
+	it("returns 400 when prompt is missing", async () => {
+		const { store, app } = setup();
+		try {
+			const res = await app.request("/tasks", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ source: "generated" }),
+			});
+			expect(res.status).toBe(400);
 		} finally {
 			store.close();
 		}
@@ -546,9 +617,7 @@ describe("POST /tasks source:inline", () => {
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ source: "inline" }),
 			});
-			// Script validation happens inside TaskManager.create → throws Error
-			// The error handler converts it to 500 (not AppError)
-			expect(res.status).toBeGreaterThanOrEqual(400);
+			expect(res.status).toBe(400);
 		} finally {
 			store.close();
 		}
@@ -704,6 +773,64 @@ describe("GET /health", () => {
 			const res = await app.request("/health");
 			expect(res.status).toBe(200);
 			expect(await res.json()).toMatchObject({ ok: true });
+		} finally {
+			store.close();
+		}
+	});
+});
+
+describe("GET /tasks/:id with inline usage", () => {
+	it("returns 404 for unknown task", async () => {
+		const { store, app } = setup();
+		try {
+			const res = await app.request("/tasks/T-9999");
+			expect(res.status).toBe(404);
+		} finally {
+			store.close();
+		}
+	});
+
+	it("includes parsed tasks.usage in the task detail response", async () => {
+		const { store, taskManager, app } = setup();
+		try {
+			const created = taskManager.create({ source: "inline", script: SIMPLE_SCRIPT });
+			await vi.waitFor(() => expect(taskManager.get(created.task_id)?.status).toBe("finished"));
+			store.updateTask(created.task_id, {
+				usage: JSON.stringify({
+					input: 100,
+					output: 50,
+					cacheRead: 20,
+					cacheWrite: 10,
+					totalTokens: 180,
+					cost: { input: 0.001, output: 0.002, cacheRead: 0.0003, cacheWrite: 0.0001, total: 0.0034 },
+				}),
+			});
+
+			const res = await app.request(`/tasks/${created.task_id}`);
+			const body = (await res.json()) as { task: Record<string, unknown>; usage: Record<string, unknown> | null };
+			expect(res.status).toBe(200);
+			expect(body.task.id).toBe(created.task_id);
+			expect(body.task).not.toHaveProperty("usage");
+			expect(body.usage).toEqual({
+				input: 100,
+				output: 50,
+				cacheRead: 20,
+				cacheWrite: 10,
+				totalTokens: 180,
+				cost: { input: 0.001, output: 0.002, cacheRead: 0.0003, cacheWrite: 0.0001, total: 0.0034 },
+			});
+		} finally {
+			store.close();
+		}
+	});
+
+	it("no longer exposes a dedicated /tasks/:id/usage route", async () => {
+		const { store, taskManager, app } = setup();
+		try {
+			const created = taskManager.create({ source: "inline", script: SIMPLE_SCRIPT });
+			await vi.waitFor(() => expect(taskManager.get(created.task_id)?.status).toBe("finished"));
+			const res = await app.request(`/tasks/${created.task_id}/usage`);
+			expect(res.status).toBe(404);
 		} finally {
 			store.close();
 		}

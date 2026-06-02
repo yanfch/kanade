@@ -85,9 +85,12 @@ export function createApp(ctx: AppContext): Hono {
 	});
 
 	app.get("/tasks/:id", (c) => {
-		const task = ctx.taskManager.get(c.req.param("id"));
+		const taskId = c.req.param("id");
+		const task = ctx.taskManager.get(taskId);
 		if (!task) return c.json({ error: "Task not found" }, 404);
-		return c.json({ task });
+		const usage = ctx.taskManager.getUsage(taskId);
+		const { usage: _rawUsage, ...taskBody } = task;
+		return c.json({ task: taskBody, usage });
 	});
 
 	app.get("/inbox", (c) => c.json({ requests: ctx.taskManager.inbox().map(formatInboxRow) }));
@@ -120,8 +123,8 @@ export function createApp(ctx: AppContext): Hono {
 		return c.json({ ok: true });
 	});
 
-	app.post("/tasks/:id/abort", (c) => {
-		ctx.taskManager.abort(c.req.param("id"));
+	app.post("/tasks/:id/abort", async (c) => {
+		await ctx.taskManager.abort(c.req.param("id"));
 		return c.json({ ok: true });
 	});
 

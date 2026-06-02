@@ -39,6 +39,7 @@ export interface TaskRow {
 	error: string | null;
 	options: string;
 	result: string | null;
+	usage?: string | null;
 }
 
 export interface WorktreeRow {
@@ -94,7 +95,7 @@ export interface TaskPhaseRow {
 	ended_at: number | null;
 }
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS tasks (
@@ -111,7 +112,8 @@ CREATE TABLE IF NOT EXISTS tasks (
 	finished_at INTEGER,
 	error TEXT,
 	options TEXT NOT NULL,
-	result TEXT
+	result TEXT,
+	usage TEXT
 );
 CREATE INDEX IF NOT EXISTS tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS tasks_created ON tasks(created_at);
@@ -223,6 +225,14 @@ export class StateStore {
 			| undefined;
 		const current = row ? Number(row.value) : 0;
 
+		if (current < 2) {
+			try {
+				this.db.exec("ALTER TABLE tasks ADD COLUMN usage TEXT");
+			} catch {
+				// Column already exists — idempotent
+			}
+		}
+
 		if (current < SCHEMA_VERSION) {
 			this.db
 				.prepare("INSERT OR REPLACE INTO meta (key, value, updated_at) VALUES (?, ?, ?)")
@@ -270,6 +280,18 @@ export class StateStore {
 		const stmt = this.db.prepare(`SELECT * FROM tasks ${where} ORDER BY created_at DESC LIMIT ${limit}`);
 		const rows = opts.status ? stmt.all(opts.status) : stmt.all();
 		return rows as TaskRow[];
+	}
+
+	getTaskUsage(taskId: string): Record<string, unknown> | null {
+		const row = this.db.prepare("SELECT usage FROM tasks WHERE id = ?").get(taskId) as
+			| { usage: string | null }
+			| undefined;
+		if (!row?.usage) return null;
+		try {
+			return JSON.parse(row.usage) as Record<string, unknown>;
+		} catch {
+			return null;
+		}
 	}
 
 	// === iterations ===

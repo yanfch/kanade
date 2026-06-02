@@ -246,6 +246,40 @@ describe("TaskManager — iterate", () => {
 			store.close();
 		}
 	});
+
+	it("supports iterating a saved task with structured previousResult and reuseBranch", async () => {
+		const { store, manager } = setup();
+		try {
+			manager.putWorkflow(
+				"semantic-like",
+				"export const meta = { name: 'semantic_like', description: 'Semantic-like result' }\nreturn { status: 'done', analysis: { findings: ['a', 'b'] }, review: { status: 'approved' }, checks: ['typecheck', 'lint'] }",
+			);
+			const original = manager.create({
+				source: "saved",
+				workflow_name: "semantic-like",
+				options: { cwd: process.cwd(), model: "xiaomi/mimo-v2.5-pro" },
+			});
+			await vi.waitFor(() => expect(manager.get(original.task_id)?.status).toBe("finished"));
+			store.insertWorktree({
+				id: `wt-${original.task_id}`,
+				task_id: original.task_id,
+				label: "implement",
+				branch: `kanade/${original.task_id}`,
+				base_branch: "main",
+				worktree_path: `/tmp/${original.task_id}`,
+				status: "inactive",
+				base_repo: process.cwd(),
+				created_at: Date.now(),
+				last_used_at: Date.now(),
+				finished_at: Date.now(),
+				merge_commit: null,
+			});
+
+			expect(() => manager.iterate(original.task_id, { instructions: "refine the API shape" })).not.toThrow();
+		} finally {
+			store.close();
+		}
+	});
 });
 
 describe("TaskManager — create source:saved", () => {
@@ -385,7 +419,7 @@ describe("TaskManager — create source:generated", () => {
 			const runningIdx = emitted.indexOf("task.running");
 			if (runningIdx !== -1) expect(scriptIdx).toBeLessThan(runningIdx);
 
-			manager.abort(task.task_id);
+			await manager.abort(task.task_id);
 		} finally {
 			store.close();
 		}
@@ -421,9 +455,9 @@ describe("TaskManager — abort", () => {
 			});
 			await vi.waitFor(() => expect(manager.get(task.task_id)?.status).toBe("needs_human"));
 
-			manager.abort(task.task_id);
+			await manager.abort(task.task_id);
 
-			expect(manager.get(task.task_id)?.status).toBe("aborted");
+			await vi.waitFor(() => expect(manager.get(task.task_id)?.status).toBe("aborted"));
 			expect(manager.get(task.task_id)?.finished_at).toBeTruthy();
 			expect(emitted).toContain("task.aborted");
 		} finally {
@@ -435,7 +469,7 @@ describe("TaskManager — abort", () => {
 		const { store, manager } = setup();
 		try {
 			// Should not throw
-			manager.abort("T-9999");
+			void manager.abort("T-9999");
 		} finally {
 			store.close();
 		}
@@ -451,10 +485,9 @@ describe("TaskManager — abort", () => {
 			});
 			await vi.waitFor(() => expect(manager.get(task.task_id)?.status).toBe("needs_human"));
 
-			manager.abort(task.task_id);
+			await manager.abort(task.task_id);
 
-			// Task should eventually be aborted (abort() sets it immediately,
-			// and the run() catch also processes it)
+			// Task should eventually be aborted after the workflow unwinds and cleanup completes.
 			await vi.waitFor(() => expect(manager.get(task.task_id)?.status).toBe("aborted"));
 			expect(manager.get(task.task_id)?.finished_at).toBeTruthy();
 		} finally {
@@ -736,6 +769,46 @@ describe("TaskManager — list", () => {
 
 			const running = manager.list("running");
 			expect(running.some((t) => t.id === task.task_id)).toBe(false);
+		} finally {
+			store.close();
+		}
+	});
+});
+
+describe("TaskManager — getUsage", () => {
+	it("returns null for an unknown task", () => {
+		const { store, manager } = setup();
+		try {
+			expect(manager.getUsage("T-9999")).toBeNull();
+		} finally {
+			store.close();
+		}
+	});
+
+	it("returns parsed persisted task usage", async () => {
+		const { store, manager } = setup();
+		try {
+			const task = manager.create({ source: "inline", script: SIMPLE_SCRIPT });
+			await vi.waitFor(() => expect(manager.get(task.task_id)?.status).toBe("finished"));
+			store.updateTask(task.task_id, {
+				usage: JSON.stringify({
+					input: 12,
+					output: 34,
+					cacheRead: 5,
+					cacheWrite: 6,
+					totalTokens: 57,
+					cost: { input: 0.0012, output: 0.0034, cacheRead: 0.0005, cacheWrite: 0.0006, total: 0.0057 },
+				}),
+			});
+
+			expect(manager.getUsage(task.task_id)).toEqual({
+				input: 12,
+				output: 34,
+				cacheRead: 5,
+				cacheWrite: 6,
+				totalTokens: 57,
+				cost: { input: 0.0012, output: 0.0034, cacheRead: 0.0005, cacheWrite: 0.0006, total: 0.0057 },
+			});
 		} finally {
 			store.close();
 		}

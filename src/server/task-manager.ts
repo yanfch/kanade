@@ -104,14 +104,16 @@ export class TaskManager {
 
 	create(input: CreateTaskInput): CreateTaskResult {
 		if (input.source === "saved") {
+			if (!input.workflow_name?.trim()) throw new AppError("workflow_name is required", 400);
 			const workflow = this.workflowStore.get(input.workflow_name);
 			if (!workflow) throw new AppError(`Workflow not found: ${input.workflow_name}`, 404);
 			return this.createFromScript("saved", input.workflow_name, workflow.script, input.args, input.options);
 		}
 		if (input.source === "generated") {
+			if (!input.prompt?.trim()) throw new AppError("prompt is required", 400);
 			return this.createGenerated(input.prompt, input.args, input.options);
 		}
-		if (!input.script?.trim()) throw new Error("script is required");
+		if (!input.script?.trim()) throw new AppError("script is required", 400);
 		return this.createFromScript("inline", null, input.script, input.args, input.options);
 	}
 
@@ -239,13 +241,19 @@ export class TaskManager {
 		// Find worktree branch from parent task
 		const worktrees = this.store.findWorktreesByTask(parentTaskId);
 		const reuseBranch = worktrees.length > 0 ? worktrees[0].branch : undefined;
+		const normalizedInstructions = typeof options.instructions === "string" ? options.instructions : null;
+		const userArgs =
+			options.args && typeof options.args === "object" && !Array.isArray(options.args)
+				? (options.args as Record<string, unknown>)
+				: {};
+		const previousResult = parentTask.result ? (JSON.parse(parentTask.result) as unknown) : null;
 
 		// Build args with iteration context
 		const iterateArgs = {
-			...((options.args as Record<string, unknown>) ?? {}),
+			...userArgs,
 			previousTaskId: parentTaskId,
-			previousResult: parentTask.result ? JSON.parse(parentTask.result) : null,
-			instructions: options.instructions ?? null,
+			previousResult: previousResult == null ? null : JSON.parse(JSON.stringify(previousResult)),
+			instructions: normalizedInstructions,
 			reuseBranch,
 		};
 
@@ -278,7 +286,7 @@ export class TaskManager {
 			id: `iter-${newTaskId}`,
 			task_id: newTaskId,
 			parent_task_id: parentTaskId,
-			instructions: options.instructions ?? null,
+			instructions: normalizedInstructions,
 			reuse_branch: reuseBranch ?? null,
 			created_at: now,
 		});
@@ -295,7 +303,7 @@ export class TaskManager {
 			.info("task created", {
 				source: "iterate",
 				parent: parentTaskId,
-				instructions: options.instructions ?? "",
+				instructions: normalizedInstructions ?? "",
 			});
 		void this.run(newTaskId, script, iterateArgs, parentOptions, taskTrace).catch(() => undefined);
 		return { task_id: newTaskId, run_dir: newRunDir, workflow_path: workflowPath };
@@ -315,7 +323,7 @@ export class TaskManager {
 
 	respond(taskId: string, requestId: string, response: unknown): void {
 		const row = this.store.getNeedsHuman(requestId);
-		if (!row || row.task_id !== taskId) throw new Error(`Human request not found for task: ${requestId}`);
+		if (!row || row.task_id !== taskId) throw new AppError(`Human request not found for task: ${requestId}`, 404);
 		this.humanGate.resolve(requestId, response as never);
 		this.store.updateTask(taskId, { status: "running" });
 		this.events.emit("task.human_resolved", { taskId, requestId, response }, taskId);
@@ -453,8 +461,17 @@ export class TaskManager {
 		writeFileSync(dest, script, "utf8");
 	}
 
-	abort(taskId: string): void {
-		this.controllers.get(taskId)?.abort();
+	async abort(taskId: string): Promise<void> {
+		const task = this.store.getTask(taskId);
+		if (!task) return;
+		if (task.status === "aborted" || task.status === "failed" || task.status === "finished") return;
+
+		const controller = this.controllers.get(taskId);
+		if (controller) {
+			controller.abort();
+			return;
+		}
+
 		this.store.updateTask(taskId, { status: "aborted", finished_at: Date.now() });
 		this.events.emit("task.aborted", { taskId }, taskId);
 		this.logger.forTask(taskId).info("task aborted");
@@ -497,15 +514,6 @@ export class TaskManager {
 		options: TaskOptions = {},
 		taskTrace = this.startTaskTrace(taskId, this.store.getTask(taskId)?.workflow_source ?? "unknown"),
 	): Promise<void> {
-		// Rate limiting
-		const max = this.config.defaults.maxConcurrentTasks;
-		if (max > 0 && this.runningCount >= max) {
-			throw new AppError(
-				`Too many concurrent tasks (${this.runningCount}/${max}). Wait for existing tasks to finish.`,
-				429,
-			);
-		}
-
 		const controller = new AbortController();
 		this.controllers.set(taskId, controller);
 		const runDir = join(this.config.paths.runsDir, taskId);
@@ -516,6 +524,22 @@ export class TaskManager {
 		const taskLog = this.logger.forTask(taskId).withContext(traceContext);
 
 		try {
+			// Rate limiting
+			const max = this.config.defaults.maxConcurrentTasks;
+			if (max > 0 && this.runningCount > max) {
+				throw new AppError(
+					`Too many concurrent tasks (${this.runningCount - 1}/${max}). Wait for existing tasks to finish.`,
+					429,
+				);
+			}
+
+			if (this.store.getTask(taskId)?.status === "aborted") {
+				span.setStatus({ code: SpanStatusCode.OK });
+				span.setAttribute(Attrs.TASK_STATUS, "aborted");
+				taskLog.info("task already aborted before run started");
+				return;
+			}
+
 			this.checkDailyBudget();
 			taskLog.info("task running");
 			this.store.updateTask(taskId, { status: "running", started_at: Date.now() });
@@ -582,20 +606,34 @@ export class TaskManager {
 			});
 
 			this.store.endCurrentPhase(taskId, Date.now());
+			try {
+				await this.isolation.finalizeWorktrees(taskId, "approved");
+			} catch (cleanupError) {
+				taskLog.warn("worktree finalization failed after successful task", {
+					error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+				});
+			}
 			this.store.updateTask(taskId, {
 				status: "finished",
 				finished_at: Date.now(),
 				result: JSON.stringify(result.result),
+				usage: JSON.stringify(result.usage),
 			});
 			this.events.emit("task.finished", { taskId, result: result.result }, taskId);
 			span.setStatus({ code: SpanStatusCode.OK });
 			span.setAttribute(Attrs.TASK_STATUS, "finished");
 			taskLog.info("task finished");
-			void this.isolation.finalizeWorktrees(taskId, "approved").catch(() => {});
 		} catch (error) {
 			const aborted = controller.signal.aborted;
 			const decision = aborted ? "aborted" : "rejected";
 			const finalStatus = aborted ? "aborted" : "failed";
+			try {
+				await this.isolation.finalizeWorktrees(taskId, decision);
+			} catch (cleanupError) {
+				taskLog.warn("worktree finalization failed after task error", {
+					error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+				});
+			}
 			this.store.updateTask(taskId, {
 				status: finalStatus,
 				finished_at: Date.now(),
@@ -608,7 +646,6 @@ export class TaskManager {
 			taskLog.info(`task ${finalStatus}`, {
 				error: error instanceof Error ? error.message : String(error),
 			});
-			void this.isolation.finalizeWorktrees(taskId, decision).catch(() => {});
 		} finally {
 			span.end();
 			journal.close();
@@ -672,6 +709,11 @@ export class TaskManager {
 	/** Get worktrees for a task. */
 	getWorktrees(taskId: string): WorktreeRow[] {
 		return this.store.findWorktreesByTask(taskId);
+	}
+
+	/** Get persisted task-level usage data from tasks.usage. Returns null if task has no usage data. */
+	getUsage(taskId: string): Record<string, unknown> | null {
+		return this.store.getTaskUsage(taskId);
 	}
 
 	private parseScriptMeta(script: string): { name: string; description: string } | null {

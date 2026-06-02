@@ -241,3 +241,26 @@ describe("CLI — iterate", () => {
 		expect(parsed.task.status).toBe("finished");
 	});
 });
+
+describe("CLI — show usage", () => {
+	it("shows usage section in kanade show output", async () => {
+		const taskId = await createTask(
+			`export const meta = { name: 'cli-show-usage', description: 'Test' }\nreturn 'done'`,
+		);
+		const out = cli(`show ${taskId}`);
+		expect(out).toContain("Usage & Cost");
+		expect(out).toContain("No usage data recorded yet");
+	});
+
+	it("includes usage in --json output", async () => {
+		const taskId = await createTask(
+			`export const meta = { name: 'cli-show-usage-json', description: 'Test' }\nreturn 'done'`,
+		);
+		const body = cliJson(`show ${taskId}`) as { usage: Record<string, unknown> | null };
+		expect(body).toHaveProperty("usage");
+		expect(body.usage).not.toBeNull();
+		expect(body.usage).toHaveProperty("totalTokens");
+		expect(body.usage).toHaveProperty("cost");
+		expect(body.usage?.cost).toMatchObject({ total: 0 });
+	});
+});
