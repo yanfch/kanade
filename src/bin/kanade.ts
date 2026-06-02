@@ -82,15 +82,6 @@ function timestamp(ms: number | null): string {
 	return new Date(ms).toLocaleString();
 }
 
-function formatTimestampWithMs(ms: number): string {
-	const d = new Date(ms);
-	const hours = String(d.getHours()).padStart(2, "0");
-	const minutes = String(d.getMinutes()).padStart(2, "0");
-	const seconds = String(d.getSeconds()).padStart(2, "0");
-	const milliseconds = String(d.getMilliseconds()).padStart(3, "0");
-	return `${hours}:${minutes}:${seconds}.${milliseconds}`;
-}
-
 function duration(start: number | null, end: number | null): string {
 	if (!start || !end) return pc.dim("-");
 	const ms = end - start;
@@ -215,10 +206,9 @@ async function cmdShow(taskId: string, args: ReturnType<typeof parseArgs>["value
 	const json = args.json as boolean;
 	const task = (await api(`/tasks/${taskId}`)) as { task: Record<string, unknown> };
 	const journal = (await api(`/tasks/${taskId}/journal`)) as { agents: unknown[]; humans: unknown[] };
-	const worktrees = (await api(`/tasks/${taskId}/worktrees`)) as { worktrees: Record<string, unknown>[] };
 
 	if (json) {
-		console.log(JSON.stringify({ task: task.task, journal, worktrees: worktrees.worktrees }, null, 2));
+		console.log(JSON.stringify({ task: task.task, journal }, null, 2));
 		return;
 	}
 
@@ -235,15 +225,8 @@ async function cmdShow(taskId: string, args: ReturnType<typeof parseArgs>["value
 	console.log(`  ${pc.dim("Finished:")}  ${timestamp(t.finished_at as number)}`);
 	console.log(`  ${pc.dim("Duration:")}  ${duration(t.started_at as number, t.finished_at as number)}`);
 
-	// Base branch and isolation info
-	console.log(`  ${pc.dim("Base branch:")} ${t.base_branch ?? pc.dim("-")}`);
-	if (worktrees.worktrees.length > 0) {
-		const wt = worktrees.worktrees[0];
-		console.log(`  ${pc.dim("Isolation:")}   ${pc.cyan("worktree")}`);
-		console.log(`  ${pc.dim("Branch:")}     ${pc.white(String(wt.branch))}`);
-		console.log(`  ${pc.dim("Worktree:")}   ${pc.dim(String(wt.worktree_path))}`);
-	} else {
-		console.log(`  ${pc.dim("Isolation:")}   ${pc.dim("none")}`);
+	if (t.base_branch) {
+		console.log(`  ${pc.dim("Branch:")}    ${t.base_branch}`);
 	}
 
 	if (t.error) {
@@ -314,7 +297,7 @@ async function cmdTail(taskId: string) {
 							if (seenIds.has(event.id)) continue;
 							seenIds.add(event.id);
 						}
-						const ts = event.ts ? pc.dim(formatTimestampWithMs(event.ts)) : "";
+						const ts = event.ts ? pc.dim(new Date(event.ts).toLocaleTimeString()) : "";
 						const type = formatEventType(event.type);
 						console.log(`${ts}  ${type}`);
 					} catch {
