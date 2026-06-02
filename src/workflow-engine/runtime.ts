@@ -38,6 +38,8 @@ export interface WorkflowRunOptions extends Omit<WorkflowAgentOptions, "journal"
 	human?: WorkflowHumanGate;
 	concurrency?: number;
 	tokenBudget?: number | null;
+	/** Per-task cost limit in USD. Task throws when exceeded. */
+	costBudget?: number | null;
 	signal?: AbortSignal;
 	tracer?: Tracer;
 	/** Parent trace context used for workflow child spans. */
@@ -272,6 +274,12 @@ export async function runWorkflow<T = unknown>(
 					...(normalizedOptions.retry ? { retry: normalizedOptions.retry } : {}),
 					onUsage: (usage: SessionUsage) => {
 						collectUsage(usage);
+						// Check per-task cost budget
+						if (options.costBudget != null && workflowUsage.cost.total > options.costBudget) {
+							throw new Error(
+								`Cost budget exceeded: $${workflowUsage.cost.total.toFixed(4)} > $${options.costBudget.toFixed(2)} limit. Task paused. Worktree preserved.`,
+							);
+						}
 						if (agentSpan) {
 							agentSpan.setAttribute(Attrs.GEN_AI_USAGE_INPUT_TOKENS, usage.input);
 							agentSpan.setAttribute(Attrs.GEN_AI_USAGE_OUTPUT_TOKENS, usage.output);

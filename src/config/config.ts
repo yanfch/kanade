@@ -80,6 +80,10 @@ export interface TracingConfig {
 export interface DefaultsConfig {
 	model: string | null;
 	tokenBudget: number;
+	/** Per-task cost limit in USD. Task pauses when exceeded. */
+	costBudget: number;
+	/** Daily total cost limit in USD across all tasks. */
+	dailyCostBudget: number;
 	concurrency: number;
 	/** Maximum number of tasks running simultaneously. 0 = unlimited. */
 	maxConcurrentTasks: number;
@@ -222,6 +226,8 @@ function defaultConfig(paths: KanadePaths): KanadeConfig {
 		defaults: {
 			model: null,
 			tokenBudget: 2_000_000,
+			costBudget: 5.0,
+			dailyCostBudget: 100.0,
 			concurrency: 16,
 			maxConcurrentTasks: 0,
 		},

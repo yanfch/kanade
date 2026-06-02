@@ -22,6 +22,8 @@ export interface TaskOptions {
 	model?: string;
 	concurrency?: number;
 	token_budget?: number;
+	/** Per-task cost limit in USD. Overrides global default. */
+	cost_budget?: number;
 }
 
 export type CreateTaskInput =
@@ -54,6 +56,10 @@ export class TaskManager {
 	private readonly isolation: IsolationManager;
 	/** Exposed for CleanupScheduler access. */
 	readonly isolationManager: IsolationManager;
+
+	// Daily cost tracking
+	private dailyCostDate = new Date().toISOString().slice(0, 10);
+	private dailyCostTotal = 0;
 
 	private readonly logger: TracingLogger;
 	private readonly tracer: Tracer;
@@ -510,6 +516,7 @@ export class TaskManager {
 		const taskLog = this.logger.forTask(taskId).withContext(traceContext);
 
 		try {
+			this.checkDailyBudget();
 			taskLog.info("task running");
 			this.store.updateTask(taskId, { status: "running", started_at: Date.now() });
 			this.events.emit("task.running", { taskId }, taskId);
@@ -525,6 +532,7 @@ export class TaskManager {
 				model: options.model ?? this.config.defaults.model ?? undefined,
 				concurrency: options.concurrency ?? this.config.defaults.concurrency,
 				tokenBudget: options.token_budget ?? this.config.defaults.tokenBudget,
+				costBudget: options.cost_budget ?? this.config.defaults.costBudget,
 				signal: controller.signal,
 				tracer: this.tracer,
 				traceContext,
@@ -568,6 +576,9 @@ export class TaskManager {
 				},
 				onAgentStart: (event) => this.events.emit("workflow.agent_started", { taskId, ...event }, taskId),
 				onAgentEnd: (event) => this.events.emit("workflow.agent_completed", { taskId, ...event }, taskId),
+				onUsage: (usage) => {
+					this.addDailyCost(usage.cost.total);
+				},
 			});
 
 			this.store.endCurrentPhase(taskId, Date.now());
@@ -624,6 +635,32 @@ export class TaskManager {
 
 	private resolveAgentDir(): string | undefined {
 		return this.config.models.agentDir ?? this.config.models.piAgentDir ?? undefined;
+	}
+
+	/** Add cost to daily tracker (never throws). */
+	private addDailyCost(cost: number): void {
+		const today = new Date().toISOString().slice(0, 10);
+		if (today !== this.dailyCostDate) {
+			this.dailyCostDate = today;
+			this.dailyCostTotal = 0;
+		}
+		this.dailyCostTotal += cost;
+	}
+
+	/** Check if daily budget is exceeded. Call before starting a new task. */
+	private checkDailyBudget(): void {
+		const today = new Date().toISOString().slice(0, 10);
+		if (today !== this.dailyCostDate) {
+			this.dailyCostDate = today;
+			this.dailyCostTotal = 0;
+		}
+		const limit = this.config.defaults.dailyCostBudget;
+		if (limit > 0 && this.dailyCostTotal > limit) {
+			throw new AppError(
+				`Daily cost budget exceeded: $${this.dailyCostTotal.toFixed(4)} > $${limit.toFixed(2)} daily limit. No more tasks will run until tomorrow or budget is increased.`,
+				429,
+			);
+		}
 	}
 
 	/** Get the current snapshot for a task (real-time progress). */
