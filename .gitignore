@@ -47,6 +47,8 @@ logs/
 # Runtime data (workflow runs, journal, debug subagent sessions)
 .runs/
 runs/
+.tmp/
+eval-artifacts/
 journal.db
 journal.db-wal
 journal.db-shm

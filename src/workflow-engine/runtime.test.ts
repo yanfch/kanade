@@ -9,6 +9,21 @@ import { describe, expect, it } from "vitest";
 import { parseWorkflowScript, runWorkflow } from "./runtime.ts";
 import type { AgentRunOptions, AgentRunResult } from "./workflow-agent.ts";
 
+const stubAgent = {
+	run: async <TSchemaDef extends TSchema | undefined = undefined>(
+		_prompt: string,
+		_options: AgentRunOptions<TSchemaDef> = {},
+	): Promise<AgentRunResult<TSchemaDef>> => "ok" as AgentRunResult<TSchemaDef>,
+};
+
+const semanticRoleLoader = async (name: string) => ({
+	name,
+	dir: `/roles/${name}`,
+	systemPrompt: `You are ${name}.`,
+	tools: { allow: [], extensions: [] },
+	extensionPaths: [],
+});
+
 const validScript = `export const meta = {
   name: 'demo_workflow',
   description: 'A useful workflow',
@@ -688,6 +703,199 @@ return r`;
 	});
 });
 
+describe("runWorkflow — budgets", () => {
+	it("uses real session usage to enforce token budget", async () => {
+		const script = `export const meta = { name: 'budget', description: 'Budget' }
+await agent('first', { label: 'a' })
+await agent('second', { label: 'b' })
+return 'done'`;
+
+		await expect(
+			runWorkflow(script, {
+				tokenBudget: 5,
+				agent: {
+					async run<TSchemaDef extends TSchema | undefined = undefined>(
+						_prompt: string,
+						options: AgentRunOptions<TSchemaDef> = {},
+					): Promise<AgentRunResult<TSchemaDef>> {
+						options.onUsage?.({
+							input: 3,
+							output: 4,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 7,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						});
+						return "ok" as AgentRunResult<TSchemaDef>;
+					},
+				},
+			}),
+		).rejects.toThrow(/workflow token budget exhausted/);
+	});
+
+	it("falls back to result-size estimation when usage is unavailable", async () => {
+		const script = `export const meta = { name: 'budget-fallback', description: 'Budget fallback' }
+await agent('first', { label: 'a' })
+await agent('second', { label: 'b' })
+return 'done'`;
+
+		await expect(
+			runWorkflow(script, {
+				tokenBudget: 1,
+				agent: {
+					async run<TSchemaDef extends TSchema | undefined = undefined>(): Promise<AgentRunResult<TSchemaDef>> {
+						return "ok" as AgentRunResult<TSchemaDef>;
+					},
+				},
+			}),
+		).rejects.toThrow(/workflow token budget exhausted/);
+	});
+});
+
+describe("runWorkflow — semantic helpers", () => {
+	it("implements review-and-fix flow with semantic helpers", async () => {
+		const calls: Array<{ prompt: string; options: AgentRunOptions<TSchema | undefined> }> = [];
+		const script = `export const meta = { name: 'semantic_medium', description: 'Semantic medium flow' }
+phase('Implement')
+const dev = await implement('Do the change. Run focused tests.', { role: 'developer' })
+phase('Review')
+const review = await reviewChange(dev, {
+  role: 'reviewer',
+  guidance: 'Check correctness and test coverage.',
+  output: { type: 'object', properties: { status: { type: 'string', enum: ['approved', 'needs_fix'] }, summary: { type: 'string' }, issues: { type: 'array', items: { type: 'string' } } }, required: ['status', 'summary'] }
+})
+if (review.status === 'needs_fix') {
+  phase('Fix')
+  const fix = await continueImplementation(dev, { role: 'developer', feedback: review, guidance: 'Address review issues.' })
+  return { dev, review, fix }
+}
+return { dev, review }`;
+
+		const result = await runWorkflow(script, {
+			loadRole: semanticRoleLoader,
+			agent: {
+				async run<TSchemaDef extends TSchema | undefined = undefined>(
+					prompt: string,
+					options: AgentRunOptions<TSchemaDef> = {},
+				): Promise<AgentRunResult<TSchemaDef>> {
+					calls.push({ prompt, options });
+					if (options.role === "reviewer") {
+						return {
+							status: "needs_fix",
+							summary: "reviewed",
+							issues: ["missing edge case"],
+						} as AgentRunResult<TSchemaDef>;
+					}
+					return {
+						status: "done",
+						summary: "implemented",
+						filesChanged: ["src/a.ts"],
+						testsRun: "vitest",
+					} as AgentRunResult<TSchemaDef>;
+				},
+			},
+		});
+
+		expect((result.result as { review: { status: string }; fix?: unknown }).review.status).toBe("needs_fix");
+		expect((result.result as { fix?: unknown }).fix).toBeTruthy();
+		expect(calls).toHaveLength(3);
+		expect(calls[0].options.role).toBe("developer");
+		expect(calls[1].options.role).toBe("reviewer");
+		expect(calls[2].options.role).toBe("developer");
+		expect(calls[1].prompt).toContain("Review the following implementation result");
+		expect(calls[2].prompt).toContain("Continue the previous implementation");
+		expect(calls[2].prompt).toContain("missing edge case");
+	});
+
+	it("rejects continueImplementation without feedback", async () => {
+		const script = `export const meta = { name: 'no_feedback', description: 'No feedback' }
+const dev = { status: 'done' }
+return await continueImplementation(dev, { role: 'developer' })`;
+
+		await expect(runWorkflow(script, { agent: stubAgent })).rejects.toThrow(
+			/continueImplementation feedback is required/,
+		);
+	});
+
+	it("rejects unsupported semantic helper option fields", async () => {
+		const script = `export const meta = { name: 'bad_semantic_opts', description: 'Bad semantic opts' }
+return await testChange({ artifact: { ok: true } }, { role: 'tester', command: 'npm test' })`;
+
+		await expect(runWorkflow(script, { agent: stubAgent })).rejects.toThrow(
+			/unsupported semantic step option: command/,
+		);
+	});
+
+	it("falls back to prompt-only mode when canonical semantic roles are unavailable", async () => {
+		const calls: Array<{ prompt: string; options: AgentRunOptions<TSchema | undefined> }> = [];
+		const script = `export const meta = { name: 'semantic_fallback', description: 'Semantic fallback' }
+const plan = await analyze('Plan the change.', { role: 'planner', guidance: 'Be concise.' })
+const dev = await implement('Make the change.', { role: 'developer' })
+const review = await reviewChange(dev, { role: 'reviewer' })
+const validation = await testChange(dev, { role: 'tester' })
+return { plan, dev, review, validation }`;
+
+		await runWorkflow(script, {
+			agent: {
+				async run<TSchemaDef extends TSchema | undefined = undefined>(
+					prompt: string,
+					options: AgentRunOptions<TSchemaDef> = {},
+				): Promise<AgentRunResult<TSchemaDef>> {
+					calls.push({ prompt, options });
+					if (prompt.includes("Review the following implementation result")) {
+						return { status: "approved", summary: "ok", issues: [] } as AgentRunResult<TSchemaDef>;
+					}
+					return "ok" as AgentRunResult<TSchemaDef>;
+				},
+			},
+		});
+
+		expect(calls).toHaveLength(4);
+		expect(calls.map((call) => call.options.role)).toEqual([undefined, undefined, undefined, undefined]);
+		expect(calls[0].options.instructions).toContain("Act as a careful planner");
+		expect(calls[0].options.instructions).toContain("Be concise.");
+		expect(calls[1].options.instructions).toContain("Act as a careful developer");
+		expect(calls[1].options.isolation).toBe("worktree");
+		expect(calls[2].options.instructions).toContain("Act as a careful reviewer");
+		expect(calls[2].options.isolation).toBe("worktree");
+		expect(calls[3].options.instructions).toContain("Act as a careful tester");
+		expect(calls[3].options.isolation).toBe("worktree");
+	});
+
+	it("applies default review schema when output is omitted", async () => {
+		const calls: Array<{ options: AgentRunOptions<TSchema | undefined> }> = [];
+		const script = `export const meta = { name: 'default_review_schema', description: 'Default review schema' }
+const dev = await implement('Do the change.', { role: 'developer' })
+return await reviewChange(dev, { role: 'reviewer' })`;
+
+		await runWorkflow(script, {
+			loadRole: semanticRoleLoader,
+			agent: {
+				async run<TSchemaDef extends TSchema | undefined = undefined>(
+					_prompt: string,
+					options: AgentRunOptions<TSchemaDef> = {},
+				): Promise<AgentRunResult<TSchemaDef>> {
+					calls.push({ options });
+					if (options.role === "reviewer") {
+						return { status: "approved", summary: "ok", issues: [] } as AgentRunResult<TSchemaDef>;
+					}
+					return { status: "done", summary: "implemented" } as AgentRunResult<TSchemaDef>;
+				},
+			},
+		});
+
+		const reviewCall = calls.find((call) => call.options.role === "reviewer");
+		expect(reviewCall?.options.schema).toMatchObject({
+			type: "object",
+			properties: {
+				status: { type: "string", enum: ["approved", "needs_fix"] },
+				summary: { type: "string" },
+				issues: { type: "array", items: { type: "string" } },
+			},
+		});
+	});
+});
+
 describe("runWorkflow — script syntax validation", () => {
 	it("rejects script with unterminated string constant", async () => {
 		const script = `export const meta = { name: 'test', description: 'Test' }
@@ -701,8 +909,6 @@ world'`;
 const r = await agent('this prompt
 spans multiple lines', { label: 'test' })
 return r`;
-		await expect(runWorkflow(script, { agent: { run: async () => "ok" } as any })).rejects.toThrow(
-			/Unterminated string/i,
-		);
+		await expect(runWorkflow(script, { agent: stubAgent })).rejects.toThrow(/Unterminated string/i);
 	});
 });

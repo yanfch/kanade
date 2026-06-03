@@ -1,8 +1,9 @@
 // Portions of this file are derived from pi-dynamic-workflows
 // (https://github.com/Michaelliv/pi-dynamic-workflows), MIT licensed.
 
-import { existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
 import {
 	AuthStorage,
 	type CreateAgentSessionOptions,
@@ -15,6 +16,7 @@ import {
 	createCodingTools,
 	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
+import { simpleGit } from "simple-git";
 import type { Static, TSchema } from "typebox";
 import type { IsolationManager } from "../isolation/index.ts";
 import { hashCall } from "../journal/index.ts";
@@ -108,6 +110,8 @@ export interface AgentRunOptions<TSchemaDef extends TSchema | undefined = undefi
 	retry?: RetryOptions;
 	/** Callback to receive cumulative session usage after each prompt. */
 	onUsage?: (usage: SessionUsage) => void;
+	/** Called when the result was served entirely from journal cache. */
+	onCacheHit?: (entry: { tokens: number | null }) => void;
 }
 
 export type AgentRunResult<TSchemaDef extends TSchema | undefined> = TSchemaDef extends TSchema
@@ -179,16 +183,22 @@ export class WorkflowAgent {
 		const baseTools = roleConfig ? filterToolsByWhitelist(this.baseTools, roleConfig.tools.allow) : this.baseTools;
 		const requestedModel = options.model ?? roleConfig?.defaultModel;
 		const additionalInstructions = this.buildAdditionalInstructions(options.instructions);
+		const workspaceFingerprint = await this.computeWorkspaceFingerprint(effectiveCwd);
 		const cacheKey = hashCall({
 			prompt,
 			role: options.role,
 			schema,
 			model: requestedModel,
 			instructions: additionalInstructions,
-			cwd: this.cwd,
+			cwd: effectiveCwd,
+			worktreeBranch: isoCtx?.worktree?.branch ?? null,
+			workspaceFingerprint,
 		});
 		const cached = this.journal?.lookup<AgentRunResult<TSchemaDef>>(cacheKey);
-		if (cached) return cached.result;
+		if (cached) {
+			options.onCacheHit?.({ tokens: cached.tokens });
+			return cached.result;
+		}
 
 		const sessionOptions = await this.buildSessionOptions(requestedModel);
 
@@ -412,6 +422,44 @@ export class WorkflowAgent {
 		return `[${label}] auto-commit`;
 	}
 
+	private async computeWorkspaceFingerprint(cwd: string): Promise<string | undefined> {
+		try {
+			const git = simpleGit(cwd);
+			const root = (await git.revparse(["--show-toplevel"]))?.trim();
+			const head = (await git.revparse(["HEAD"]))?.trim();
+			const branch = (await git.revparse(["--abbrev-ref", "HEAD"]))?.trim();
+			const diff = await git.diff(["--binary", "--no-ext-diff", "HEAD", "--"]);
+			const status = await git.status();
+			const untracked = status.not_added
+				.slice()
+				.sort()
+				.map((file) => ({
+					path: file,
+					hash: this.hashWorkspacePath(join(cwd, file), root || cwd),
+				}));
+			return stableFingerprint({
+				root: root || cwd,
+				relativeCwd: root ? relative(root, cwd) : cwd,
+				branch,
+				head,
+				diffHash: sha256(diff),
+				untracked,
+			});
+		} catch {
+			return undefined;
+		}
+	}
+
+	private hashWorkspacePath(path: string, repoRoot: string): string {
+		try {
+			const stat = statSync(path);
+			if (stat.isDirectory()) return `dir:${relative(repoRoot, path)}`;
+			return sha256(readFileSync(path));
+		} catch {
+			return "missing";
+		}
+	}
+
 	private lastAssistantText(messages: unknown[]): string {
 		for (let i = messages.length - 1; i >= 0; i--) {
 			const message = messages[i] as AssistantTextMessage | undefined;
@@ -462,4 +510,25 @@ function parseExplicitModelSpec(modelName: string): { provider: string; modelId:
 	}
 
 	return undefined;
+}
+
+function stableFingerprint(value: unknown): string {
+	return JSON.stringify(sortFingerprintValue(value));
+}
+
+function sortFingerprintValue(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(sortFingerprintValue);
+	if (!value || typeof value !== "object") return value;
+
+	const input = value as Record<string, unknown>;
+	const output: Record<string, unknown> = {};
+	for (const key of Object.keys(input).sort()) {
+		const child = input[key];
+		if (child !== undefined) output[key] = sortFingerprintValue(child);
+	}
+	return output;
+}
+
+function sha256(value: string | Buffer): string {
+	return createHash("sha256").update(value).digest("hex");
 }

@@ -23,6 +23,8 @@ describe("hashCall", () => {
 			model: "anthropic:sonnet",
 			instructions: "minimal diff",
 			cwd: "/repo",
+			worktreeBranch: "kanade/T-1/dev",
+			workspaceFingerprint: "head:abc123",
 		});
 		const second = hashCall({
 			cwd: "/repo",
@@ -31,6 +33,8 @@ describe("hashCall", () => {
 			schema: { properties: { a: { type: "boolean" }, b: { type: "string" } }, type: "object" },
 			role: "developer",
 			prompt: "Do it",
+			worktreeBranch: "kanade/T-1/dev",
+			workspaceFingerprint: "head:abc123",
 		});
 
 		expect(first).toBe(second);
@@ -45,6 +49,13 @@ describe("hashCall", () => {
 	it("changes when semantic inputs change", () => {
 		expect(hashCall({ prompt: "A" })).not.toBe(hashCall({ prompt: "B" }));
 		expect(hashCall({ prompt: "A", model: "m1" })).not.toBe(hashCall({ prompt: "A", model: "m2" }));
+		expect(hashCall({ prompt: "A", cwd: "/repo-a" })).not.toBe(hashCall({ prompt: "A", cwd: "/repo-b" }));
+		expect(hashCall({ prompt: "A", worktreeBranch: "kanade/T-1/dev" })).not.toBe(
+			hashCall({ prompt: "A", worktreeBranch: "kanade/T-2/dev" }),
+		);
+		expect(hashCall({ prompt: "A", workspaceFingerprint: "head:a" })).not.toBe(
+			hashCall({ prompt: "A", workspaceFingerprint: "head:b" }),
+		);
 	});
 });
 

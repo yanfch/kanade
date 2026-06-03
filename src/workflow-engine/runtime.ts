@@ -115,9 +115,21 @@ interface RuntimeState {
 	logs: string[];
 	phases: string[];
 	agentCount: number;
+	stepCount: number;
 	artifactSeq: number;
 	humanCount: number;
 	spent: number;
+}
+
+export type SemanticStepKind = "analyze" | "implement" | "reviewChange" | "continueImplementation" | "testChange";
+
+export interface SemanticStepResult<T = unknown> {
+	id: string;
+	kind: SemanticStepKind;
+	artifact: T;
+	status?: string;
+	summary?: string;
+	[key: string]: unknown;
 }
 
 type AnyNode = Node & {
@@ -155,7 +167,15 @@ export async function runWorkflow<T = unknown>(
 ): Promise<WorkflowRunResult<T>> {
 	const started = Date.now();
 	const { meta, body } = parseWorkflowScript(script);
-	const state: RuntimeState = { logs: [], phases: [], agentCount: 0, artifactSeq: 0, humanCount: 0, spent: 0 };
+	const state: RuntimeState = {
+		logs: [],
+		phases: [],
+		agentCount: 0,
+		stepCount: 0,
+		artifactSeq: 0,
+		humanCount: 0,
+		spent: 0,
+	};
 	const agentRunner =
 		options.agent ??
 		new WorkflowAgent({
@@ -241,6 +261,9 @@ export async function runWorkflow<T = unknown>(
 		const run = limiter(async () => {
 			state.agentCount++;
 			const label = requestedLabel || defaultAgentLabel(assignedPhase, state.agentCount);
+			let usageObserved = false;
+			let usageTokens = 0;
+			let servedFromCache = false;
 			const agentSpan = options.tracer?.startSpan(
 				"workflow.agent",
 				{
@@ -272,7 +295,12 @@ export async function runWorkflow<T = unknown>(
 					isolation: normalizedOptions.isolation,
 					reuseBranch: normalizedOptions.reuseBranch,
 					...(normalizedOptions.retry ? { retry: normalizedOptions.retry } : {}),
+					onCacheHit: () => {
+						servedFromCache = true;
+					},
 					onUsage: (usage: SessionUsage) => {
+						usageObserved = true;
+						usageTokens = Math.max(usageTokens, usage.totalTokens);
 						collectUsage(usage);
 						// Check per-task cost budget
 						if (options.costBudget != null && workflowUsage.cost.total > options.costBudget) {
@@ -295,7 +323,8 @@ export async function runWorkflow<T = unknown>(
 					},
 				});
 				throwIfAborted();
-				state.spent += estimateTokens(result);
+				if (usageObserved) state.spent += usageTokens;
+				else if (!servedFromCache) state.spent += estimateTokens(result);
 				agentSpan?.setStatus({ code: SpanStatusCode.OK });
 				options.onAgentEnd?.({ label, phase: assignedPhase, result });
 				dumpArtifact(options, state, label, result);
@@ -384,6 +413,220 @@ export async function runWorkflow<T = unknown>(
 		}
 	};
 
+	const semanticLineage = new WeakMap<object, { implementation: true }>();
+	const semanticRoleAvailability = new Map<string, boolean>();
+	const canonicalSemanticRoles = new Set(["planner", "developer", "reviewer", "tester"]);
+
+	const createStepResult = <TStep>(kind: SemanticStepKind, artifact: TStep): SemanticStepResult<TStep> => {
+		const id = `step_${++state.stepCount}`;
+		if (artifact && typeof artifact === "object" && !Array.isArray(artifact)) {
+			const base = artifact as Record<string, unknown>;
+			return {
+				...base,
+				id,
+				kind,
+				artifact,
+				...(typeof base.status === "string" ? { status: base.status } : {}),
+				...(typeof base.summary === "string" ? { summary: base.summary } : {}),
+			} as SemanticStepResult<TStep>;
+		}
+		return {
+			id,
+			kind,
+			artifact,
+			...(typeof artifact === "string" ? { summary: artifact } : {}),
+		};
+	};
+
+	const markImplementationLineage = <TStep>(result: SemanticStepResult<TStep>): SemanticStepResult<TStep> => {
+		semanticLineage.set(result as object, { implementation: true });
+		return result;
+	};
+
+	const hasImplementationLineage = (value: unknown): boolean => {
+		return !!value && typeof value === "object" && semanticLineage.has(value as object);
+	};
+
+	const sourceArtifact = (input: unknown): unknown => {
+		if (input && typeof input === "object" && "artifact" in (input as Record<string, unknown>)) {
+			return (input as Record<string, unknown>).artifact;
+		}
+		return input;
+	};
+
+	const asPromptContext = (value: unknown): string => {
+		try {
+			return JSON.stringify(sourceArtifact(value));
+		} catch {
+			return String(value);
+		}
+	};
+
+	const joinInstructions = (...parts: Array<string | undefined>): string | undefined => {
+		const merged = parts.map((part) => part?.trim()).filter((part): part is string => !!part);
+		return merged.length > 0 ? merged.join("\n\n") : undefined;
+	};
+
+	const isMissingSemanticRoleError = (role: string, error: unknown): boolean => {
+		if (!(error instanceof Error)) return false;
+		return (
+			error.message === `Role not found: ${role}` ||
+			error.message === `Role requested but rolesDir is not configured: ${role}`
+		);
+	};
+
+	const canUseSemanticRole = async (role: string): Promise<boolean> => {
+		const cached = semanticRoleAvailability.get(role);
+		if (cached !== undefined) return cached;
+		if (options.loadRole) {
+			try {
+				await options.loadRole(role);
+				semanticRoleAvailability.set(role, true);
+				return true;
+			} catch (error) {
+				if (!isMissingSemanticRoleError(role, error)) throw error;
+				semanticRoleAvailability.set(role, false);
+				return false;
+			}
+		}
+		const available = options.rolesDir ? existsSync(join(options.rolesDir, role)) : false;
+		semanticRoleAvailability.set(role, available);
+		return available;
+	};
+
+	const runSemanticAgent = async <TSchemaDef extends TSchema | undefined = undefined>(
+		helpName: SemanticStepKind,
+		prompt: string,
+		input: {
+			label?: string;
+			role?: string;
+			defaultRole: string;
+			fallbackInstructions: string;
+			guidance?: string;
+			output?: TSchemaDef;
+			isolation?: "worktree";
+		},
+	): Promise<unknown> => {
+		const effectiveRole = input.role ?? input.defaultRole;
+		if (canonicalSemanticRoles.has(effectiveRole) && !(await canUseSemanticRole(effectiveRole))) {
+			log(`semantic helper ${helpName} falling back to prompt-only mode because role ${effectiveRole} is unavailable`);
+			return agent(prompt, {
+				label: input.label,
+				schema: input.output,
+				instructions: joinInstructions(input.fallbackInstructions, input.guidance),
+				...(input.isolation ? { isolation: input.isolation } : {}),
+			});
+		}
+		return agent(prompt, {
+			label: input.label,
+			role: effectiveRole,
+			schema: input.output,
+			instructions: input.guidance,
+			...(input.isolation ? { isolation: input.isolation } : {}),
+		});
+	};
+
+	const implement = async <TSchemaDef extends TSchema | undefined = undefined>(
+		prompt: unknown,
+		helpOpts: unknown = {},
+	): Promise<SemanticStepResult<unknown>> => {
+		const taskPrompt = requireString(prompt, "implement prompt");
+		const opts = normalizeSemanticStepOptions<TSchemaDef>(helpOpts);
+		const result = await runSemanticAgent("implement", taskPrompt, {
+			label: opts.label,
+			role: opts.role,
+			defaultRole: "developer",
+			fallbackInstructions:
+				"Act as a careful developer. Make the requested code changes in the workspace and report what changed.",
+			guidance: opts.guidance,
+			output: opts.output,
+			isolation: "worktree",
+		});
+		return markImplementationLineage(createStepResult("implement", result));
+	};
+
+	const analyze = async <TSchemaDef extends TSchema | undefined = undefined>(
+		prompt: unknown,
+		helpOpts: unknown = {},
+	): Promise<SemanticStepResult<unknown>> => {
+		const taskPrompt = requireString(prompt, "analyze prompt");
+		const opts = normalizeSemanticStepOptions<TSchemaDef>(helpOpts);
+		const result = await runSemanticAgent("analyze", taskPrompt, {
+			label: opts.label,
+			role: opts.role,
+			defaultRole: "planner",
+			fallbackInstructions:
+				"Act as a careful planner. Analyze the task, gather only the needed information, and produce a concise plan without making code changes.",
+			guidance: opts.guidance,
+			output: opts.output,
+		});
+		return createStepResult("analyze", result);
+	};
+
+	const reviewChange = async <TSchemaDef extends TSchema | undefined = undefined>(
+		input: unknown,
+		helpOpts: unknown = {},
+	): Promise<SemanticStepResult<unknown>> => {
+		const opts = normalizeSemanticStepOptions<TSchemaDef>(helpOpts);
+		const promptParts = ["Review the following implementation result.", asPromptContext(input)];
+		if (opts.guidance) promptParts.push(`Review guidance:\n${opts.guidance}`);
+		const result = await runSemanticAgent("reviewChange", promptParts.join("\n\n"), {
+			label: opts.label,
+			role: opts.role,
+			defaultRole: "reviewer",
+			fallbackInstructions:
+				"Act as a careful reviewer. Inspect the implementation result for correctness, completeness, and test coverage gaps.",
+			guidance: opts.guidance,
+			output: opts.output ?? defaultReviewSchema(),
+			isolation: hasImplementationLineage(input) ? "worktree" : undefined,
+		});
+		return createStepResult("reviewChange", result);
+	};
+
+	const continueImplementation = async <TSchemaDef extends TSchema | undefined = undefined>(
+		previous: unknown,
+		helpOpts: unknown,
+	): Promise<SemanticStepResult<unknown>> => {
+		const opts = normalizeContinueImplementationOptions<TSchemaDef>(helpOpts);
+		const promptParts = [
+			"Continue the previous implementation.",
+			`Previous implementation result:\n${asPromptContext(previous)}`,
+			`Feedback:\n${asPromptContext(opts.feedback)}`,
+		];
+		if (opts.guidance) promptParts.push(`Additional guidance:\n${opts.guidance}`);
+		const result = await runSemanticAgent("continueImplementation", promptParts.join("\n\n"), {
+			label: opts.label,
+			role: opts.role,
+			defaultRole: "developer",
+			fallbackInstructions:
+				"Act as a careful developer continuing the same implementation path. Apply the feedback while preserving prior intent unless the feedback requires changes.",
+			guidance: opts.guidance,
+			output: opts.output,
+			isolation: "worktree",
+		});
+		return markImplementationLineage(createStepResult("continueImplementation", result));
+	};
+
+	const testChange = async <TSchemaDef extends TSchema | undefined = undefined>(
+		input: unknown,
+		helpOpts: unknown = {},
+	): Promise<SemanticStepResult<unknown>> => {
+		const opts = normalizeSemanticStepOptions<TSchemaDef>(helpOpts);
+		const promptParts = ["Validate the following implementation result.", asPromptContext(input)];
+		if (opts.guidance) promptParts.push(`Validation guidance:\n${opts.guidance}`);
+		const result = await runSemanticAgent("testChange", promptParts.join("\n\n"), {
+			label: opts.label,
+			role: opts.role,
+			defaultRole: "tester",
+			fallbackInstructions:
+				"Act as a careful tester. Validate the implementation with focused checks and report pass/fail clearly.",
+			guidance: opts.guidance,
+			output: opts.output,
+			isolation: hasImplementationLineage(input) ? "worktree" : undefined,
+		});
+		return createStepResult("testChange", result);
+	};
+
 	const pipeline = async (
 		items: unknown[],
 		...stages: Array<(prev: unknown, original: unknown, index: number) => unknown>
@@ -414,6 +657,11 @@ export async function runWorkflow<T = unknown>(
 
 	const context = vm.createContext({
 		agent,
+		analyze,
+		implement,
+		reviewChange,
+		continueImplementation,
+		testChange,
 		parallel,
 		pipeline,
 		log,
@@ -664,6 +912,62 @@ function normalizeAgentOptions(value: unknown): AgentOptions {
 		reuseBranch: optionalString(options.reuseBranch, "agent reuseBranch"),
 		agentType: optionalString(options.agentType, "agent type"),
 	};
+}
+
+function normalizeSemanticStepOptions<TSchemaDef extends TSchema | undefined = TSchema | undefined>(
+	value: unknown,
+): { role?: string; guidance?: string; output?: TSchemaDef; label?: string } {
+	if (value === undefined) return {};
+	if (!value || typeof value !== "object") throw new TypeError("semantic step options must be an object");
+	const options = value as Record<string, unknown>;
+	const allowed = new Set(["role", "guidance", "output", "label"]);
+	for (const key of Object.keys(options)) {
+		if (!allowed.has(key)) {
+			throw new TypeError(`unsupported semantic step option: ${key}`);
+		}
+	}
+	return {
+		role: optionalString(options.role, "step role"),
+		guidance: optionalString(options.guidance, "step guidance"),
+		output: options.output as TSchemaDef | undefined,
+		label: optionalString(options.label, "step label"),
+	};
+}
+
+function normalizeContinueImplementationOptions<TSchemaDef extends TSchema | undefined = TSchema | undefined>(
+	value: unknown,
+): { role?: string; guidance?: string; output?: TSchemaDef; label?: string; feedback: unknown } {
+	if (!value || typeof value !== "object") {
+		throw new TypeError("continueImplementation options must be an object with feedback");
+	}
+	const options = value as Record<string, unknown>;
+	const allowed = new Set(["role", "guidance", "output", "label", "feedback"]);
+	for (const key of Object.keys(options)) {
+		if (!allowed.has(key)) {
+			throw new TypeError(`unsupported continueImplementation option: ${key}`);
+		}
+	}
+	if (!("feedback" in options)) throw new TypeError("continueImplementation feedback is required");
+	return {
+		role: optionalString(options.role, "step role"),
+		guidance: optionalString(options.guidance, "step guidance"),
+		output: options.output as TSchemaDef | undefined,
+		label: optionalString(options.label, "step label"),
+		feedback: options.feedback,
+	};
+}
+
+function defaultReviewSchema(): TSchema {
+	return {
+		type: "object",
+		properties: {
+			status: { type: "string", enum: ["approved", "needs_fix"] },
+			summary: { type: "string" },
+			issues: { type: "array", items: { type: "string" } },
+		},
+		required: ["status", "summary"],
+		additionalProperties: true,
+	} as unknown as TSchema;
 }
 
 function assertStructuredCloneable(value: unknown, name: string): void {

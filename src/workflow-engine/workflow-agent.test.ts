@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -6,6 +6,7 @@ import type {
 	CreateAgentSessionResult,
 	ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { simpleGit } from "simple-git";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import type { RoleConfig } from "../roles/index.ts";
@@ -62,6 +63,19 @@ function createMockJournal(): AgentJournal & {
 			entries.set(cacheKey, { result: input.result, tokens: input.tokens ?? null });
 		},
 	};
+}
+
+async function createGitRepo(): Promise<string> {
+	const root = mkdtempSync(join(tmpdir(), "kanade-agent-git-"));
+	mkdirSync(root, { recursive: true });
+	const git = simpleGit(root);
+	await git.init();
+	await git.addConfig("user.email", "test@kanade");
+	await git.addConfig("user.name", "kanade-test");
+	writeFileSync(join(root, "README.md"), "initial\n");
+	await git.add(".");
+	await git.commit("init");
+	return root;
 }
 
 function createMockSessionFactory(
@@ -275,6 +289,27 @@ describe("WorkflowAgent", () => {
 		expect(journal.writes).toHaveLength(1);
 		expect(journal.writes[0].cacheKey).toBe(journal.lookups[0]);
 		expect(journal.writes[0].input).toEqual({ result: "final text", tokens: 3 });
+	});
+
+	it("invalidates journal cache when workspace content changes", async () => {
+		const cwd = await createGitRepo();
+		const mock = createMockSessionFactory();
+		const journal = createMockJournal();
+		const agent = new WorkflowAgent({
+			cwd,
+			createSession: mock.createSession,
+			createCodingTools: () => [],
+			journal,
+		});
+
+		await agent.run("Summarize");
+		writeFileSync(join(cwd, "README.md"), "changed\n");
+		await agent.run("Summarize");
+
+		expect(mock.calls).toHaveLength(2);
+		expect(journal.lookups).toHaveLength(2);
+		expect(journal.writes).toHaveLength(2);
+		expect(journal.writes[0].cacheKey).not.toBe(journal.writes[1].cacheKey);
 	});
 
 	it("throws when structured output is required but not called", async () => {

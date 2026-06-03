@@ -7,6 +7,8 @@ export interface HashCallInput {
 	model?: string | null;
 	instructions?: string | null;
 	cwd?: string | null;
+	worktreeBranch?: string | null;
+	workspaceFingerprint?: string | null;
 }
 
 export function hashCall(input: HashCallInput): string {
@@ -17,6 +19,8 @@ export function hashCall(input: HashCallInput): string {
 		model: input.model ?? null,
 		instructions: input.instructions ?? null,
 		cwd: input.cwd ?? null,
+		worktreeBranch: input.worktreeBranch ?? null,
+		workspaceFingerprint: input.workspaceFingerprint ?? null,
 	};
 	return sha256(stableStringify(stable));
 }
