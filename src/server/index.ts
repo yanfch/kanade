@@ -27,14 +27,17 @@ export interface ServerHandle {
 	close(): void;
 }
 
-export function startServer(config: KanadeConfig): ServerHandle {
+export function startServer(
+	config: KanadeConfig,
+	sessionFactory?: ConstructorParameters<typeof TaskManager>[6],
+): ServerHandle {
 	const tracing = setupTracing(config);
 	const logger = tracing.logger.forComponent("server");
 
 	const store = new StateStore(config.paths.stateDb);
 	const events = new EventBus();
 	const humanGate = new HumanGate(store);
-	const taskManager = new TaskManager(config, store, events, humanGate, undefined, tracing);
+	const taskManager = new TaskManager(config, store, events, humanGate, undefined, tracing, sessionFactory);
 
 	// Recover pending human requests from previous run
 	const recovered = humanGate.recover();

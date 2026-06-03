@@ -15,7 +15,9 @@ export { parseWorkflowScript, runWorkflow } from "./runtime.ts";
 export type { WorkflowAgentSnapshot, WorkflowAgentStatus, WorkflowSnapshot } from "./snapshot.ts";
 export { createWorkflowSnapshot, preview, recomputeWorkflowSnapshot } from "./snapshot.ts";
 export {
+	buildLegacyWorkflowAuthorPrompt,
 	buildWorkflowAuthorPrompt,
+	LEGACY_WORKFLOW_AUTHOR_GUIDELINES,
 	WORKFLOW_AUTHOR_GUIDELINES,
 	WORKFLOW_AUTHOR_PROMPT_SNIPPET,
 } from "./prompt-guidelines.ts";

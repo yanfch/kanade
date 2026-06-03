@@ -9,17 +9,22 @@ import { StateStore } from "../store/index.ts";
 import { createApp } from "./app.ts";
 import { EventBus } from "./event-bus.ts";
 import { TaskManager } from "./task-manager.ts";
+import { createMockSessionFactory } from "./test-session-mock.ts";
 
 const SIMPLE_SCRIPT = "export const meta = { name: 'demo', description: 'Demo' }\nreturn { ok: true }";
 
-function setup(author?: { generate(prompt: string, options?: { model?: string }): Promise<string> }) {
+function setup(
+	author?: { generate(prompt: string, options?: { model?: string }): Promise<string> },
+	sessionFactory?: ConstructorParameters<typeof TaskManager>[6],
+) {
 	const root = mkdtempSync(join(tmpdir(), "kanade-app-"));
 	process.env.KANADE_DIR = root;
 	const config = loadConfig();
+	config.defaults.taskIdPrefix = `UA${Math.random().toString(36).slice(2, 6)}`;
 	const store = new StateStore(config.paths.stateDb);
 	const events = new EventBus();
 	const humanGate = new HumanGate(store, { initialPollMs: 5 });
-	const taskManager = new TaskManager(config, store, events, humanGate, author);
+	const taskManager = new TaskManager(config, store, events, humanGate, author, undefined, sessionFactory);
 	const app = createApp({ taskManager, events });
 	return { config, store, taskManager, events, app };
 }
@@ -95,7 +100,8 @@ describe("GET /tasks/:id/script", () => {
 
 describe("POST /tasks/:id/iterate", () => {
 	it("creates an iteration for a saved task with structured previousResult and reuseBranch", async () => {
-		const { store, taskManager, app } = setup();
+		const mock = createMockSessionFactory({ text: "ok" });
+		const { store, taskManager, app } = setup(undefined, mock.createSession);
 		try {
 			taskManager.putWorkflow(
 				"iter-saved",
@@ -130,6 +136,23 @@ describe("POST /tasks/:id/iterate", () => {
 			const body = (await res.json()) as { task_id: string };
 			expect(res.status).toBe(202);
 			expect(body.task_id).not.toBe(created.task_id);
+			expect(taskManager.getScript(body.task_id)).toContain("phase('Refine')");
+		} finally {
+			store.close();
+		}
+	});
+
+	it("returns 400 when iterate instructions are missing", async () => {
+		const { store, taskManager, app } = setup();
+		try {
+			const created = taskManager.create({ source: "inline", script: SIMPLE_SCRIPT });
+			await vi.waitFor(() => expect(taskManager.get(created.task_id)?.status).toBe("finished"));
+			const res = await app.request(`/tasks/${created.task_id}/iterate`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({}),
+			});
+			expect(res.status).toBe(400);
 		} finally {
 			store.close();
 		}

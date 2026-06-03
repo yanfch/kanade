@@ -74,12 +74,16 @@ async function createTask(script: string): Promise<string> {
 beforeAll(async () => {
 	kanadeDir = mkdtempSync(join(tmpdir(), "kanade-cli-test-"));
 	mkdirSync(join(kanadeDir, "db"), { recursive: true });
-	writeFileSync(join(kanadeDir, "config.yml"), "server:\n  port: 17777\n  bind: 127.0.0.1\n");
+	const taskIdPrefix = `C${Math.random().toString(36).slice(2, 6)}`;
+	writeFileSync(
+		join(kanadeDir, "config.yml"),
+		`server:\n  port: 17777\n  bind: 127.0.0.1\ndefaults:\n  taskIdPrefix: ${taskIdPrefix}\n`,
+	);
 	BASE_URL = "http://127.0.0.1:17777";
 
 	serverProcess = spawn("npx", ["tsx", "src/bin/server.ts"], {
 		cwd: join(import.meta.dirname, "../.."),
-		env: { ...process.env, KANADE_DIR: kanadeDir },
+		env: { ...process.env, KANADE_DIR: kanadeDir, KANADE_MOCK_SESSION_TEXT: "ok" },
 		stdio: "pipe",
 	});
 	serverProcess.stderr?.on("data", (d) => console.error("[server]", d.toString()));

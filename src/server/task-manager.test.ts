@@ -7,17 +7,22 @@ import { HumanGate } from "../human/index.ts";
 import { StateStore } from "../store/index.ts";
 import { EventBus } from "./event-bus.ts";
 import { TaskManager } from "./task-manager.ts";
+import { createMockSessionFactory } from "./test-session-mock.ts";
 
 const SIMPLE_SCRIPT = "export const meta = { name: 'demo', description: 'Demo' }\nreturn { ok: true }";
 
-function setup(author?: { generate(prompt: string, options?: { model?: string }): Promise<string> }) {
+function setup(
+	author?: { generate(prompt: string, options?: { model?: string }): Promise<string> },
+	sessionFactory?: ConstructorParameters<typeof TaskManager>[6],
+) {
 	const root = mkdtempSync(join(tmpdir(), "kanade-server-"));
 	process.env.KANADE_DIR = root;
 	const config = loadConfig();
+	config.defaults.taskIdPrefix = `UT${Math.random().toString(36).slice(2, 6)}`;
 	const store = new StateStore(config.paths.stateDb);
 	const events = new EventBus();
 	const humanGate = new HumanGate(store, { initialPollMs: 5 });
-	const manager = new TaskManager(config, store, events, humanGate, author);
+	const manager = new TaskManager(config, store, events, humanGate, author, undefined, sessionFactory);
 	return { config, store, events, manager };
 }
 
@@ -196,14 +201,18 @@ describe("TaskManager — iterate", () => {
 		}
 	});
 
-	it("creates a new task with previousResult in args", async () => {
-		const { store, manager } = setup();
+	it("creates a new task with a fixed lightweight iterate workflow", async () => {
+		const mock = createMockSessionFactory({ text: "ok" });
+		const { store, manager } = setup(undefined, mock.createSession);
 		try {
 			const original = manager.create({ source: "inline", script: SIMPLE_SCRIPT });
 			await vi.waitFor(() => expect(manager.get(original.task_id)?.status).toBe("finished"));
 
 			const iter = manager.iterate(original.task_id, { instructions: "improve it" });
 			expect(iter.task_id).not.toBe(original.task_id);
+			expect(manager.getScript(iter.task_id)).toContain("phase('Refine')");
+			expect(manager.getScript(iter.task_id)).toContain("phase('Validate')");
+			expect(manager.getScript(iter.task_id)).not.toBe(SIMPLE_SCRIPT);
 
 			await vi.waitFor(() => expect(manager.get(iter.task_id)?.status).toBe("finished"));
 		} finally {
@@ -212,7 +221,8 @@ describe("TaskManager — iterate", () => {
 	});
 
 	it("records iteration in task_iterations table", async () => {
-		const { store, manager } = setup();
+		const mock = createMockSessionFactory({ text: "ok" });
+		const { store, manager } = setup(undefined, mock.createSession);
 		try {
 			const original = manager.create({ source: "inline", script: SIMPLE_SCRIPT });
 			await vi.waitFor(() => expect(manager.get(original.task_id)?.status).toBe("finished"));
@@ -230,7 +240,8 @@ describe("TaskManager — iterate", () => {
 	});
 
 	it("iteration chain links multiple iterations", async () => {
-		const { store, manager } = setup();
+		const mock = createMockSessionFactory({ text: "ok" });
+		const { store, manager } = setup(undefined, mock.createSession);
 		try {
 			const t1 = manager.create({ source: "inline", script: SIMPLE_SCRIPT });
 			await vi.waitFor(() => expect(manager.get(t1.task_id)?.status).toBe("finished"));
@@ -248,7 +259,8 @@ describe("TaskManager — iterate", () => {
 	});
 
 	it("supports iterating a saved task with structured previousResult and reuseBranch", async () => {
-		const { store, manager } = setup();
+		const mock = createMockSessionFactory({ text: "ok" });
+		const { store, manager } = setup(undefined, mock.createSession);
 		try {
 			manager.putWorkflow(
 				"semantic-like",
@@ -276,6 +288,17 @@ describe("TaskManager — iterate", () => {
 			});
 
 			expect(() => manager.iterate(original.task_id, { instructions: "refine the API shape" })).not.toThrow();
+		} finally {
+			store.close();
+		}
+	});
+
+	it("requires non-empty iterate instructions", async () => {
+		const { store, manager } = setup();
+		try {
+			const original = manager.create({ source: "inline", script: SIMPLE_SCRIPT });
+			await vi.waitFor(() => expect(manager.get(original.task_id)?.status).toBe("finished"));
+			expect(() => manager.iterate(original.task_id, { instructions: "   " })).toThrow("instructions are required");
 		} finally {
 			store.close();
 		}

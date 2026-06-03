@@ -2,9 +2,94 @@
 // (https://github.com/Michaelliv/pi-dynamic-workflows), MIT licensed.
 
 export const WORKFLOW_AUTHOR_PROMPT_SNIPPET =
-	"Write a deterministic JavaScript workflow. Required script header: export const meta = { name: 'short_snake_case', description: 'non-empty description' }. meta.phases is optional documentation; live progress is driven by phase(title).";
+	"Write a deterministic JavaScript workflow. Required script header: export const meta = { name: 'short_snake_case', description: 'non-empty description' }. Use the semantic workflow helpers as the authoring surface. meta.phases is optional documentation; live progress is driven by phase(title).";
 
 export const WORKFLOW_AUTHOR_GUIDELINES = [
+	"Output one raw JavaScript string. First statement: export const meta = { name, description }. Plain JS only, no imports/TypeScript/Date.now()/Math.random().",
+	"Available globals: analyze(prompt, opts), implement(prompt, opts), reviewChange(input, opts), continueImplementation(previous, opts), testChange(input, opts), request_human(request), parallel(thunks), phase(title), log(message), args, cwd, budget.",
+	"Allowed semantic roles: planner, developer, reviewer, tester. Prefer the default role for each helper unless the task clearly needs a different allowed role.",
+	"Do not use raw agent() or pipeline() in authored workflows. Use the semantic helpers only.",
+	"Do not choose branch names, worktree paths, isolation modes, reuseBranch, agentType, transport details, or patch application details.",
+	"kanade iterate uses a separate built-in refinement workflow. Do not author custom iterate branches around args.instructions, args.previousResult, args.previousTaskId, or args.reuseBranch.",
+	"reviewChange() is inspect-only. Use it to review an implementation result, not to continue coding.",
+	"continueImplementation() is only for continuing an earlier implementation after explicit feedback. feedback is required.",
+	"testChange() validates an implementation or continued implementation. Put exact test commands in the prompt or guidance text, not in invented option fields like command or testCommand.",
+	"parallel() is available, but in V1 use it only for bounded read-oriented fan-out. Never run code-changing implementation branches in parallel.",
+	"Assess task complexity:",
+	"  simple: usually one implement() step, with optional testChange() when clearly justified.",
+	"  medium: implement() plus reviewChange() and/or testChange(). If review finds issues, continueImplementation() at most once.",
+	"  complex: optional analyze() first, then one primary implementation path, then targeted review/test. Use request_human() only for ambiguity, risky direction, or explicit approval gates.",
+	"Bias toward the smallest workflow that safely completes the task. Prefer 1-4 primary steps unless the task clearly needs more.",
+	"Keep prompts concise but actionable. Mention the likely files/areas, the intended change, and the focused validation to run. Do not include line numbers or large code snippets.",
+] as const;
+
+export interface WorkflowAuthorPromptOptions {
+	complexityHint?: "simple" | "medium" | "complex";
+}
+
+export function buildWorkflowAuthorPrompt(taskPrompt: string, options: WorkflowAuthorPromptOptions = {}): string {
+	return [
+		"Write a kanade workflow script for the following task.",
+		WORKFLOW_AUTHOR_PROMPT_SNIPPET,
+		"Guidelines:",
+		...WORKFLOW_AUTHOR_GUIDELINES.map((line) => `- ${line}`),
+		options.complexityHint ? `- Current task complexity hint: ${options.complexityHint}.` : null,
+		"",
+		"Example (simple task):",
+		"export const meta = { name: 'fix_login_retry', description: 'Fix login retry bug' };",
+		"phase('Implement');",
+		"const implementation = await implement('Fix the login retry bug. Add one targeted regression test and run the focused test command after the change.', {",
+		"  role: 'developer',",
+		"  output: { type: 'object', properties: { status: { type: 'string', enum: ['done', 'blocked'] }, summary: { type: 'string' }, filesChanged: { type: 'array', items: { type: 'string' } }, testsRun: { type: 'string' } }, required: ['status', 'summary', 'filesChanged', 'testsRun'] }",
+		"});",
+		"phase('Validate');",
+		"return {",
+		"  implementation,",
+		"  validation: await testChange(implementation, {",
+		"    role: 'tester',",
+		"    guidance: 'Run the focused regression test and report pass/fail clearly.'",
+		"  })",
+		"};",
+		"",
+		"Example (medium task with review loop):",
+		"export const meta = { name: 'refactor_workflow_author', description: 'Refactor workflow author logic' };",
+		"phase('Implement');",
+		"const dev = await implement('Refactor the workflow author logic, preserve behavior, update focused tests, and run the relevant test command.', { role: 'developer' });",
+		"phase('Review');",
+		"const review = await reviewChange(dev, {",
+		"  role: 'reviewer',",
+		"  guidance: 'Check correctness, maintainability, and focused test coverage.',",
+		"  output: { type: 'object', properties: { status: { type: 'string', enum: ['approved', 'needs_fix'] }, summary: { type: 'string' }, issues: { type: 'array', items: { type: 'string' } } }, required: ['status', 'summary'] }",
+		"});",
+		"let candidate = dev;",
+		"if (review.status === 'needs_fix') {",
+		"  phase('Fix');",
+		"  candidate = await continueImplementation(dev, {",
+		"    role: 'developer',",
+		"    feedback: review,",
+		"    guidance: 'Address the review issues and rerun the focused tests.'",
+		"  });",
+		"}",
+		"phase('Validate');",
+		"const validation = await testChange(candidate, {",
+		"  role: 'tester',",
+		"  guidance: 'Run the focused validation for the refactor and report pass/fail clearly.'",
+		"});",
+		"return { dev, review, candidate, validation };",
+		"",
+		"Task:",
+		taskPrompt,
+		"",
+		"Output contract:",
+		"- Your final action MUST be a structured_output tool call.",
+		"- The structured_output arguments must contain a 'script' field with the complete JavaScript workflow string.",
+		"- Do not emit prose or markdown. Call structured_output exactly once with the script.",
+	]
+		.filter((line): line is string => Boolean(line))
+		.join("\n");
+}
+
+export const LEGACY_WORKFLOW_AUTHOR_GUIDELINES = [
 	"Output one raw JavaScript string. First statement: export const meta = { name, description }. Plain JS only, no imports/TypeScript/Date.now()/Math.random().",
 	"Available globals: agent(prompt, opts), parallel(thunks), pipeline(items, ...stages), phase(title), log(message), request_human(request), args, cwd, budget.",
 	"Every agent() must include a unique short label. Use schema for structured output. Direct agent() failures fail the workflow; parallel()/pipeline() failures return null.",
@@ -19,12 +104,12 @@ export const WORKFLOW_AUTHOR_GUIDELINES = [
 	"agent() prompts must use backtick template literals (not single quotes) when they span multiple lines. Single-line prompts may use single quotes.",
 ] as const;
 
-export function buildWorkflowAuthorPrompt(taskPrompt: string): string {
+export function buildLegacyWorkflowAuthorPrompt(taskPrompt: string): string {
 	return [
 		"Write a kanade workflow script for the following task.",
-		WORKFLOW_AUTHOR_PROMPT_SNIPPET,
+		"Write a deterministic JavaScript workflow. Required script header: export const meta = { name: 'short_snake_case', description: 'non-empty description' }. meta.phases is optional documentation; live progress is driven by phase(title).",
 		"Guidelines:",
-		...WORKFLOW_AUTHOR_GUIDELINES.map((line) => `- ${line}`),
+		...LEGACY_WORKFLOW_AUTHOR_GUIDELINES.map((line) => `- ${line}`),
 		"",
 		"Example (simple task):",
 		"export const meta = { name: 'fix_bug', description: 'Fix null pointer in login' };",

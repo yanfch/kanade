@@ -14,6 +14,7 @@ import { SnapshotBuilder } from "../workflow-engine/snapshot-builder.ts";
 import type { WorkflowSnapshot } from "../workflow-engine/snapshot.ts";
 import { AppError } from "./errors.ts";
 import type { EventBus } from "./event-bus.ts";
+import { buildIterateWorkflowScript } from "./iterate-workflow.ts";
 import { LlmWorkflowAuthor, StubWorkflowAuthor, type WorkflowAuthor } from "./workflow-author.ts";
 import { type WorkflowInfo, WorkflowStore } from "./workflow-store.ts";
 
@@ -232,16 +233,16 @@ export class TaskManager {
 	iterate(parentTaskId: string, options: { instructions?: string; args?: unknown } = {}): CreateTaskResult {
 		const parentTask = this.store.getTask(parentTaskId);
 		if (!parentTask) throw new AppError(`Task not found: ${parentTaskId}`, 404);
-		if (!existsSync(parentTask.workflow_path))
-			throw new AppError(`Workflow script not found for task: ${parentTaskId}`, 404);
 
-		const script = readFileSync(parentTask.workflow_path, "utf8");
+		const normalizedInstructions = typeof options.instructions === "string" ? options.instructions.trim() : "";
+		if (!normalizedInstructions) throw new AppError("instructions are required", 400);
+
+		const script = buildIterateWorkflowScript();
 		const parentOptions = JSON.parse(parentTask.options) as TaskOptions;
 
 		// Find worktree branch from parent task
 		const worktrees = this.store.findWorktreesByTask(parentTaskId);
 		const reuseBranch = worktrees.length > 0 ? worktrees[0].branch : undefined;
-		const normalizedInstructions = typeof options.instructions === "string" ? options.instructions : null;
 		const userArgs =
 			options.args && typeof options.args === "object" && !Array.isArray(options.args)
 				? (options.args as Record<string, unknown>)
