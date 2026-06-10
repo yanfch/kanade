@@ -68,3 +68,13 @@ npx vitest run test/e2e-mock/   # E2E
 npx vitest run src/server/      # Server
 npx vitest run eval/scorer*     # Eval scorer
 ```
+
+## Generated workflow acceptance checks
+
+These checks ensure that LLM-generated workflows remain safe and correct:
+
+1. **Semantic-only output** – Generated workflows must contain only high-level, semantic instructions (e.g., task description, goals, acceptance criteria). They must not include implementation-level details that bypass the platform's execution layer.
+
+2. **Validation rejects raw agent/pipeline constructs** – The workflow validation layer must reject any generated workflow that includes raw `agent`, `pipeline`, or other low-level execution controls. This prevents the LLM from injecting unsafe or uncontrolled execution paths.
+
+3. **Worktree auto-commit failures abort the task** – If a worktree auto-commit operation fails, the task must transition to a failed state immediately. The system must not report a misleading "finished" status when the commit (and thus the deliverable) did not succeed.
