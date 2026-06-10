@@ -2,6 +2,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import {
 	AuthStorage,
+	DefaultResourceLoader,
 	ModelRegistry,
 	SessionManager,
 	SettingsManager,
@@ -27,11 +28,18 @@ export class PromptAuthor {
 		const authStorage = AuthStorage.create(this.opts.authPath ?? join(agentDir, "auth.json"));
 		const modelRegistry = ModelRegistry.create(authStorage, this.opts.modelsPath ?? join(agentDir, "models.json"));
 		const settingsManager = SettingsManager.inMemory();
+		const resourceLoader = new DefaultResourceLoader({
+			cwd: process.cwd(),
+			agentDir,
+			settingsManager,
+			noContextFiles: true,
+		});
 
 		const { session } = await createAgentSession({
 			agentDir,
 			authStorage,
 			modelRegistry,
+			resourceLoader,
 			sessionManager: this.opts.persistDir
 				? (() => {
 						if (!existsSync(this.opts.persistDir)) mkdirSync(this.opts.persistDir, { recursive: true });

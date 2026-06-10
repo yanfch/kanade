@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TSchema } from "typebox";
 import { describe, expect, it } from "vitest";
-import { parseWorkflowScript, runWorkflow } from "./runtime.ts";
+import { parseWorkflowScript, runWorkflow, validateSemanticWorkflowScript } from "./runtime.ts";
 import type { AgentRunOptions, AgentRunResult } from "./workflow-agent.ts";
 
 const stubAgent = {
@@ -893,6 +893,236 @@ return await reviewChange(dev, { role: 'reviewer' })`;
 				issues: { type: "array", items: { type: "string" } },
 			},
 		});
+	});
+});
+
+describe("runWorkflow — requestHuman input validation", () => {
+	const baseMeta = `export const meta = { name: 'human_validate', description: 'Human validation' }\n`;
+
+	const runWithValidHuman = async (script: string) => {
+		return runWorkflow(script, {
+			human: {
+				async wait() {
+					return { decision: "yes" };
+				},
+			},
+		});
+	};
+
+	it("rejects null request", async () => {
+		const script = `${baseMeta}return await request_human(null)`;
+		await expect(runWithValidHuman(script)).rejects.toThrow(/request must be a plain object/);
+	});
+
+	it("rejects primitive request", async () => {
+		const script = `${baseMeta}return await request_human('approve')`;
+		await expect(runWithValidHuman(script)).rejects.toThrow(/request must be a plain object/);
+	});
+
+	it("rejects array request", async () => {
+		const script = `${baseMeta}return await request_human(['approve'])`;
+		await expect(runWithValidHuman(script)).rejects.toThrow(/request must be a plain object/);
+	});
+
+	it("rejects request with missing title", async () => {
+		const script = `${baseMeta}return await request_human({})`;
+		await expect(runWithValidHuman(script)).rejects.toThrow(/title must be a non-empty string/);
+	});
+
+	it("rejects request with empty title", async () => {
+		const script = `${baseMeta}return await request_human({ title: '' })`;
+		await expect(runWithValidHuman(script)).rejects.toThrow(/title must be a non-empty string/);
+	});
+
+	it("rejects request with whitespace-only title", async () => {
+		const script = `${baseMeta}return await request_human({ title: '   ' })`;
+		await expect(runWithValidHuman(script)).rejects.toThrow(/title must be a non-empty string/);
+	});
+
+	it("rejects non-array options", async () => {
+		const script = `${baseMeta}return await request_human({ title: 'Approve?', options: 'yes' })`;
+		await expect(runWithValidHuman(script)).rejects.toThrow(/options must be an array/);
+	});
+
+	it("rejects options with empty string element", async () => {
+		const script = `${baseMeta}return await request_human({ title: 'Approve?', options: ['yes', ''] })`;
+		await expect(runWithValidHuman(script)).rejects.toThrow(/options\[1\] must be a non-empty string/);
+	});
+
+	it("rejects options with non-string element", async () => {
+		const script = `${baseMeta}return await request_human({ title: 'Approve?', options: [42] })`;
+		await expect(runWithValidHuman(script)).rejects.toThrow(/options\[0\] must be a non-empty string/);
+	});
+
+	it("rejects null data", async () => {
+		const script = `${baseMeta}return await request_human({ title: 'Approve?', data: null })`;
+		await expect(runWithValidHuman(script)).rejects.toThrow(/data must be a plain object/);
+	});
+
+	it("rejects array data", async () => {
+		const script = `${baseMeta}return await request_human({ title: 'Approve?', data: [1, 2] })`;
+		await expect(runWithValidHuman(script)).rejects.toThrow(/data must be a plain object/);
+	});
+
+	it("rejects primitive data", async () => {
+		const script = `${baseMeta}return await request_human({ title: 'Approve?', data: 'info' })`;
+		await expect(runWithValidHuman(script)).rejects.toThrow(/data must be a plain object/);
+	});
+
+	it("accepts valid request with title only", async () => {
+		const script = `${baseMeta}return await request_human({ title: 'Approve?' })`;
+		const result = await runWithValidHuman(script);
+		expect(result.result).toEqual({ decision: "yes" });
+	});
+
+	it("accepts valid request with all optional fields", async () => {
+		const script = `${baseMeta}return await request_human({ title: 'Approve?', options: ['yes', 'no'], data: { key: 'value' } })`;
+		const result = await runWithValidHuman(script);
+		expect(result.result).toEqual({ decision: "yes" });
+	});
+
+	it("accepts valid request with empty options array", async () => {
+		const script = `${baseMeta}return await request_human({ title: 'Approve?', options: [] })`;
+		const result = await runWithValidHuman(script);
+		expect(result.result).toEqual({ decision: "yes" });
+	});
+});
+
+describe("validateSemanticWorkflowScript", () => {
+	it("accepts a valid semantic workflow script", () => {
+		const script = `export const meta = { name: 'demo', description: 'Demo' }
+phase('Implement')
+const dev = await implement('Make the change.', { role: 'developer' })
+return { dev }`;
+		expect(() => validateSemanticWorkflowScript(script)).not.toThrow();
+	});
+
+	it("accepts a complex valid semantic workflow", () => {
+		const script = `export const meta = { name: 'review_loop', description: 'Review loop' }
+phase('Implement')
+const dev = await implement('Do the change.', { role: 'developer', guidance: 'Be careful.' })
+phase('Review')
+const review = await reviewChange(dev, { role: 'reviewer', guidance: 'Check correctness.' })
+if (review.status === 'needs_fix') {
+  const fix = await continueImplementation(dev, { role: 'developer', feedback: review, guidance: 'Fix issues.' })
+  return { dev, review, fix }
+}
+return { dev, review }`;
+		expect(() => validateSemanticWorkflowScript(script)).not.toThrow();
+	});
+
+	it("accepts a script with only meta and empty body", () => {
+		const script = `export const meta = { name: 'empty', description: 'Empty' }`;
+		expect(() => validateSemanticWorkflowScript(script)).not.toThrow();
+	});
+
+	it("rejects raw agent() calls in the script body", () => {
+		const script = `export const meta = { name: 'bad', description: 'Bad' }
+return await agent('do something', { label: 'test' })`;
+		expect(() => validateSemanticWorkflowScript(script)).toThrow(/raw agent\(\)/);
+	});
+
+	it("rejects raw pipeline() calls in the script body", () => {
+		const script = `export const meta = { name: 'bad', description: 'Bad' }
+return await pipeline(['a', 'b'], (item) => item)`;
+		expect(() => validateSemanticWorkflowScript(script)).toThrow(/raw pipeline\(\)/);
+	});
+
+	it("rejects agent() calls inside parallel thunks", () => {
+		const script = `export const meta = { name: 'bad', description: 'Bad' }
+await parallel([
+  () => agent('a', { label: 'a' }),
+  () => agent('b', { label: 'b' }),
+])
+return true`;
+		expect(() => validateSemanticWorkflowScript(script)).toThrow(/raw agent\(\)/);
+	});
+
+	it("rejects low-level control key isolation in implement() options", () => {
+		const script = `export const meta = { name: 'bad', description: 'Bad' }
+return await implement('Do it', { role: 'developer', isolation: 'worktree' })`;
+		expect(() => validateSemanticWorkflowScript(script)).toThrow(/low-level control key "isolation"/);
+	});
+
+	it("rejects low-level control key reuseBranch in implement() options", () => {
+		const script = `export const meta = { name: 'bad', description: 'Bad' }
+return await implement('Do it', { role: 'developer', reuseBranch: 'feature-x' })`;
+		expect(() => validateSemanticWorkflowScript(script)).toThrow(/low-level control key "reuseBranch"/);
+	});
+
+	it("rejects low-level control key agentType in implement() options", () => {
+		const script = `export const meta = { name: 'bad', description: 'Bad' }
+return await implement('Do it', { role: 'developer', agentType: 'dev' })`;
+		expect(() => validateSemanticWorkflowScript(script)).toThrow(/low-level control key "agentType"/);
+	});
+
+	it("rejects low-level control key branch in analyze() options", () => {
+		const script = `export const meta = { name: 'bad', description: 'Bad' }
+return await analyze('Plan it', { role: 'planner', branch: 'feature-x' })`;
+		expect(() => validateSemanticWorkflowScript(script)).toThrow(/low-level control key "branch".*analyze/);
+	});
+
+	it("rejects low-level control key isolation in agent() options", () => {
+		const script = `export const meta = { name: 'bad', description: 'Bad' }
+return await agent('Do it', { label: 'x', isolation: 'worktree' })`;
+		expect(() => validateSemanticWorkflowScript(script)).toThrow(/low-level control key "isolation".*agent/);
+	});
+
+	it("rejects reading args.instructions", () => {
+		const script = `export const meta = { name: 'bad', description: 'Bad' }
+const instructions = args.instructions
+return instructions`;
+		expect(() => validateSemanticWorkflowScript(script)).toThrow(/args\.instructions.*not allowed/);
+	});
+
+	it("rejects reading args.previousResult", () => {
+		const script = `export const meta = { name: 'bad', description: 'Bad' }
+const prev = args.previousResult
+return prev`;
+		expect(() => validateSemanticWorkflowScript(script)).toThrow(/args\.previousResult.*not allowed/);
+	});
+
+	it("rejects reading args.previousTaskId", () => {
+		const script = `export const meta = { name: 'bad', description: 'Bad' }
+const id = args.previousTaskId
+return id`;
+		expect(() => validateSemanticWorkflowScript(script)).toThrow(/args\.previousTaskId.*not allowed/);
+	});
+
+	it("rejects reading args.reuseBranch", () => {
+		const script = `export const meta = { name: 'bad', description: 'Bad' }
+const branch = args.reuseBranch
+return branch`;
+		expect(() => validateSemanticWorkflowScript(script)).toThrow(/args\.reuseBranch.*not allowed/);
+	});
+
+	it("accepts computed args access", () => {
+		const script = `export const meta = { name: 'ok', description: 'Ok' }
+const key = 'instructions'
+return args[key]`;
+		expect(() => validateSemanticWorkflowScript(script)).not.toThrow();
+	});
+
+	it("collects multiple errors in one pass", () => {
+		const script = `export const meta = { name: 'bad', description: 'Bad' }
+await agent('a', { label: 'a', isolation: 'worktree' })
+const prev = args.previousResult
+return prev`;
+		expect(() => validateSemanticWorkflowScript(script)).toThrow(
+			/raw agent\(\).*low-level control key.*args\.previousResult/s,
+		);
+	});
+
+	it("rejects meta without name", () => {
+		const script = `export const meta = { description: 'No name' }
+return true`;
+		expect(() => validateSemanticWorkflowScript(script)).toThrow(/meta\.name/);
+	});
+
+	it("rejects meta without description", () => {
+		const script = `export const meta = { name: 'no_desc' }
+return true`;
+		expect(() => validateSemanticWorkflowScript(script)).toThrow(/meta\.description/);
 	});
 });
 

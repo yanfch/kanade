@@ -557,6 +557,7 @@ describe("WorkflowAgent — isolation", () => {
 					},
 				};
 			},
+			commitDirtyWorktree: async () => {},
 		};
 
 		const mock = createMockSessionFactory();
@@ -593,6 +594,34 @@ describe("WorkflowAgent — isolation", () => {
 
 		await agent.run("do something", {});
 		expect(prepared).toHaveLength(0);
+	});
+
+	it("fails the agent run when worktree auto-commit fails", async () => {
+		const cleanedUp: string[] = [];
+		const mockIsolation = {
+			prepare: async () => ({
+				cwd: "/tmp/worktree-mock",
+				worktree: { id: "wt-1", branch: "kanade/T-001/dev", path: "/tmp/worktree-mock" },
+				cleanup: async () => {
+					cleanedUp.push("done");
+				},
+			}),
+			commitDirtyWorktree: async () => {
+				throw new Error("pre-commit hook failed");
+			},
+		};
+
+		const mock = createMockSessionFactory();
+		const agent = new WorkflowAgent({
+			createSession: mock.createSession,
+			isolationManager: mockIsolation as never,
+			taskId: "T-001",
+		});
+
+		await expect(agent.run("do something", { label: "dev", isolation: "worktree" })).rejects.toThrow(
+			/Failed to auto-commit worktree changes for dev: pre-commit hook failed/,
+		);
+		expect(cleanedUp).toEqual(["done"]);
 	});
 });
 

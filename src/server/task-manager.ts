@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@earendil-works/pi-coding-agent";
@@ -9,7 +10,7 @@ import { Journal, type JournalAllEntries } from "../journal/index.ts";
 import type { NeedsHumanRow, StateStore, TaskRow, TaskStatus, WorkflowSource, WorktreeRow } from "../store/index.ts";
 import * as Attrs from "../tracing/attributes.ts";
 import type { TracingHandle, Logger as TracingLogger } from "../tracing/index.ts";
-import { runWorkflow } from "../workflow-engine/index.ts";
+import { runWorkflow, validateSemanticWorkflowScript } from "../workflow-engine/index.ts";
 import { SnapshotBuilder } from "../workflow-engine/snapshot-builder.ts";
 import type { WorkflowSnapshot } from "../workflow-engine/snapshot.ts";
 import { AppError } from "./errors.ts";
@@ -100,7 +101,9 @@ export class TaskManager {
 
 	async generateWorkflow(prompt: string, options?: TaskOptions): Promise<GenerateWorkflowResult> {
 		if (!prompt?.trim()) throw new AppError("prompt is required", 400);
-		return { script: await this.author.generate(prompt, { model: options?.model }) };
+		const script = await this.author.generate(prompt, { model: options?.model });
+		validateSemanticWorkflowScript(script);
+		return { script };
 	}
 
 	create(input: CreateTaskInput): CreateTaskResult {
@@ -123,6 +126,7 @@ export class TaskManager {
 		const runDir = join(this.config.paths.runsDir, taskId);
 		mkdirSync(runDir, { recursive: true });
 		const workflowPath = join(runDir, "workflow.js");
+		const base = this.resolveTaskBase();
 
 		const now = Date.now();
 		this.store.insertTask({
@@ -131,8 +135,8 @@ export class TaskManager {
 			workflow_name: null,
 			workflow_path: workflowPath,
 			status: "created",
-			base_repo: null,
-			base_branch: this.config.isolation.defaultBaseBranch,
+			base_repo: base.baseRepo,
+			base_branch: base.baseBranch,
 			cwd: options?.cwd ?? process.cwd(),
 			created_at: now,
 			started_at: null,
@@ -175,6 +179,7 @@ export class TaskManager {
 				authorSpan.end();
 			}
 			writeFileSync(workflowPath, script, "utf8");
+			validateSemanticWorkflowScript(script);
 			this.logger.forTask(taskId).withContext(taskTrace.context).info("workflow script generated", {
 				model: options?.model,
 			});
@@ -204,6 +209,7 @@ export class TaskManager {
 		mkdirSync(runDir, { recursive: true });
 		const workflowPath = join(runDir, "workflow.js");
 		writeFileSync(workflowPath, script, "utf8");
+		const base = this.resolveTaskBase();
 
 		const now = Date.now();
 		this.store.insertTask({
@@ -212,8 +218,8 @@ export class TaskManager {
 			workflow_name: workflowName,
 			workflow_path: workflowPath,
 			status: "created",
-			base_repo: null,
-			base_branch: this.config.isolation.defaultBaseBranch,
+			base_repo: base.baseRepo,
+			base_branch: base.baseBranch,
 			cwd: options?.cwd ?? process.cwd(),
 			created_at: now,
 			started_at: null,
@@ -312,6 +318,21 @@ export class TaskManager {
 
 	get(taskId: string): TaskRow | null {
 		return this.store.getTask(taskId);
+	}
+
+	private resolveTaskBase(): { baseRepo: string; baseBranch: string } {
+		const baseRepo = this.config.isolation.defaultBaseRepo ?? process.cwd();
+		try {
+			const branch = execSync("git rev-parse --abbrev-ref HEAD", {
+				cwd: baseRepo,
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "ignore"],
+			}).trim();
+			if (branch) return { baseRepo, baseBranch: branch };
+		} catch {
+			// Fall back to configured default when git branch detection is unavailable.
+		}
+		return { baseRepo, baseBranch: this.config.isolation.defaultBaseBranch };
 	}
 
 	list(status?: TaskStatus): TaskRow[] {

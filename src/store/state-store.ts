@@ -105,7 +105,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 	workflow_path TEXT NOT NULL,
 	status TEXT NOT NULL,
 	base_repo TEXT,
-	base_branch TEXT NOT NULL DEFAULT 'develop',
+	base_branch TEXT NOT NULL DEFAULT 'main',
 	cwd TEXT NOT NULL,
 	created_at INTEGER NOT NULL,
 	started_at INTEGER,

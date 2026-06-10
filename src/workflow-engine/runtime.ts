@@ -160,6 +160,16 @@ interface TemplateElementValue {
 
 const NONDETERMINISM_ERROR =
 	"Workflow scripts must be deterministic: Date.now()/Math.random()/new Date() are unavailable";
+const FORBIDDEN_SEMANTIC_CONTROL_KEYS = new Set(["isolation", "reuseBranch", "agentType", "branch"]);
+const SEMANTIC_WORKFLOW_HELPERS = new Set([
+	"agent",
+	"analyze",
+	"implement",
+	"reviewChange",
+	"continueImplementation",
+	"testChange",
+]);
+const FORBIDDEN_GENERATED_ITERATE_ARGS = new Set(["instructions", "previousResult", "previousTaskId", "reuseBranch"]);
 
 export async function runWorkflow<T = unknown>(
 	script: string,
@@ -379,6 +389,31 @@ export async function runWorkflow<T = unknown>(
 
 	const requestHuman = async (request: HumanRequest): Promise<HumanResponse> => {
 		throwIfAborted();
+
+		// --- input validation ---
+		if (request === null || typeof request !== "object" || Array.isArray(request)) {
+			throw new TypeError("request must be a plain object");
+		}
+		if (typeof request.title !== "string" || !request.title.trim()) {
+			throw new TypeError("title must be a non-empty string");
+		}
+		if (request.options !== undefined) {
+			if (!Array.isArray(request.options)) {
+				throw new TypeError("options must be an array");
+			}
+			for (let i = 0; i < request.options.length; i++) {
+				if (typeof request.options[i] !== "string" || !request.options[i].trim()) {
+					throw new TypeError(`options[${i}] must be a non-empty string`);
+				}
+			}
+		}
+		if (request.data !== undefined) {
+			if (request.data === null || typeof request.data !== "object" || Array.isArray(request.data)) {
+				throw new TypeError("data must be a plain object");
+			}
+		}
+		// --- end input validation ---
+
 		if (!options.human) throw new Error("request_human() is not configured for this workflow run");
 
 		const ordinal = state.humanCount++;
@@ -711,13 +746,7 @@ export async function runWorkflow<T = unknown>(
 }
 
 export function parseWorkflowScript(script: string): { meta: WorkflowMeta; body: string } {
-	const ast = parse(script, {
-		ecmaVersion: "latest",
-		sourceType: "module",
-		allowAwaitOutsideFunction: true,
-		allowReturnOutsideFunction: true,
-		ranges: false,
-	}) as unknown as AnyNode;
+	const ast = parseWorkflowAst(script);
 
 	assertDeterministicAst(ast);
 
@@ -748,6 +777,53 @@ export function parseWorkflowScript(script: string): { meta: WorkflowMeta; body:
 		meta,
 		body: script.slice(0, first.start) + script.slice(first.end),
 	};
+}
+
+export function validateSemanticWorkflowScript(script: string): void {
+	const { body } = parseWorkflowScript(script);
+	if (!body.trim()) return;
+
+	const ast = parseWorkflowAst(body);
+	const errors: string[] = [];
+
+	const visit = (node: AnyNode) => {
+		if (node.type === "CallExpression") {
+			const calleeName = identifierNameOf(node.callee as AnyNode | undefined);
+			if (calleeName === "agent" || calleeName === "pipeline") {
+				errors.push(
+					`raw ${calleeName}() is not allowed in semantic workflows; use analyze(), implement(), reviewChange(), continueImplementation(), or testChange() instead`,
+				);
+			}
+			if (calleeName && SEMANTIC_WORKFLOW_HELPERS.has(calleeName)) {
+				const optsArg = (node.arguments as AnyNode[] | undefined)?.[1];
+				if (optsArg?.type === "ObjectExpression") {
+					for (const prop of optsArg.properties as AnyNode[]) {
+						if (prop.type !== "Property") continue;
+						const keyName = propertyNameOfKeyNode(prop.key as AnyNode | undefined);
+						if (keyName && FORBIDDEN_SEMANTIC_CONTROL_KEYS.has(keyName)) {
+							errors.push(`low-level control key "${keyName}" is not allowed in ${calleeName}() options`);
+						}
+					}
+				}
+			}
+		}
+
+		if (node.type === "MemberExpression") {
+			const objectName = identifierNameOf(node.object as AnyNode | undefined);
+			const propertyName = propertyNameOf(node);
+			if (objectName === "args" && propertyName && FORBIDDEN_GENERATED_ITERATE_ARGS.has(propertyName)) {
+				errors.push(`reading args.${propertyName} is not allowed; iterate workflows are managed by the system`);
+			}
+		}
+
+		for (const child of astChildren(node)) visit(child);
+	};
+
+	visit(ast);
+
+	if (errors.length > 0) {
+		throw new Error(`Semantic workflow validation failed:\n${errors.join("\n")}`);
+	}
 }
 
 function evaluateLiteral(node: AnyNode, path: string): unknown {
@@ -791,6 +867,16 @@ function evaluateLiteral(node: AnyNode, path: string): unknown {
 		default:
 			throw new Error(`non-literal node type in ${path}: ${node.type}`);
 	}
+}
+
+function parseWorkflowAst(script: string): AnyNode {
+	return parse(script, {
+		ecmaVersion: "latest",
+		sourceType: "module",
+		allowAwaitOutsideFunction: true,
+		allowReturnOutsideFunction: true,
+		ranges: false,
+	}) as unknown as AnyNode;
 }
 
 function propertyKey(node: AnyNode, path: string): string {
@@ -866,6 +952,16 @@ function propertyNameOf(node: AnyNode): string | undefined {
 	const property = node.property as AnyNode | undefined;
 	if (!node.computed && property?.type === "Identifier") return property.name;
 	return staticStringOf(property);
+}
+
+function identifierNameOf(node: AnyNode | undefined): string | undefined {
+	return node?.type === "Identifier" ? node.name : undefined;
+}
+
+function propertyNameOfKeyNode(node: AnyNode | undefined): string | undefined {
+	if (!node) return undefined;
+	if (node.type === "Identifier") return node.name;
+	return staticStringOf(node);
 }
 
 function staticStringOf(node: AnyNode | undefined): string | undefined {

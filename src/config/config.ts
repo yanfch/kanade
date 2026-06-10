@@ -158,8 +158,14 @@ function expandHome(p: string): string {
 	return p;
 }
 
+function getPathEnv(name: string): string | undefined {
+	const value = process.env[name];
+	if (!value || value === "undefined" || value === "null") return undefined;
+	return value;
+}
+
 function getKanadeDir(): string {
-	const fromEnv = process.env.KANADE_DIR;
+	const fromEnv = getPathEnv("KANADE_DIR");
 	if (fromEnv) return resolve(expandHome(fromEnv));
 	return join(homedir(), ".kanade");
 }
@@ -174,7 +180,7 @@ function buildPaths(root: string): KanadePaths {
 		sharedExtensionsDir: join(root, "shared", "extensions"),
 		runsDir: join(root, "runs"),
 		worktreesDir: join(root, "worktrees"),
-		tracesDir: process.env.KANADE_TRACES_DIR ?? join(root, "traces"),
+		tracesDir: getPathEnv("KANADE_TRACES_DIR") ?? join(root, "traces"),
 		stateDb: join(root, "db", "state.db"),
 		logsDir: join(root, "logs"),
 	};
@@ -189,7 +195,7 @@ function defaultConfig(paths: KanadePaths): KanadeConfig {
 		},
 		isolation: {
 			defaultMode: "worktree",
-			defaultBaseBranch: "develop",
+			defaultBaseBranch: "main",
 			defaultBaseRepo: null,
 			worktreeBaseDir: paths.worktreesDir,
 			branchPrefix: "kanade",
@@ -200,7 +206,7 @@ function defaultConfig(paths: KanadePaths): KanadeConfig {
 			maxConcurrent: 16,
 		},
 		merge: {
-			targetBranch: "develop",
+			targetBranch: "main",
 			useNoFf: true,
 			requireCleanLint: true,
 			requireCleanTest: true,

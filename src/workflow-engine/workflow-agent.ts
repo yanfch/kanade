@@ -206,10 +206,13 @@ export class WorkflowAgent {
 		const retry = options.retry;
 		const maxAttempts = 1 + (retry?.maxRetries ?? 0);
 		const backoffMs = retry?.backoffMs ?? 1000;
-		let agentResult: unknown;
+		let agentResult: AgentRunResult<TSchemaDef> | undefined;
+		let runError: unknown;
+		let commitError: unknown;
 
 		try {
 			let lastError: unknown;
+			let completed = false;
 			for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 				if (attempt > 1) {
 					// Backoff with abort check
@@ -275,7 +278,8 @@ export class WorkflowAgent {
 					this.journal?.write(cacheKey, { result, tokens: estimateTokens(result) });
 					this.emitSessionUsage(session, options.onUsage);
 					agentResult = result;
-					return result;
+					completed = true;
+					break;
 				} catch (err) {
 					lastError = err;
 					if (options.signal?.aborted) throw err;
@@ -285,20 +289,27 @@ export class WorkflowAgent {
 					session?.dispose();
 				}
 			}
-			throw lastError;
+			if (!completed) throw lastError;
+		} catch (error) {
+			runError = error;
 		} finally {
-			// Auto-commit dirty worktree changes after each agent run
 			if (isoCtx?.worktree && this.isolationManager) {
 				try {
-					// Build meaningful commit message from agent result
 					const summary = this.extractCommitSummary(agentResult, label);
 					await this.isolationManager.commitDirtyWorktree(isoCtx.worktree.path, summary);
-				} catch {
-					// best effort — don't fail the agent run
+				} catch (error) {
+					commitError = error;
 				}
 			}
 			await isoCtx?.cleanup();
 		}
+
+		if (commitError) {
+			const detail = commitError instanceof Error ? commitError.message : String(commitError);
+			throw new Error(`Failed to auto-commit worktree changes for ${label}: ${detail}`);
+		}
+		if (runError) throw runError;
+		return agentResult as AgentRunResult<TSchemaDef>;
 	}
 
 	private async loadRole(name: string): Promise<RoleConfig> {

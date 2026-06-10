@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,14 @@ import { TaskManager } from "./task-manager.ts";
 import { createMockSessionFactory } from "./test-session-mock.ts";
 
 const SIMPLE_SCRIPT = "export const meta = { name: 'demo', description: 'Demo' }\nreturn { ok: true }";
+
+function currentBranch(): string {
+	try {
+		return execSync("git rev-parse --abbrev-ref HEAD", { encoding: "utf8" }).trim();
+	} catch {
+		return "main";
+	}
+}
 
 function setup(
 	author?: { generate(prompt: string, options?: { model?: string }): Promise<string> },
@@ -713,6 +722,39 @@ describe("TaskManager — generated workflow failure", () => {
 		}
 	});
 
+	it("fails fast when generated script violates semantic workflow rules", async () => {
+		const { store, events } = setup();
+		try {
+			const emitted: string[] = [];
+			events.onAny((e) => emitted.push(e.type));
+
+			const failManager = new (await import("./task-manager.ts")).TaskManager(
+				(await import("../config/index.ts")).loadConfig(),
+				store,
+				events,
+				new (await import("../human/index.ts")).HumanGate(store, { initialPollMs: 5 }),
+				{
+					async generate() {
+						return "export const meta = { name: 'bad_generated', description: 'Bad generated' }\nreturn await agent('do it', { label: 'x' })";
+					},
+				},
+			);
+
+			const task = failManager.create({ source: "generated", prompt: "test" });
+			await vi.waitFor(() => {
+				const row = failManager.get(task.task_id);
+				expect(row?.status).toBe("failed");
+			});
+
+			expect(failManager.get(task.task_id)?.error).toContain("Semantic workflow validation failed");
+			expect(failManager.get(task.task_id)?.error).toContain("raw agent()");
+			expect(emitted).not.toContain("task.running");
+			expect(failManager.getWorktrees(task.task_id)).toEqual([]);
+		} finally {
+			store.close();
+		}
+	});
+
 	it("emits task.script_generated before run starts for successful generation", async () => {
 		const { store, events, manager } = setup();
 		try {
@@ -735,12 +777,13 @@ describe("TaskManager — generated workflow failure", () => {
 });
 
 describe("TaskManager — task metadata", () => {
-	it("stores base_branch from config in task row", async () => {
+	it("stores resolved base repo and branch in task row", async () => {
 		const { store, manager } = setup();
 		try {
 			const task = manager.create({ source: "inline", script: SIMPLE_SCRIPT });
 			const row = manager.get(task.task_id);
-			expect(row?.base_branch).toBe("develop");
+			expect(row?.base_repo).toBe(process.cwd());
+			expect(row?.base_branch).toBe(currentBranch());
 			expect(row?.workflow_source).toBe("inline");
 			expect(row?.created_at).toBeTruthy();
 		} finally {

@@ -632,7 +632,7 @@ async function cmdMerge(taskId: string | undefined) {
 		process.exit(1);
 	}
 
-	console.log(pc.dim(`Merging ${pc.bold(taskId)} into develop...`));
+	console.log(pc.dim(`Merging ${pc.bold(taskId)} into the configured target branch...`));
 	const body = (await api(`/tasks/${taskId}/merge`, { method: "POST" })) as {
 		success: boolean;
 		mergeCommit?: string;

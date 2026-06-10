@@ -1,5 +1,5 @@
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadConfig } from "./config.ts";
@@ -7,17 +7,21 @@ import { loadConfig } from "./config.ts";
 const originalKanadeDir = process.env.KANADE_DIR;
 const originalTracesDir = process.env.KANADE_TRACES_DIR;
 
+function unsetEnv(name: string): void {
+	Reflect.deleteProperty(process.env, name);
+}
+
 afterEach(() => {
-	if (originalKanadeDir === undefined) process.env.KANADE_DIR = undefined;
+	if (originalKanadeDir === undefined) unsetEnv("KANADE_DIR");
 	else process.env.KANADE_DIR = originalKanadeDir;
-	if (originalTracesDir === undefined) process.env.KANADE_TRACES_DIR = undefined;
+	if (originalTracesDir === undefined) unsetEnv("KANADE_TRACES_DIR");
 	else process.env.KANADE_TRACES_DIR = originalTracesDir;
 });
 
 function tempKanadeDir(): string {
 	const dir = mkdtempSync(join(tmpdir(), "kanade-config-"));
 	process.env.KANADE_DIR = dir;
-	process.env.KANADE_TRACES_DIR = undefined;
+	unsetEnv("KANADE_TRACES_DIR");
 	return dir;
 }
 
@@ -40,6 +44,16 @@ describe("loadConfig", () => {
 		expect(config.paths.worktreesDir).toBe(join(root, "worktrees"));
 		expect(config.isolation.worktreeBaseDir).toBe(config.paths.worktreesDir);
 		expect(existsSync(config.paths.worktreesDir)).toBe(true);
+	});
+
+	it("ignores stringified undefined path env values", () => {
+		process.env.KANADE_DIR = "undefined";
+		process.env.KANADE_TRACES_DIR = "undefined";
+
+		const config = loadConfig();
+
+		expect(config.paths.root).toBe(join(homedir(), ".kanade"));
+		expect(config.paths.tracesDir).toBe(join(config.paths.root, "traces"));
 	});
 
 	it("merges explicit kanade model config", () => {

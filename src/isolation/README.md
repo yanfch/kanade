@@ -22,7 +22,7 @@ Files to add:
 
 ## Constraints
 
-- Never operate on `main` branch directly (config target is `develop`).
+- Never operate on the default branch directly; worktree branches should merge back into the configured target branch.
 - All worktree paths under `paths.runsDir/<task>/worktrees/<label>`.
 - Persist every state change through StateStore; don't rely on git as source of truth.
 - Cleanup should be idempotent (worktree may already be removed externally).

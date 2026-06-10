@@ -104,7 +104,7 @@ export class IsolationManager {
 	}
 
 	/**
-	 * Merge a task's worktree branch into the target branch (typically develop).
+	 * Merge a task's worktree branch into the configured target branch.
 	 *
 	 * SAFETY: worktree is only deleted on successful merge. On failure, the
 	 * worktree and branch are preserved so the user can inspect/fix manually.
