@@ -49,6 +49,8 @@ export interface WorkflowAgentOptions {
 	session?: Partial<CreateAgentSessionOptions>;
 	/** Extra system guidance prepended to every subagent task. */
 	instructions?: string;
+	/** Default subagent model used when neither the call nor the role specifies one. */
+	defaultModel?: string;
 	rolesDir?: string;
 	loadRole?: (name: string) => RoleConfig | Promise<RoleConfig>;
 	createSession?: CreateSession;
@@ -124,6 +126,7 @@ export class WorkflowAgent {
 	private readonly createCodingTools: CreateCodingTools;
 	private readonly sessionOptions: Partial<CreateAgentSessionOptions>;
 	private readonly instructions?: string;
+	private readonly defaultModel?: string;
 	private readonly rolesDir?: string;
 	private readonly roleLoader?: (name: string) => RoleConfig | Promise<RoleConfig>;
 	private readonly createSession: CreateSession;
@@ -146,6 +149,7 @@ export class WorkflowAgent {
 		this.createCodingTools = options.createCodingTools ?? createCodingTools;
 		this.sessionOptions = options.session ?? {};
 		this.instructions = options.instructions;
+		this.defaultModel = options.defaultModel;
 		this.rolesDir = options.rolesDir;
 		this.roleLoader = options.loadRole;
 		this.createSession = options.createSession ?? createAgentSession;
@@ -184,7 +188,7 @@ export class WorkflowAgent {
 		const schema = options.schema ?? (roleConfig?.defaultSchema as TSchema | undefined);
 		const cwdTools = this.tools ?? this.createCodingTools(effectiveCwd);
 		const baseTools = roleConfig ? filterToolsByWhitelist(cwdTools, roleConfig.tools.allow) : cwdTools;
-		const requestedModel = options.model ?? roleConfig?.defaultModel;
+		const requestedModel = options.model ?? roleConfig?.defaultModel ?? this.defaultModel;
 		const additionalInstructions = this.buildAdditionalInstructions(options.instructions);
 		const workspaceFingerprint = await this.computeWorkspaceFingerprint(effectiveCwd);
 		const cacheKey = hashCall({

@@ -21,7 +21,12 @@ import { type WorkflowInfo, WorkflowStore } from "./workflow-store.ts";
 
 export interface TaskOptions {
 	cwd?: string;
-	model?: string;
+	/** Model used only by the workflow author for generated workflows. */
+	author_model?: string;
+	/** Default model used by workflow subagents. */
+	agent_model?: string;
+	/** Per semantic-role model overrides used by workflow subagents. */
+	role_models?: Record<string, string>;
 	concurrency?: number;
 	token_budget?: number;
 	/** Per-task cost limit in USD. Overrides global default. */
@@ -103,7 +108,7 @@ export class TaskManager {
 
 	async generateWorkflow(prompt: string, options?: TaskOptions): Promise<GenerateWorkflowResult> {
 		if (!prompt?.trim()) throw new AppError("prompt is required", 400);
-		const script = await this.author.generate(prompt, { model: options?.model });
+		const script = await this.author.generate(prompt, { model: options?.author_model });
 		validateSemanticWorkflowScript(script);
 		return { script };
 	}
@@ -166,12 +171,12 @@ export class TaskManager {
 		try {
 			const authorSpan = this.tracer.startSpan(
 				"workflow.author",
-				{ attributes: { [Attrs.TASK_ID]: taskId, "kanade.author.model": options?.model ?? "" } },
+				{ attributes: { [Attrs.TASK_ID]: taskId, "kanade.author.model": options?.author_model ?? "" } },
 				taskTrace.context,
 			);
 			let script: string;
 			try {
-				script = await this.author.generate(prompt, { model: options?.model });
+				script = await this.author.generate(prompt, { model: options?.author_model });
 				authorSpan.setStatus({ code: SpanStatusCode.OK });
 			} catch (error) {
 				authorSpan.setStatus({ code: SpanStatusCode.ERROR, message: String(error) });
@@ -182,9 +187,14 @@ export class TaskManager {
 			}
 			writeFileSync(workflowPath, script, "utf8");
 			validateSemanticWorkflowScript(script);
-			this.logger.forTask(taskId).withContext(taskTrace.context).info("workflow script generated", {
-				model: options?.model,
-			});
+			this.logger
+				.forTask(taskId)
+				.withContext(taskTrace.context)
+				.info("workflow script generated", {
+					author_model: options?.author_model,
+					agent_model: options?.agent_model,
+					role_models: options?.role_models ? JSON.stringify(options.role_models) : undefined,
+				});
 			this.events.emit("task.script_generated", { taskId, workflowPath }, taskId);
 			await this.run(taskId, script, args, options, taskTrace);
 		} catch (error) {
@@ -605,7 +615,8 @@ export class TaskManager {
 				args,
 				taskId,
 				cwd: options.cwd,
-				model: options.model ?? this.config.defaults.model ?? undefined,
+				agentModel: options.agent_model ?? this.config.defaults.agentModel ?? undefined,
+				roleModels: options.role_models,
 				concurrency: options.concurrency ?? this.config.defaults.concurrency,
 				tokenBudget: options.token_budget ?? this.config.defaults.tokenBudget,
 				costBudget: options.cost_budget ?? this.config.defaults.costBudget,
@@ -822,7 +833,7 @@ export class TaskManager {
 				agentDir,
 				authPath: this.config.models.authPath ?? undefined,
 				modelsPath: this.config.models.modelsPath ?? undefined,
-				model: this.config.defaults.model ?? undefined,
+				model: this.config.defaults.authorModel ?? undefined,
 				persistDir,
 			});
 		} catch {

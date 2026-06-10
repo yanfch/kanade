@@ -308,7 +308,7 @@ describe("TaskManager — iterate", () => {
 			const original = manager.create({
 				source: "saved",
 				workflow_name: "semantic-like",
-				options: { cwd: process.cwd(), model: "xiaomi/mimo-v2.5-pro" },
+				options: { cwd: process.cwd(), agent_model: "xiaomi/mimo-v2.5-pro" },
 			});
 			await vi.waitFor(() => expect(manager.get(original.task_id)?.status).toBe("finished"));
 			store.insertWorktree({
@@ -437,12 +437,12 @@ describe("TaskManager — create source:generated", () => {
 		const { store, manager } = setup({
 			async generate(prompt: string, options?: { model?: string }) {
 				expect(prompt).toBe("make workflow");
-				expect(options?.model).toBe("xiaomi/mimo-v2.5-pro");
+				expect(options?.model).toBe("gpt-5.4");
 				return generatedScript;
 			},
 		});
 		try {
-			const result = await manager.generateWorkflow("make workflow", { model: "xiaomi/mimo-v2.5-pro" });
+			const result = await manager.generateWorkflow("make workflow", { author_model: "gpt-5.4" });
 			expect(result.script).toBe(generatedScript);
 			expect(manager.list()).toHaveLength(0);
 		} finally {
@@ -889,12 +889,13 @@ describe("TaskManager — task metadata", () => {
 			const task = manager.create({
 				source: "inline",
 				script: SIMPLE_SCRIPT,
-				options: { concurrency: 4, model: "test-model" },
+				options: { concurrency: 4, author_model: "author-model", agent_model: "agent-model" },
 			});
 			const row = manager.get(task.task_id);
 			const opts = JSON.parse(row?.options ?? "{}");
 			expect(opts.concurrency).toBe(4);
-			expect(opts.model).toBe("test-model");
+			expect(opts.author_model).toBe("author-model");
+			expect(opts.agent_model).toBe("agent-model");
 		} finally {
 			store.close();
 		}

@@ -110,7 +110,7 @@ describe("POST /tasks/:id/iterate", () => {
 			const created = taskManager.create({
 				source: "saved",
 				workflow_name: "iter-saved",
-				options: { cwd: process.cwd(), model: "xiaomi/mimo-v2.5-pro" },
+				options: { cwd: process.cwd(), agent_model: "xiaomi/mimo-v2.5-pro" },
 			});
 			await vi.waitFor(() => expect(taskManager.get(created.task_id)?.status).toBe("finished"));
 			store.insertWorktree({
@@ -536,7 +536,7 @@ describe("POST /workflows/generate", () => {
 		const { store, taskManager, app } = setup({
 			async generate(prompt: string, options?: { model?: string }) {
 				expect(prompt).toBe("make workflow");
-				expect(options?.model).toBe("xiaomi/mimo-v2.5-pro");
+				expect(options?.model).toBe("gpt-5.4");
 				return script;
 			},
 		});
@@ -544,7 +544,7 @@ describe("POST /workflows/generate", () => {
 			const res = await app.request("/workflows/generate", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ prompt: "make workflow", options: { model: "xiaomi/mimo-v2.5-pro" } }),
+				body: JSON.stringify({ prompt: "make workflow", options: { author_model: "gpt-5.4" } }),
 			});
 			const body = (await res.json()) as { script: string };
 

@@ -250,6 +250,33 @@ describe("WorkflowAgent", () => {
 		expect(mock.calls[0].modelRegistry).toBe(modelRegistry);
 	});
 
+	it("uses defaultModel only when call and role do not specify a model", async () => {
+		const fallback = { provider: "openai-codex", id: "fallback", name: "Fallback" } as PiModel;
+		const roleModel = { provider: "openai-codex", id: "role-model", name: "Role" } as PiModel;
+		const callModel = { provider: "openai-codex", id: "call-model", name: "Call" } as PiModel;
+		const models = [fallback, roleModel, callModel];
+		const modelRegistry = {
+			find(provider: string, modelId: string) {
+				return models.find((model) => model.provider === provider && model.id === modelId);
+			},
+			getAll: () => models,
+		} as unknown as CreateAgentSessionOptions["modelRegistry"];
+		const mock = createMockSessionFactory();
+		const agent = new WorkflowAgent({
+			createSession: mock.createSession,
+			createCodingTools: () => [],
+			defaultModel: "openai-codex:fallback",
+			loadRole: () => fakeRole({ defaultModel: "openai-codex:role-model" }),
+			session: { modelRegistry },
+		});
+
+		await agent.run("Default model");
+		await agent.run("Role model", { role: "developer" });
+		await agent.run("Call model", { role: "developer", model: "openai-codex:call-model" });
+
+		expect(mock.calls.map((call) => call.model)).toEqual([fallback, roleModel, callModel]);
+	});
+
 	it("returns cached journal results without creating a pi session", async () => {
 		const mock = createMockSessionFactory();
 		const journal = createMockJournal();

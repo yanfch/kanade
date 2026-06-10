@@ -27,10 +27,13 @@ export interface WorkflowMeta {
 	phases?: WorkflowMetaPhase[];
 }
 
-export interface WorkflowRunOptions extends Omit<WorkflowAgentOptions, "journal"> {
+export interface WorkflowRunOptions extends Omit<WorkflowAgentOptions, "journal" | "defaultModel"> {
 	args?: unknown;
 	taskId?: string;
-	model?: string;
+	/** Default subagent model used when neither the helper call nor the role specifies one. */
+	agentModel?: string;
+	/** Per-role model overrides for semantic helpers. */
+	roleModels?: Record<string, string>;
 	agent?: Pick<WorkflowAgent, "run">;
 	journal?: WorkflowJournal;
 	agentJournal?: WorkflowAgentOptions["journal"];
@@ -192,6 +195,7 @@ export async function runWorkflow<T = unknown>(
 		options.agent ??
 		new WorkflowAgent({
 			...options,
+			defaultModel: options.agentModel,
 			journal: options.agentJournal,
 			isolationManager: options.isolationManager,
 			taskId: options.taskId,
@@ -269,7 +273,7 @@ export async function runWorkflow<T = unknown>(
 		const normalizedOptions = normalizeAgentOptions(agentOptions);
 		const assignedPhase = normalizedOptions.phase ?? state.currentPhase;
 		const requestedLabel = normalizedOptions.label?.trim();
-		const effectiveModel = normalizedOptions.model ?? options.model;
+		const effectiveModel = normalizedOptions.model ?? options.agentModel;
 		const run = limiter(async () => {
 			state.agentCount++;
 			const label = requestedLabel || defaultAgentLabel(assignedPhase, state.agentCount);
@@ -544,6 +548,7 @@ export async function runWorkflow<T = unknown>(
 		input: {
 			label?: string;
 			role?: string;
+			model?: string;
 			defaultRole: string;
 			fallbackInstructions: string;
 			guidance?: string;
@@ -552,10 +557,12 @@ export async function runWorkflow<T = unknown>(
 		},
 	): Promise<unknown> => {
 		const effectiveRole = input.role ?? input.defaultRole;
+		const effectiveModel = input.model ?? options.roleModels?.[effectiveRole];
 		if (canonicalSemanticRoles.has(effectiveRole) && !(await canUseSemanticRole(effectiveRole))) {
 			log(`semantic helper ${helpName} falling back to prompt-only mode because role ${effectiveRole} is unavailable`);
 			return agent(prompt, {
 				label: input.label,
+				model: effectiveModel,
 				schema: input.output,
 				instructions: joinInstructions(input.fallbackInstructions, input.guidance),
 				...(input.isolation ? { isolation: input.isolation } : {}),
@@ -564,6 +571,7 @@ export async function runWorkflow<T = unknown>(
 		return agent(prompt, {
 			label: input.label,
 			role: effectiveRole,
+			model: effectiveModel,
 			schema: input.output,
 			instructions: input.guidance,
 			...(input.isolation ? { isolation: input.isolation } : {}),
@@ -579,6 +587,7 @@ export async function runWorkflow<T = unknown>(
 		const result = await runSemanticAgent("implement", taskPrompt, {
 			label: opts.label,
 			role: opts.role,
+			model: opts.model,
 			defaultRole: "developer",
 			fallbackInstructions:
 				"Act as a careful developer. Make the requested code changes in the workspace and report what changed.",
@@ -598,6 +607,7 @@ export async function runWorkflow<T = unknown>(
 		const result = await runSemanticAgent("analyze", taskPrompt, {
 			label: opts.label,
 			role: opts.role,
+			model: opts.model,
 			defaultRole: "planner",
 			fallbackInstructions:
 				"Act as a careful planner. Analyze the task, gather only the needed information, and produce a concise plan without making code changes.",
@@ -617,6 +627,7 @@ export async function runWorkflow<T = unknown>(
 		const result = await runSemanticAgent("reviewChange", promptParts.join("\n\n"), {
 			label: opts.label,
 			role: opts.role,
+			model: opts.model,
 			defaultRole: "reviewer",
 			fallbackInstructions:
 				"Act as a careful reviewer. Inspect the implementation result for correctness, completeness, and test coverage gaps. If you report any blocking issue, status must be needs_fix. Only use approved when issues is empty.",
@@ -644,6 +655,7 @@ export async function runWorkflow<T = unknown>(
 		const result = await runSemanticAgent("continueImplementation", promptParts.join("\n\n"), {
 			label: opts.label,
 			role: opts.role,
+			model: opts.model,
 			defaultRole: "developer",
 			fallbackInstructions:
 				"Act as a careful developer continuing the same implementation path. Apply the feedback while preserving prior intent unless the feedback requires changes.",
@@ -664,6 +676,7 @@ export async function runWorkflow<T = unknown>(
 		const result = await runSemanticAgent("testChange", promptParts.join("\n\n"), {
 			label: opts.label,
 			role: opts.role,
+			model: opts.model,
 			defaultRole: "tester",
 			fallbackInstructions:
 				"Act as a careful tester. Validate the implementation with focused checks and report pass/fail clearly. In structured validation output, issues are blocking failures only; put non-blocking notes in warnings.",
@@ -1027,11 +1040,11 @@ function normalizeAgentOptions(value: unknown): AgentOptions {
 
 function normalizeSemanticStepOptions<TSchemaDef extends TSchema | undefined = TSchema | undefined>(
 	value: unknown,
-): { role?: string; guidance?: string; output?: TSchemaDef; label?: string } {
+): { role?: string; model?: string; guidance?: string; output?: TSchemaDef; label?: string } {
 	if (value === undefined) return {};
 	if (!value || typeof value !== "object") throw new TypeError("semantic step options must be an object");
 	const options = value as Record<string, unknown>;
-	const allowed = new Set(["role", "guidance", "output", "label"]);
+	const allowed = new Set(["role", "model", "guidance", "output", "label"]);
 	for (const key of Object.keys(options)) {
 		if (!allowed.has(key)) {
 			throw new TypeError(`unsupported semantic step option: ${key}`);
@@ -1039,6 +1052,7 @@ function normalizeSemanticStepOptions<TSchemaDef extends TSchema | undefined = T
 	}
 	return {
 		role: optionalString(options.role, "step role"),
+		model: optionalString(options.model, "step model"),
 		guidance: optionalString(options.guidance, "step guidance"),
 		output: options.output as TSchemaDef | undefined,
 		label: optionalString(options.label, "step label"),
@@ -1047,12 +1061,12 @@ function normalizeSemanticStepOptions<TSchemaDef extends TSchema | undefined = T
 
 function normalizeContinueImplementationOptions<TSchemaDef extends TSchema | undefined = TSchema | undefined>(
 	value: unknown,
-): { role?: string; guidance?: string; output?: TSchemaDef; label?: string; feedback: unknown } {
+): { role?: string; model?: string; guidance?: string; output?: TSchemaDef; label?: string; feedback: unknown } {
 	if (!value || typeof value !== "object") {
 		throw new TypeError("continueImplementation options must be an object with feedback");
 	}
 	const options = value as Record<string, unknown>;
-	const allowed = new Set(["role", "guidance", "output", "label", "feedback"]);
+	const allowed = new Set(["role", "model", "guidance", "output", "label", "feedback"]);
 	for (const key of Object.keys(options)) {
 		if (!allowed.has(key)) {
 			throw new TypeError(`unsupported continueImplementation option: ${key}`);
@@ -1061,6 +1075,7 @@ function normalizeContinueImplementationOptions<TSchemaDef extends TSchema | und
 	if (!("feedback" in options)) throw new TypeError("continueImplementation feedback is required");
 	return {
 		role: optionalString(options.role, "step role"),
+		model: optionalString(options.model, "step model"),
 		guidance: optionalString(options.guidance, "step guidance"),
 		output: options.output as TSchemaDef | undefined,
 		label: optionalString(options.label, "step label"),

@@ -76,7 +76,9 @@ Use the harness against a running Kanade server to submit a generated task and c
 ```bash
 npm run live:accept -- \
   --base-url http://127.0.0.1:7781 \
-  --model gpt-5.3-codex-spark \
+  --author-model gpt-5.4 \
+  --agent-model gpt-5.3-codex-spark \
+  --role-model reviewer=gpt-5.4 \
   --prompt "Small focused Kanade task..." \
   --prepare "npm install" \
   --check "npm run typecheck" \

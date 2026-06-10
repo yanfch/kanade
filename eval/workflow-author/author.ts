@@ -77,8 +77,8 @@ export class PromptAuthor {
 
 		try {
 			await session.prompt(prompt);
-			let script = capture.value?.script ?? extractScript(session.messages ?? []);
-			if (!isValidWorkflowScript(script)) {
+			let script = selectValidScript(capture.value?.script, session.messages ?? []);
+			if (!script) {
 				await session.prompt(
 					[
 						"Your previous response did not return a complete valid raw JavaScript workflow.",
@@ -89,9 +89,9 @@ export class PromptAuthor {
 						"- no markdown fences, no JSON wrapper, no commentary",
 					].join("\n"),
 				);
-				script = capture.value?.script ?? extractScript(session.messages ?? []);
+				script = selectValidScript(capture.value?.script, session.messages ?? []);
 			}
-			if (!isValidWorkflowScript(script)) {
+			if (!script) {
 				const recent = (session.messages ?? [])
 					.slice(-4)
 					.map((m: unknown) => JSON.stringify(m))
@@ -114,6 +114,13 @@ function readDefaultProvider(agentDir: string): string | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+function selectValidScript(capturedScript: string | undefined, messages: unknown[]): string | undefined {
+	if (isValidWorkflowScript(capturedScript)) return capturedScript;
+	const extracted = extractScript(messages);
+	if (isValidWorkflowScript(extracted)) return extracted;
+	return capturedScript ?? extracted;
 }
 
 function isValidWorkflowScript(script: string | undefined): script is string {

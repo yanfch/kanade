@@ -63,7 +63,8 @@ Each iteration injects `previousResult` + `reuseBranch` into args. Full chain tr
 ```yaml
 # ~/.kanade/config.yml
 defaults:
-  model: claude-sonnet-4
+  authorModel: gpt-5.4
+  agentModel: gpt-5.3-codex-spark
   tokenBudget: 2000000
   concurrency: 16
   maxConcurrentTasks: 0        # 0 = unlimited

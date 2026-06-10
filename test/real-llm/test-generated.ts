@@ -17,7 +17,8 @@ const TIMEOUT_MS = 90_000;
 
 async function main() {
 	const config = loadConfig();
-	console.log(`Model: ${config.defaults.model}`);
+	console.log(`Author model: ${config.defaults.authorModel}`);
+	console.log(`Agent model: ${config.defaults.agentModel}`);
 
 	const tracing = setupTracing(config);
 	const store = new StateStore(config.paths.stateDb);

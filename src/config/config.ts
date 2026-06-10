@@ -78,7 +78,10 @@ export interface TracingConfig {
 }
 
 export interface DefaultsConfig {
-	model: string | null;
+	/** Default model for generated workflow authoring. */
+	authorModel: string | null;
+	/** Default model for workflow subagents. */
+	agentModel: string | null;
 	tokenBudget: number;
 	/** Per-task cost limit in USD. Task pauses when exceeded. */
 	costBudget: number;
@@ -234,7 +237,8 @@ function defaultConfig(paths: KanadePaths): KanadeConfig {
 			captureContent: false,
 		},
 		defaults: {
-			model: null,
+			authorModel: null,
+			agentModel: null,
 			tokenBudget: 2_000_000,
 			costBudget: 5.0,
 			dailyCostBudget: 100.0,

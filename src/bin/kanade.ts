@@ -493,10 +493,10 @@ async function cmdGenerateWorkflow(args: ReturnType<typeof parseArgs>["values"])
 		process.exit(1);
 	}
 
-	const model = args.model as string | undefined;
+	const authorModel = (args.author_model ?? args["author-model"]) as string | undefined;
 	const body = (await api("/workflows/generate", {
 		method: "POST",
-		body: JSON.stringify({ prompt, ...(model ? { options: { model } } : {}) }),
+		body: JSON.stringify({ prompt, ...(authorModel ? { options: { author_model: authorModel } } : {}) }),
 	})) as { script: string };
 
 	if (args.json) {
@@ -506,15 +506,33 @@ async function cmdGenerateWorkflow(args: ReturnType<typeof parseArgs>["values"])
 	console.log(body.script);
 }
 
+function parseRoleModels(value: unknown): Record<string, string> | undefined {
+	const values = Array.isArray(value) ? value : value === undefined ? [] : [value];
+	const roleModels: Record<string, string> = {};
+	for (const entry of values) {
+		if (typeof entry !== "string") continue;
+		const sep = entry.indexOf("=");
+		if (sep <= 0 || sep === entry.length - 1) {
+			throw new Error("--role-model expects role=model");
+		}
+		roleModels[entry.slice(0, sep)] = entry.slice(sep + 1);
+	}
+	return Object.keys(roleModels).length ? roleModels : undefined;
+}
+
 async function cmdRun(workflowName: string | undefined, args: ReturnType<typeof parseArgs>["values"]) {
 	const prompt = args.prompt as string | undefined;
 
 	// kanade run --prompt '...' → source: generated
 	if (!workflowName && prompt?.trim()) {
-		const model = args.model as string | undefined;
+		const authorModel = (args.author_model ?? args["author-model"]) as string | undefined;
+		const agentModel = (args.agent_model ?? args["agent-model"]) as string | undefined;
 		const cwd = (args.cwd as string | undefined) ?? process.cwd();
 		const options: Record<string, unknown> = { cwd };
-		if (model) options.model = model;
+		if (authorModel) options.author_model = authorModel;
+		if (agentModel) options.agent_model = agentModel;
+		const roleModels = parseRoleModels(args["role-model"]);
+		if (roleModels) options.role_models = roleModels;
 
 		const body = (await api("/tasks", {
 			method: "POST",
@@ -537,7 +555,11 @@ async function cmdRun(workflowName: string | undefined, args: ReturnType<typeof 
 	if (!workflowName) {
 		console.error(pc.red("✖ Workflow name or --prompt required."));
 		console.log(pc.dim("  Usage: kanade run <name> [--cwd /path] [--args '{}'] [--follow]"));
-		console.log(pc.dim("  Usage: kanade run --prompt '...' [--model xiaomi/mimo-v2.5-pro] [--follow]"));
+		console.log(
+			pc.dim(
+				"  Usage: kanade run --prompt '...' [--author-model gpt-5.4] [--agent-model gpt-5.3-codex-spark] [--role-model reviewer=gpt-5.4] [--follow]",
+			),
+		);
 		process.exit(1);
 	}
 
@@ -555,9 +577,11 @@ async function cmdRun(workflowName: string | undefined, args: ReturnType<typeof 
 		}
 	}
 
-	const model = args.model as string | undefined;
+	const agentModel = (args.agent_model ?? args["agent-model"]) as string | undefined;
 	const options: Record<string, unknown> = { cwd };
-	if (model) options.model = model;
+	if (agentModel) options.agent_model = agentModel;
+	const roleModels = parseRoleModels(args["role-model"]);
+	if (roleModels) options.role_models = roleModels;
 
 	const body = (await api("/tasks", {
 		method: "POST",
@@ -753,7 +777,9 @@ async function main() {
 			follow: { type: "boolean", short: "f" },
 			url: { type: "string", short: "u" },
 			cwd: { type: "string" },
-			model: { type: "string", short: "m" },
+			"author-model": { type: "string" },
+			"agent-model": { type: "string" },
+			"role-model": { type: "string", multiple: true },
 			prompt: { type: "string", short: "p" },
 		},
 		strict: false,
@@ -824,7 +850,7 @@ ${pc.bold("Commands:")}
   ${pc.cyan("show")}          ${pc.dim("<task-id> [--json]")}             Task details
   ${pc.cyan("tail")}          ${pc.dim("<task-id>")}                      Follow events (SSE)
   ${pc.cyan("run")}           ${pc.dim("<name> [--cwd /path] [--args '{}'] [--follow]")} Run saved workflow
-                      ${pc.dim("--prompt '...' [--model ...] [--follow]")}        Generate workflow and run
+                      ${pc.dim("--prompt '...' [--author-model ...] [--agent-model ...] [--role-model reviewer=...] [--follow]")} Generate workflow and run
   ${pc.cyan("generate-workflow")} ${pc.dim("--prompt '...' [--json]")}              Generate workflow script without running
   ${pc.cyan("iterate")}       ${pc.dim("<task-id> --instructions '...'")} Iterate on task
   ${pc.cyan("save")}          ${pc.dim("<task-id> --as <name>")}          Save script as workflow

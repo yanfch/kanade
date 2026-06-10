@@ -15,6 +15,7 @@ describe("workflow author prompt guidelines", () => {
 		expect(prompt).toContain("continueImplementation(previous, opts)");
 		expect(prompt).toContain("testChange(input, opts)");
 		expect(prompt).toContain("request_human(request)");
+		expect(prompt).toContain("helper options may include model");
 		expect(prompt).toContain("Current task complexity hint: medium");
 		expect(prompt).toContain("validation.status === 'failed'");
 		expect(prompt).toContain("Fix validation");

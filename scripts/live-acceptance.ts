@@ -8,7 +8,9 @@ interface Args {
 	baseUrl: string;
 	prompt?: string;
 	promptFile?: string;
-	model?: string;
+	authorModel?: string;
+	agentModel?: string;
+	roleModels: Record<string, string>;
 	cwd: string;
 	timeoutMs: number;
 	pollMs: number;
@@ -83,6 +85,7 @@ function parseArgs(argv: string[]): Args {
 		pollMs: 10_000,
 		checks: [],
 		prepare: [],
+		roleModels: {},
 		json: false,
 	};
 	for (let i = 0; i < argv.length; i++) {
@@ -95,8 +98,14 @@ function parseArgs(argv: string[]): Args {
 		if (arg === "--base-url") args.baseUrl = next();
 		else if (arg === "--prompt") args.prompt = next();
 		else if (arg === "--prompt-file") args.promptFile = next();
-		else if (arg === "--model") args.model = next();
-		else if (arg === "--cwd") args.cwd = resolve(next());
+		else if (arg === "--author-model") args.authorModel = next();
+		else if (arg === "--agent-model") args.agentModel = next();
+		else if (arg === "--role-model") {
+			const value = next();
+			const sep = value.indexOf("=");
+			if (sep <= 0 || sep === value.length - 1) throw new Error("--role-model expects role=model");
+			args.roleModels[value.slice(0, sep)] = value.slice(sep + 1);
+		} else if (arg === "--cwd") args.cwd = resolve(next());
 		else if (arg === "--timeout-ms") args.timeoutMs = Number(next());
 		else if (arg === "--poll-ms") args.pollMs = Number(next());
 		else if (arg === "--prepare") args.prepare.push(next());
@@ -110,12 +119,14 @@ function parseArgs(argv: string[]): Args {
 
 function usageAndExit(code: number): never {
 	console.log(`Usage:
-  npm run live:accept -- --prompt "..." --model gpt-5.3-codex-spark --base-url http://127.0.0.1:7781 --prepare "npm install" --check "npm run typecheck" --check "npm run lint"
+  npm run live:accept -- --prompt "..." --author-model gpt-5.4 --agent-model gpt-5.3-codex-spark --role-model reviewer=gpt-5.4 --base-url http://127.0.0.1:7781 --prepare "npm install" --check "npm run typecheck" --check "npm run lint"
 
 Options:
   --prompt TEXT          Generated task prompt
   --prompt-file PATH     Read generated task prompt from file
-  --model MODEL          Model passed to Kanade task options
+  --author-model MODEL   Model used by the workflow author
+  --agent-model MODEL    Default model used by workflow subagents
+  --role-model R=M       Per-role subagent model override; repeatable
   --cwd PATH             Workspace cwd for the task and local checks (default: current cwd)
   --base-url URL         Kanade server URL (default: KANADE_URL or http://127.0.0.1:7777)
   --timeout-ms N         Poll timeout (default: 1800000)
@@ -206,7 +217,12 @@ async function main() {
 		body: JSON.stringify({
 			source: "generated",
 			prompt,
-			options: { cwd: args.cwd, ...(args.model ? { model: args.model } : {}) },
+			options: {
+				cwd: args.cwd,
+				...(args.authorModel ? { author_model: args.authorModel } : {}),
+				...(args.agentModel ? { agent_model: args.agentModel } : {}),
+				...(Object.keys(args.roleModels).length ? { role_models: args.roleModels } : {}),
+			},
 		}),
 	});
 	if (!args.json) console.error(`created ${task.task_id}`);

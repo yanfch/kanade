@@ -7,7 +7,7 @@ export const WORKFLOW_AUTHOR_PROMPT_SNIPPET =
 export const WORKFLOW_AUTHOR_GUIDELINES = [
 	"Output one raw JavaScript string. First statement: export const meta = { name, description }. Plain JS only, no imports/TypeScript/Date.now()/Math.random().",
 	"Available globals: analyze(prompt, opts), implement(prompt, opts), reviewChange(input, opts), continueImplementation(previous, opts), testChange(input, opts), request_human(request), parallel(thunks), phase(title), log(message), args, cwd, budget.",
-	"Allowed semantic roles: planner, developer, reviewer, tester. Prefer the default role for each helper unless the task clearly needs a different allowed role.",
+	"Allowed semantic roles: planner, developer, reviewer, tester. Prefer the default role for each helper unless the task clearly needs a different allowed role. Semantic helper options may include model when the task explicitly needs a role-specific model override.",
 	"Do not use raw agent() or pipeline() in authored workflows. Use the semantic helpers only.",
 	"Do not choose branch names, worktree paths, isolation modes, reuseBranch, agentType, transport details, or patch application details.",
 	"kanade iterate uses a separate built-in refinement workflow. Do not author custom iterate branches around args.instructions, args.previousResult, args.previousTaskId, or args.reuseBranch.",

@@ -15,7 +15,9 @@ const TIMEOUT_MS = 60_000;
 
 async function main() {
 	const config = loadConfig();
-	console.log(`Config: agentDir=${config.models.agentDir}, model=${config.defaults.model}`);
+	console.log(
+		`Config: agentDir=${config.models.agentDir}, authorModel=${config.defaults.authorModel}, agentModel=${config.defaults.agentModel}`,
+	);
 
 	const tracing = setupTracing(config);
 	const store = new StateStore(config.paths.stateDb);

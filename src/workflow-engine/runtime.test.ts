@@ -253,7 +253,7 @@ return result
 `;
 
 		const result = await runWorkflow(script, {
-			model: "model-from-run",
+			agentModel: "model-from-run",
 			agent: {
 				async run<TSchemaDef extends TSchema | undefined = undefined>(
 					prompt: string,
@@ -278,7 +278,7 @@ return result
 		});
 	});
 
-	it("uses run-level model as default for agent calls", async () => {
+	it("uses agentModel as default for raw agent calls", async () => {
 		const calls: Array<{ prompt: string; options: AgentRunOptions<TSchema | undefined> }> = [];
 		const script = `export const meta = { name: 'model_default', description: 'Model default' }
 const direct = await agent('direct', { label: 'direct' })
@@ -286,7 +286,7 @@ return direct
 `;
 
 		await runWorkflow(script, {
-			model: "xiaomi/mimo-v2.5-pro",
+			agentModel: "xiaomi/mimo-v2.5-pro",
 			agent: {
 				async run<TSchemaDef extends TSchema | undefined = undefined>(
 					prompt: string,
@@ -945,6 +945,42 @@ return await testChange(dev, {
 		});
 
 		expect((result.result as { status: string }).status).toBe("passed");
+	});
+
+	it("routes semantic helper models by helper option and role override", async () => {
+		const calls: Array<{ role?: string; model?: string }> = [];
+		const script = `export const meta = { name: 'semantic_model_route', description: 'Semantic model route' }
+const dev = await implement('Do the change.', { role: 'developer' })
+const review = await reviewChange(dev, { role: 'reviewer' })
+const test = await testChange(dev, { role: 'tester', model: 'tester-explicit' })
+return { dev, review, test }`;
+
+		await runWorkflow(script, {
+			loadRole: semanticRoleLoader,
+			agentModel: "agent-default",
+			roleModels: { developer: "developer-model", reviewer: "reviewer-model" },
+			agent: {
+				async run<TSchemaDef extends TSchema | undefined = undefined>(
+					_prompt: string,
+					options: AgentRunOptions<TSchemaDef> = {},
+				): Promise<AgentRunResult<TSchemaDef>> {
+					calls.push({ role: options.role, model: options.model });
+					if (options.role === "reviewer") {
+						return { status: "approved", summary: "ok", issues: [] } as AgentRunResult<TSchemaDef>;
+					}
+					if (options.role === "tester") {
+						return { status: "passed", summary: "ok", issues: [], warnings: [] } as AgentRunResult<TSchemaDef>;
+					}
+					return { status: "done", summary: "implemented", filesChanged: ["src/a.ts"] } as AgentRunResult<TSchemaDef>;
+				},
+			},
+		});
+
+		expect(calls).toEqual([
+			{ role: "developer", model: "developer-model" },
+			{ role: "reviewer", model: "reviewer-model" },
+			{ role: "tester", model: "tester-explicit" },
+		]);
 	});
 
 	it("rejects continueImplementation without feedback", async () => {

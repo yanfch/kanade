@@ -78,7 +78,8 @@ describe("loadConfig", () => {
 				"  modelsPath: /tmp/kanade-models.json",
 				"  inheritPiSettings: false",
 				"defaults:",
-				"  model: anthropic:claude-sonnet",
+				"  authorModel: openai:gpt-5.4",
+				"  agentModel: openai-codex:gpt-5.3-codex-spark",
 			].join("\n"),
 		);
 
@@ -90,6 +91,7 @@ describe("loadConfig", () => {
 		expect(config.models.modelsPath).toBe("/tmp/kanade-models.json");
 		expect(config.models.inheritPiSettings).toBe(false);
 		expect(config.models.disableSubagentCompaction).toBe(true);
-		expect(config.defaults.model).toBe("anthropic:claude-sonnet");
+		expect(config.defaults.authorModel).toBe("openai:gpt-5.4");
+		expect(config.defaults.agentModel).toBe("openai-codex:gpt-5.3-codex-spark");
 	});
 });

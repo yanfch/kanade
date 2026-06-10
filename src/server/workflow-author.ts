@@ -10,7 +10,7 @@ import {
 	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
-import { createStructuredOutputTool, resolveModelSpec } from "../workflow-engine/index.ts";
+import { createStructuredOutputTool, parseWorkflowScript, resolveModelSpec } from "../workflow-engine/index.ts";
 import { buildWorkflowAuthorPrompt } from "../workflow-engine/prompt-guidelines.ts";
 
 export interface WorkflowAuthor {
@@ -94,32 +94,81 @@ export class LlmWorkflowAuthor implements WorkflowAuthor {
 
 		try {
 			await session.prompt(buildWorkflowAuthorPrompt(prompt));
-			if (!capture.called || !capture.value?.script) {
-				// Debug: log what the LLM actually returned
-				const msgs = session.messages ?? [];
-				const debugInfo = msgs.slice(-3).map((m: unknown) => {
-					const msg = m as { role?: string; content?: unknown };
-					const content = msg?.content;
-					if (Array.isArray(content)) {
-						return content
-							.map((c: { type?: string; text?: string; thinking?: string }) => {
-								if (c.type === "text") return `[text:${(c.text ?? "").slice(0, 100)}]`;
-								if (c.type === "thinking") return `[thinking:${(c.thinking ?? "").slice(0, 100)}]`;
-								return `[${c.type}]`;
-							})
-							.join(", ");
-					}
-					return String(content).slice(0, 100);
-				});
-				throw new Error(
-					`Workflow author did not produce a script. called=${capture.called}, msgs=${debugInfo.join(" | ")}`,
+			let script = selectValidScript(capture.value?.script, session.messages ?? []);
+			if (!script) {
+				await session.prompt(
+					[
+						"Your previous response did not return a complete valid JavaScript workflow.",
+						"Reply again with ONLY the complete JavaScript workflow, or call structured_output with a valid script.",
+						"Requirements:",
+						"- include export const meta = { name, description } as the first statement",
+						"- return complete syntactically valid JavaScript",
+						"- no markdown fences, no JSON wrapper, no commentary",
+					].join("\n"),
 				);
+				script = selectValidScript(capture.value?.script, session.messages ?? []);
 			}
-			return capture.value.script;
+			if (!script)
+				throw new Error(
+					`Workflow author did not produce a valid script. ${debugSessionMessages(session.messages ?? [])}`,
+				);
+			return script;
 		} finally {
 			session.dispose();
 		}
 	}
+}
+
+function selectValidScript(capturedScript: string | undefined, messages: unknown[]): string | undefined {
+	if (isValidWorkflowScript(capturedScript)) return capturedScript;
+	const extracted = extractScript(messages);
+	if (isValidWorkflowScript(extracted)) return extracted;
+	return undefined;
+}
+
+function isValidWorkflowScript(script: string | undefined): script is string {
+	if (!script?.trim()) return false;
+	try {
+		parseWorkflowScript(script);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function extractScript(messages: unknown[]): string | undefined {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i] as { role?: string; content?: Array<{ type?: string; text?: string }> } | undefined;
+		if (message?.role !== "assistant" || !Array.isArray(message.content)) continue;
+		const text = message.content
+			.filter((part) => part.type === "text" && typeof part.text === "string")
+			.map((part) => part.text)
+			.join("\n")
+			.trim();
+		if (!text) continue;
+		const fenced = text.match(/```(?:javascript|js)?\s*([\s\S]*?)```/i)?.[1]?.trim();
+		if (fenced?.includes("export const meta")) return fenced;
+		if (text.includes("export const meta")) return text;
+	}
+	return undefined;
+}
+
+function debugSessionMessages(messages: unknown[]): string {
+	const debugInfo = messages.slice(-3).map((m: unknown) => {
+		const msg = m as { role?: string; content?: unknown };
+		const content = msg?.content;
+		if (Array.isArray(content)) {
+			return content
+				.map((c: { type?: string; text?: string; thinking?: string }) => {
+					if (c.type === "text") return `[text:${(c.text ?? "").slice(0, 100)}]`;
+					if (c.type === "thinking") return `[thinking:${(c.thinking ?? "").slice(0, 100)}]`;
+					return `[${c.type}]`;
+				})
+				.join(", ");
+		}
+		return String(content).slice(0, 100);
+	});
+	return `msgs=${debugInfo.join(" | ")}`;
 }
 
 function readDefaultProvider(agentDir: string): string | undefined {
