@@ -26,6 +26,8 @@ export interface TaskOptions {
 	token_budget?: number;
 	/** Per-task cost limit in USD. Overrides global default. */
 	cost_budget?: number;
+	/** Per-agent timeout in milliseconds. 0 disables timeout. Overrides global default. */
+	agent_timeout_ms?: number;
 }
 
 export type CreateTaskInput =
@@ -579,6 +581,7 @@ export class TaskManager {
 				concurrency: options.concurrency ?? this.config.defaults.concurrency,
 				tokenBudget: options.token_budget ?? this.config.defaults.tokenBudget,
 				costBudget: options.cost_budget ?? this.config.defaults.costBudget,
+				agentTimeoutMs: options.agent_timeout_ms ?? this.config.defaults.agentTimeoutMs,
 				signal: controller.signal,
 				tracer: this.tracer,
 				traceContext,

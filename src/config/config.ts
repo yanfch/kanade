@@ -86,6 +86,8 @@ export interface DefaultsConfig {
 	dailyCostBudget: number;
 	/** Task ID prefix. Default: "T". Tests use "X" to avoid collisions. */
 	taskIdPrefix?: string;
+	/** Per-agent timeout in milliseconds. 0 disables timeout. */
+	agentTimeoutMs: number;
 	concurrency: number;
 	/** Maximum number of tasks running simultaneously. 0 = unlimited. */
 	maxConcurrentTasks: number;
@@ -236,6 +238,7 @@ function defaultConfig(paths: KanadePaths): KanadeConfig {
 			tokenBudget: 2_000_000,
 			costBudget: 5.0,
 			dailyCostBudget: 100.0,
+			agentTimeoutMs: 10 * 60 * 1000,
 			concurrency: 16,
 			maxConcurrentTasks: 0,
 		},

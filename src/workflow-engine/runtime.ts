@@ -40,6 +40,8 @@ export interface WorkflowRunOptions extends Omit<WorkflowAgentOptions, "journal"
 	tokenBudget?: number | null;
 	/** Per-task cost limit in USD. Task throws when exceeded. */
 	costBudget?: number | null;
+	/** Per-agent timeout in milliseconds. 0 disables timeout. */
+	agentTimeoutMs?: number | null;
 	signal?: AbortSignal;
 	tracer?: Tracer;
 	/** Parent trace context used for workflow child spans. */
@@ -293,14 +295,19 @@ export async function runWorkflow<T = unknown>(
 				options.traceContext,
 			);
 			options.onAgentStart?.({ label, phase: assignedPhase, prompt: taskPrompt });
+			let timeoutCleanup: (() => void) | undefined;
+			let timeoutSignal: AbortSignal | undefined;
 			try {
 				throwIfAborted();
+				const timeout = createAgentTimeoutSignal(options.signal, options.agentTimeoutMs, label);
+				timeoutSignal = timeout.signal;
+				timeoutCleanup = timeout.cleanup;
 				const result = await agentRunner.run(taskPrompt, {
 					label,
 					role: normalizedOptions.role,
 					model: effectiveModel,
 					schema: normalizedOptions.schema,
-					signal: options.signal,
+					signal: timeout.signal,
 					instructions: buildAgentInstructions(assignedPhase, { ...normalizedOptions, model: effectiveModel }),
 					isolation: normalizedOptions.isolation,
 					reuseBranch: normalizedOptions.reuseBranch,
@@ -340,14 +347,16 @@ export async function runWorkflow<T = unknown>(
 				dumpArtifact(options, state, label, result);
 				return result;
 			} catch (error) {
-				if (options.signal?.aborted) throw error;
-				agentSpan?.setStatus({ code: SpanStatusCode.ERROR, message: String(error) });
-				if (error instanceof Error) agentSpan?.recordException(error);
-				log(`agent ${label} failed: ${error instanceof Error ? error.message : String(error)}`);
+				const finalError = timeoutSignal?.aborted && !options.signal?.aborted ? timeoutSignal.reason || error : error;
+				if (options.signal?.aborted) throw finalError;
+				agentSpan?.setStatus({ code: SpanStatusCode.ERROR, message: String(finalError) });
+				if (finalError instanceof Error) agentSpan?.recordException(finalError);
+				log(`agent ${label} failed: ${finalError instanceof Error ? finalError.message : String(finalError)}`);
 				options.onAgentEnd?.({ label, phase: assignedPhase, result: null });
 				dumpArtifact(options, state, label, null);
-				throw error;
+				throw finalError;
 			} finally {
+				timeoutCleanup?.();
 				agentSpan?.end();
 			}
 		});
@@ -1075,6 +1084,38 @@ function assertStructuredCloneable(value: unknown, name: string): void {
 			`${name} must be structured-cloneable; did you forget to await agent(), parallel(), or pipeline()?${detail}`,
 		);
 	}
+}
+
+function createAgentTimeoutSignal(
+	parent: AbortSignal | undefined,
+	timeoutMs: number | null | undefined,
+	label: string,
+): { signal?: AbortSignal; cleanup: () => void } {
+	const ms = timeoutMs ?? 0;
+	if (ms <= 0) return { signal: parent, cleanup: () => {} };
+	const controller = new AbortController();
+	let timedOut = false;
+	const onParentAbort = () => controller.abort(parent?.reason);
+	const timer = setTimeout(() => {
+		timedOut = true;
+		controller.abort(new Error(`Agent ${label} timed out after ${ms}ms`));
+	}, ms);
+	parent?.addEventListener("abort", onParentAbort, { once: true });
+	controller.signal.addEventListener(
+		"abort",
+		() => {
+			if (timedOut) return;
+			clearTimeout(timer);
+		},
+		{ once: true },
+	);
+	return {
+		signal: controller.signal,
+		cleanup: () => {
+			clearTimeout(timer);
+			parent?.removeEventListener("abort", onParentAbort);
+		},
+	};
 }
 
 function createLimiter(limit: number) {

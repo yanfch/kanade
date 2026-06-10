@@ -703,6 +703,35 @@ return r`;
 	});
 });
 
+describe("runWorkflow — agent timeout", () => {
+	it("aborts a hanging agent after agentTimeoutMs", async () => {
+		const script = `export const meta = { name: 'timeout', description: 'Timeout' }
+return await agent('hang', { label: 'slow' })`;
+		let observedSignal: AbortSignal | undefined;
+
+		await expect(
+			runWorkflow(script, {
+				agentTimeoutMs: 20,
+				agent: {
+					async run<TSchemaDef extends TSchema | undefined = undefined>(
+						_prompt: string,
+						options: AgentRunOptions<TSchemaDef> = {},
+					): Promise<AgentRunResult<TSchemaDef>> {
+						observedSignal = options.signal;
+						await new Promise((_resolve, reject) => {
+							options.signal?.addEventListener("abort", () => reject(new Error("Subagent was aborted")), {
+								once: true,
+							});
+						});
+						return "unreachable" as AgentRunResult<TSchemaDef>;
+					},
+				},
+			}),
+		).rejects.toThrow(/Agent slow timed out after 20ms/);
+		expect(observedSignal?.aborted).toBe(true);
+	});
+});
+
 describe("runWorkflow — budgets", () => {
 	it("uses real session usage to enforce token budget", async () => {
 		const script = `export const meta = { name: 'budget', description: 'Budget' }
