@@ -7,7 +7,6 @@ import {
 	SessionManager,
 	SettingsManager,
 	createAgentSession,
-	createReadOnlyTools,
 	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
@@ -81,7 +80,7 @@ export class LlmWorkflowAuthor implements WorkflowAuthor {
 						return SessionManager.create(process.cwd(), this.opts.persistDir);
 					})()
 				: SessionManager.inMemory(),
-			customTools: [...createReadOnlyTools(process.cwd()), outputTool as never],
+			customTools: [outputTool as never],
 			settingsManager,
 			...(requestedModel
 				? {
