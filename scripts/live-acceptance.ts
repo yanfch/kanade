@@ -3,8 +3,8 @@ import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { parseArgs, usageAndExit } from "./live-acceptance-args.ts";
 import { validateSemanticWorkflowScript } from "../src/workflow-engine/runtime.ts";
+import { parseArgs, usageAndExit } from "./live-acceptance-args.ts";
 
 interface TaskResponse {
 	task_id: string;
