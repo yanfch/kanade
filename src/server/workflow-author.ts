@@ -71,6 +71,7 @@ export class LlmWorkflowAuthor implements WorkflowAuthor {
 
 		const { session } = await createAgentSession({
 			agentDir,
+			noTools: "builtin",
 			authStorage,
 			modelRegistry,
 			resourceLoader,
