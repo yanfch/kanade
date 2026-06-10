@@ -2,12 +2,13 @@ import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../config/index.ts";
 import { HumanGate } from "../human/index.ts";
 import { StateStore } from "../store/index.ts";
 import { EventBus } from "./event-bus.ts";
-import { TaskManager } from "./task-manager.ts";
+import { TaskManager, resolveConfiguredAgentDir } from "./task-manager.ts";
 import { createMockSessionFactory } from "./test-session-mock.ts";
 
 const SIMPLE_SCRIPT = "export const meta = { name: 'demo', description: 'Demo' }\nreturn { ok: true }";
@@ -42,6 +43,7 @@ function setup(
 	const root = mkdtempSync(join(tmpdir(), "kanade-server-"));
 	process.env.KANADE_DIR = root;
 	const config = loadConfig();
+	config.models.mode = "kanade";
 	config.defaults.taskIdPrefix = `UT${Math.random().toString(36).slice(2, 6)}`;
 	const store = new StateStore(config.paths.stateDb);
 	const events = new EventBus();
@@ -49,6 +51,30 @@ function setup(
 	const manager = new TaskManager(config, store, events, humanGate, author, undefined, sessionFactory);
 	return { config, store, events, manager };
 }
+
+describe("TaskManager — model configuration", () => {
+	it("inherits the default Pi agent dir when models.mode is inherit-pi", () => {
+		const root = mkdtempSync(join(tmpdir(), "kanade-server-"));
+		process.env.KANADE_DIR = root;
+		const config = loadConfig();
+		config.models.mode = "inherit-pi";
+		config.models.agentDir = null;
+		config.models.piAgentDir = null;
+
+		expect(resolveConfiguredAgentDir(config)).toBe(getAgentDir());
+	});
+
+	it("does not infer Pi agent dir in kanade model mode without explicit dirs", () => {
+		const root = mkdtempSync(join(tmpdir(), "kanade-server-"));
+		process.env.KANADE_DIR = root;
+		const config = loadConfig();
+		config.models.mode = "kanade";
+		config.models.agentDir = null;
+		config.models.piAgentDir = null;
+
+		expect(resolveConfiguredAgentDir(config)).toBeUndefined();
+	});
+});
 
 describe("TaskManager — core", () => {
 	it("skips task ids whose worktree branch already exists", () => {

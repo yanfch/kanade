@@ -77,7 +77,7 @@ beforeAll(async () => {
 	const taskIdPrefix = `C${Math.random().toString(36).slice(2, 6)}`;
 	writeFileSync(
 		join(kanadeDir, "config.yml"),
-		`server:\n  port: 17777\n  bind: 127.0.0.1\ndefaults:\n  taskIdPrefix: ${taskIdPrefix}\n`,
+		`server:\n  port: 17777\n  bind: 127.0.0.1\nmodels:\n  mode: kanade\ndefaults:\n  taskIdPrefix: ${taskIdPrefix}\n`,
 	);
 	BASE_URL = "http://127.0.0.1:17777";
 

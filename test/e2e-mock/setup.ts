@@ -46,6 +46,7 @@ export function createE2EContext(
 	const root = mkdtempSync(join(tmpdir(), "kanade-e2e-"));
 	process.env.KANADE_DIR = root;
 	const config = loadConfig();
+	config.models.mode = "kanade";
 	// Use current git branch as base for worktree tests
 	config.isolation.defaultBaseBranch = currentBranch();
 	config.defaults.taskIdPrefix = "X";

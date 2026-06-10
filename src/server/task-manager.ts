@@ -1,7 +1,11 @@
 import { execFileSync, execSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@earendil-works/pi-coding-agent";
+import {
+	type CreateAgentSessionOptions,
+	type CreateAgentSessionResult,
+	getAgentDir,
+} from "@earendil-works/pi-coding-agent";
 import { type Context, type Span, SpanStatusCode, type Tracer, context, trace } from "@opentelemetry/api";
 import type { KanadeConfig } from "../config/index.ts";
 import type { HumanGate } from "../human/index.ts";
@@ -52,6 +56,13 @@ export interface CreateTaskResult {
 
 export interface GenerateWorkflowResult {
 	script: string;
+}
+
+export function resolveConfiguredAgentDir(config: KanadeConfig): string | undefined {
+	if (config.models.agentDir) return config.models.agentDir;
+	if (config.models.piAgentDir) return config.models.piAgentDir;
+	if (config.models.mode === "inherit-pi") return getAgentDir();
+	return undefined;
 }
 
 interface TaskTrace {
@@ -790,7 +801,7 @@ export class TaskManager {
 	}
 
 	private resolveAgentDir(): string | undefined {
-		return this.config.models.agentDir ?? this.config.models.piAgentDir ?? undefined;
+		return resolveConfiguredAgentDir(this.config);
 	}
 
 	/** Add cost to daily tracker (never throws). */

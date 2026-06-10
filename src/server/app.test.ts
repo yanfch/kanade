@@ -20,6 +20,7 @@ function setup(
 	const root = mkdtempSync(join(tmpdir(), "kanade-app-"));
 	process.env.KANADE_DIR = root;
 	const config = loadConfig();
+	config.models.mode = "kanade";
 	config.defaults.taskIdPrefix = `UA${Math.random().toString(36).slice(2, 6)}`;
 	const store = new StateStore(config.paths.stateDb);
 	const events = new EventBus();
