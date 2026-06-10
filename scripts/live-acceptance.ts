@@ -2,22 +2,9 @@
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { validateSemanticWorkflowScript } from "../src/workflow-engine/runtime.ts";
-
-interface Args {
-	baseUrl: string;
-	prompt?: string;
-	promptFile?: string;
-	authorModel?: string;
-	agentModel?: string;
-	roleModels: Record<string, string>;
-	cwd: string;
-	timeoutMs: number;
-	pollMs: number;
-	checks: string[];
-	prepare: string[];
-	json: boolean;
-}
+import { parseArgs, usageAndExit } from "./live-acceptance-args.ts";
 
 interface TaskResponse {
 	task_id: string;
@@ -75,67 +62,6 @@ interface AcceptanceReport {
 	checksCwd: string;
 	recommendation: "accept" | "inspect" | "reject";
 	reasons: string[];
-}
-
-function parseArgs(argv: string[]): Args {
-	const args: Args = {
-		baseUrl: process.env.KANADE_URL ?? "http://127.0.0.1:7777",
-		cwd: process.cwd(),
-		timeoutMs: 30 * 60 * 1000,
-		pollMs: 10_000,
-		checks: [],
-		prepare: [],
-		roleModels: {},
-		json: false,
-	};
-	for (let i = 0; i < argv.length; i++) {
-		const arg = argv[i];
-		const next = () => {
-			const value = argv[++i];
-			if (!value) throw new Error(`${arg} requires a value`);
-			return value;
-		};
-		if (arg === "--base-url") args.baseUrl = next();
-		else if (arg === "--prompt") args.prompt = next();
-		else if (arg === "--prompt-file") args.promptFile = next();
-		else if (arg === "--author-model") args.authorModel = next();
-		else if (arg === "--agent-model") args.agentModel = next();
-		else if (arg === "--role-model") {
-			const value = next();
-			const sep = value.indexOf("=");
-			if (sep <= 0 || sep === value.length - 1) throw new Error("--role-model expects role=model");
-			args.roleModels[value.slice(0, sep)] = value.slice(sep + 1);
-		} else if (arg === "--cwd") args.cwd = resolve(next());
-		else if (arg === "--timeout-ms") args.timeoutMs = Number(next());
-		else if (arg === "--poll-ms") args.pollMs = Number(next());
-		else if (arg === "--prepare") args.prepare.push(next());
-		else if (arg === "--check") args.checks.push(next());
-		else if (arg === "--json") args.json = true;
-		else if (arg === "--help" || arg === "-h") usageAndExit(0);
-		else throw new Error(`Unknown argument: ${arg}`);
-	}
-	return args;
-}
-
-function usageAndExit(code: number): never {
-	console.log(`Usage:
-  npm run live:accept -- --prompt "..." --author-model gpt-5.4 --agent-model gpt-5.3-codex-spark --role-model reviewer=gpt-5.4 --base-url http://127.0.0.1:7781 --prepare "npm install" --check "npm run typecheck" --check "npm run lint"
-
-Options:
-  --prompt TEXT          Generated task prompt
-  --prompt-file PATH     Read generated task prompt from file
-  --author-model MODEL   Model used by the workflow author
-  --agent-model MODEL    Default model used by workflow subagents
-  --role-model R=M       Per-role subagent model override; repeatable
-  --cwd PATH             Workspace cwd for the task and local checks (default: current cwd)
-  --base-url URL         Kanade server URL (default: KANADE_URL or http://127.0.0.1:7777)
-  --timeout-ms N         Poll timeout (default: 1800000)
-  --poll-ms N            Poll interval (default: 10000)
-  --prepare COMMAND      Worktree preparation command before checks, e.g. npm install; repeatable
-  --check COMMAND        Local acceptance check to run after task completion; repeatable
-  --json                 Print machine-readable JSON only
-`);
-	process.exit(code);
 }
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -222,6 +148,7 @@ async function main() {
 				...(args.authorModel ? { author_model: args.authorModel } : {}),
 				...(args.agentModel ? { agent_model: args.agentModel } : {}),
 				...(Object.keys(args.roleModels).length ? { role_models: args.roleModels } : {}),
+				...(args.prepareCommands.length ? { prepare_commands: args.prepareCommands } : {}),
 			},
 		}),
 	});
@@ -323,7 +250,11 @@ async function main() {
 	else if (recommendation === "inspect") process.exitCode = 1;
 }
 
-main().catch((error) => {
-	console.error(error instanceof Error ? error.stack || error.message : String(error));
-	process.exit(2);
-});
+const isEntry = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href === import.meta.url : false;
+
+if (isEntry) {
+	main().catch((error) => {
+		console.error(error instanceof Error ? error.stack || error.message : String(error));
+		process.exit(2);
+	});
+}
