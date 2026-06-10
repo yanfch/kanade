@@ -315,14 +315,17 @@ export class IsolationManager {
 	private async prepareWorktree(opts: PrepareOptions): Promise<IsolationContext> {
 		const baseRepo = opts.baseRepo ?? this.config.defaultBaseRepo ?? process.cwd();
 		// If no explicit baseBranch, use the current branch of the base repo, falling back to config default
-		let baseBranch = opts.baseBranch;
+		let baseBranch: string = opts.baseBranch ?? "";
 		if (!baseBranch) {
 			try {
 				const git = simpleGit(baseRepo);
-				baseBranch = (await git.branchLocal()).current;
+				baseBranch = (await git.branchLocal()).current || this.config.defaultBaseBranch;
 			} catch {
 				baseBranch = this.config.defaultBaseBranch;
 			}
+		}
+		if (!baseBranch) {
+			baseBranch = this.config.defaultBaseBranch;
 		}
 
 		// Reuse existing task-scoped worktree by default so phases/agents can hand off code changes.

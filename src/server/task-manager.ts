@@ -5,7 +5,7 @@ import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@earen
 import { type Context, type Span, SpanStatusCode, type Tracer, context, trace } from "@opentelemetry/api";
 import type { KanadeConfig } from "../config/index.ts";
 import type { HumanGate } from "../human/index.ts";
-import { IsolationManager } from "../isolation/index.ts";
+import { type IsolationContext, IsolationManager } from "../isolation/index.ts";
 import { Journal, type JournalAllEntries } from "../journal/index.ts";
 import type { NeedsHumanRow, StateStore, TaskRow, TaskStatus, WorkflowSource, WorktreeRow } from "../store/index.ts";
 import * as Attrs from "../tracing/attributes.ts";
@@ -586,7 +586,7 @@ export class TaskManager {
 		const span = taskTrace.span;
 		const traceContext = taskTrace.context;
 		const taskLog = this.logger.forTask(taskId).withContext(traceContext);
-		let taskPreparation: { cleanup: () => Promise<void> } | null = null;
+		let taskPreparation: IsolationContext | null = null;
 
 		try {
 			const task = this.store.getTask(taskId);
