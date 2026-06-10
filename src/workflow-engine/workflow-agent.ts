@@ -296,7 +296,10 @@ export class WorkflowAgent {
 			if (isoCtx?.worktree && this.isolationManager) {
 				try {
 					const summary = this.extractCommitSummary(agentResult, label);
-					await this.isolationManager.commitDirtyWorktree(isoCtx.worktree.path, summary);
+					const committed = await this.isolationManager.commitDirtyWorktree(isoCtx.worktree.path, summary);
+					if (!committed && this.resultClaimsFileChanges(agentResult)) {
+						commitError = new Error("agent reported changed files but the worktree had no commit-worthy changes");
+					}
 				} catch (error) {
 					commitError = error;
 				}
@@ -415,6 +418,12 @@ export class WorkflowAgent {
 			});
 			return;
 		}
+	}
+
+	private resultClaimsFileChanges(result: unknown): boolean {
+		if (!result || typeof result !== "object") return false;
+		const filesChanged = (result as Record<string, unknown>).filesChanged;
+		return Array.isArray(filesChanged) && filesChanged.length > 0;
 	}
 
 	private extractCommitSummary(result: unknown, label: string): string {

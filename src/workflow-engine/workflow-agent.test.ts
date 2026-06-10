@@ -596,6 +596,38 @@ describe("WorkflowAgent — isolation", () => {
 		expect(prepared).toHaveLength(0);
 	});
 
+	it("fails when an agent reports changed files but produces no worktree commit", async () => {
+		const cleanedUp: string[] = [];
+		const mockIsolation = {
+			prepare: async () => ({
+				cwd: "/tmp/worktree-mock",
+				worktree: { id: "wt-1", branch: "kanade/T-001/dev", path: "/tmp/worktree-mock" },
+				cleanup: async () => {
+					cleanedUp.push("done");
+				},
+			}),
+			commitDirtyWorktree: async () => false,
+		};
+		const schema = Type.Object({
+			status: Type.String(),
+			summary: Type.String(),
+			filesChanged: Type.Array(Type.String()),
+		});
+		const mock = createMockSessionFactory({
+			structuredResult: { status: "done", summary: "updated config test", filesChanged: ["src/config/config.test.ts"] },
+		});
+		const agent = new WorkflowAgent({
+			createSession: mock.createSession,
+			isolationManager: mockIsolation as never,
+			taskId: "T-001",
+		});
+
+		await expect(agent.run("do something", { label: "dev", isolation: "worktree", schema })).rejects.toThrow(
+			/agent reported changed files but the worktree had no commit-worthy changes/,
+		);
+		expect(cleanedUp).toEqual(["done"]);
+	});
+
 	it("fails the agent run when worktree auto-commit fails", async () => {
 		const cleanedUp: string[] = [];
 		const mockIsolation = {
