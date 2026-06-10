@@ -19,7 +19,7 @@
 		"eval": "tsx eval/run.ts --mock",
 		"eval:author": "tsx eval/workflow-author/run.ts",
 		"live:accept": "tsx scripts/live-acceptance.ts",
-		"lint": "biome check src/",
+		"lint": "biome check src/ scripts/",
 		"lint:fix": "biome check --write src/",
 		"format": "biome format --write src/",
 		"typecheck": "tsc --noEmit",
