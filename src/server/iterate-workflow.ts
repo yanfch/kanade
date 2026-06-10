@@ -66,7 +66,7 @@ export function buildIterateWorkflowScript(): string {
 		"const validation = await testChange(refined, {",
 		"  role: 'tester',",
 		"  guidance:",
-		"    `Validate only the refined change. Run the most focused relevant checks for the iteration instructions above, report what you ran, and state clearly whether the authoritative instructions were satisfied.`",
+		"    `Validate only the refined change. Run the most focused relevant checks for the iteration instructions above, report what you ran, and state clearly whether the authoritative instructions were satisfied. If you return structured output, use issues only for blocking validation failures and put non-blocking notes in warnings.`",
 		"});",
 		"",
 		"return { refined, validation };",

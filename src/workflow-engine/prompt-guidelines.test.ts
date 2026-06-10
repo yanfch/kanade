@@ -18,6 +18,8 @@ describe("workflow author prompt guidelines", () => {
 		expect(prompt).toContain("Current task complexity hint: medium");
 		expect(prompt).toContain("validation.status === 'failed'");
 		expect(prompt).toContain("Fix validation");
+		expect(prompt).toContain("warnings: { type: 'array'");
+		expect(prompt).toContain("issues means blocking validation failures only");
 		expect(prompt).not.toContain("Available globals: agent(prompt, opts)");
 		expect(prompt).not.toContain("compareCandidates(");
 		expect(prompt).not.toContain("integrateChanges(");
@@ -34,6 +36,7 @@ describe("workflow author prompt guidelines", () => {
 		expect(text).toContain("feedback is required");
 		expect(text).toContain("approved means no blocking issues");
 		expect(text).toContain("If validation.status is failed");
+		expect(text).toContain("non-blocking environment or retry notes in warnings");
 	});
 
 	it("keeps the legacy prompt available for eval comparisons", () => {

@@ -874,6 +874,79 @@ return { review }`;
 		expect(calls).toEqual(["developer", "reviewer", "developer"]);
 	});
 
+	it("treats passed validations with issues as failed", async () => {
+		const script = `export const meta = { name: 'validation_normalize', description: 'Validation normalize' }
+const dev = await implement('Do the change.', { role: 'developer' })
+let validation = await testChange(dev, {
+  role: 'tester',
+  output: { type: 'object', properties: { status: { type: 'string', enum: ['passed', 'failed'] }, summary: { type: 'string' }, issues: { type: 'array', items: { type: 'string' } }, warnings: { type: 'array', items: { type: 'string' } } }, required: ['status', 'summary', 'issues'] }
+})
+if (validation.status === 'failed') {
+  const fix = await continueImplementation(dev, { role: 'developer', feedback: validation })
+  return { validation, fix }
+}
+return { validation }`;
+
+		const calls: string[] = [];
+		const result = await runWorkflow(script, {
+			loadRole: semanticRoleLoader,
+			agent: {
+				async run<TSchemaDef extends TSchema | undefined = undefined>(
+					_prompt: string,
+					options: AgentRunOptions<TSchemaDef> = {},
+				): Promise<AgentRunResult<TSchemaDef>> {
+					calls.push(options.role ?? "none");
+					if (options.role === "tester") {
+						return {
+							status: "passed",
+							summary: "tests passed but one blocking issue was reported",
+							issues: ["missing validation coverage"],
+							warnings: [],
+						} as AgentRunResult<TSchemaDef>;
+					}
+					return { status: "done", summary: "implemented", filesChanged: ["src/a.ts"] } as AgentRunResult<TSchemaDef>;
+				},
+			},
+		});
+
+		const output = result.result as { validation: { status: string; summary: string }; fix?: unknown };
+		expect(output.validation.status).toBe("failed");
+		expect(output.validation.summary).toContain("Runtime note");
+		expect(output.fix).toBeTruthy();
+		expect(calls).toEqual(["developer", "tester", "developer"]);
+	});
+
+	it("keeps passed validations with warnings as passed", async () => {
+		const script = `export const meta = { name: 'validation_warnings', description: 'Validation warnings' }
+const dev = await implement('Do the change.', { role: 'developer' })
+return await testChange(dev, {
+  role: 'tester',
+  output: { type: 'object', properties: { status: { type: 'string', enum: ['passed', 'failed'] }, summary: { type: 'string' }, issues: { type: 'array', items: { type: 'string' } }, warnings: { type: 'array', items: { type: 'string' } } }, required: ['status', 'summary', 'issues'] }
+})`;
+
+		const result = await runWorkflow(script, {
+			loadRole: semanticRoleLoader,
+			agent: {
+				async run<TSchemaDef extends TSchema | undefined = undefined>(
+					_prompt: string,
+					options: AgentRunOptions<TSchemaDef> = {},
+				): Promise<AgentRunResult<TSchemaDef>> {
+					if (options.role === "tester") {
+						return {
+							status: "passed",
+							summary: "tests passed after dependency install",
+							issues: [],
+							warnings: ["Initial run missed dependencies; npm install resolved it."],
+						} as AgentRunResult<TSchemaDef>;
+					}
+					return { status: "done", summary: "implemented", filesChanged: ["src/a.ts"] } as AgentRunResult<TSchemaDef>;
+				},
+			},
+		});
+
+		expect((result.result as { status: string }).status).toBe("passed");
+	});
+
 	it("rejects continueImplementation without feedback", async () => {
 		const script = `export const meta = { name: 'no_feedback', description: 'No feedback' }
 const dev = { status: 'done' }

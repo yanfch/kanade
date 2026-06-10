@@ -666,12 +666,15 @@ export async function runWorkflow<T = unknown>(
 			role: opts.role,
 			defaultRole: "tester",
 			fallbackInstructions:
-				"Act as a careful tester. Validate the implementation with focused checks and report pass/fail clearly.",
-			guidance: opts.guidance,
+				"Act as a careful tester. Validate the implementation with focused checks and report pass/fail clearly. In structured validation output, issues are blocking failures only; put non-blocking notes in warnings.",
+			guidance: joinInstructions(
+				"In structured validation output, use status passed only when there are no blocking issues. The issues array is for blocking validation failures only; put non-blocking observations, environment notes, or retry notes in warnings.",
+				opts.guidance,
+			),
 			output: opts.output,
 			isolation: hasImplementationLineage(input) ? "worktree" : undefined,
 		});
-		return createStepResult("testChange", result);
+		return createStepResult("testChange", normalizeValidationResult(result));
 	};
 
 	const pipeline = async (
@@ -1079,6 +1082,25 @@ function normalizeReviewResult(result: unknown): unknown {
 				typeof review.summary === "string" && review.summary.trim()
 					? `${review.summary}\n\nRuntime note: review reported issues, so approved was treated as needs_fix.`
 					: "Review reported issues, so approved was treated as needs_fix.",
+		};
+	}
+	return result;
+}
+
+function normalizeValidationResult(result: unknown): unknown {
+	if (!result || typeof result !== "object" || Array.isArray(result)) return result;
+	const validation = result as Record<string, unknown>;
+	const issues = Array.isArray(validation.issues)
+		? validation.issues.filter((issue) => typeof issue === "string" && issue.trim().length > 0)
+		: [];
+	if (validation.status === "passed" && issues.length > 0) {
+		return {
+			...validation,
+			status: "failed",
+			summary:
+				typeof validation.summary === "string" && validation.summary.trim()
+					? `${validation.summary}\n\nRuntime note: validation reported blocking issues, so passed was treated as failed. Put non-blocking notes in warnings instead of issues.`
+					: "Validation reported blocking issues, so passed was treated as failed. Put non-blocking notes in warnings instead of issues.",
 		};
 	}
 	return result;

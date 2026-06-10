@@ -18,6 +18,7 @@
 		"test:watch": "vitest",
 		"eval": "tsx eval/run.ts --mock",
 		"eval:author": "tsx eval/workflow-author/run.ts",
+		"live:accept": "tsx scripts/live-acceptance.ts",
 		"lint": "biome check src/",
 		"lint:fix": "biome check --write src/",
 		"format": "biome format --write src/",

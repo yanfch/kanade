@@ -186,6 +186,7 @@ Use for:
 Rules:
 - exact commands belong in prompt/guidance text, not in extra option fields like `command`.
 - for medium/complex tasks, `testChange` must return explicit `status` values: `'passed'` or `'failed'`.
+- in structured validation output, `issues` means blocking validation failures only; non-blocking environment, dependency, or retry notes belong in `warnings`.
 
 ---
 
@@ -329,7 +330,7 @@ Generated workflow output should enforce these minimal gates:
 
 - **reviewChange**: `status: 'approved'` means no blocking issues remain.
 - **Reviewer issues** (typically `status: 'needs_fix'`): must trigger one `continueImplementation(...)` fix pass using the review result as `feedback` before moving forward.
-- **testChange (medium/complex tasks)**: must return either `status: 'passed'` or `status: 'failed'`.
+- **testChange (medium/complex tasks)**: must return either `status: 'passed'` or `status: 'failed'`, with blocking failures in `issues` and non-blocking notes in `warnings`.
 - **Validation failures**: when validation fails, run `continueImplementation(..., { guidance: 'Fix validation' })` and then a fresh `testChange(...)` pass (`Re-validate`).
 
 ## Shape D: risky redesign with approval gate

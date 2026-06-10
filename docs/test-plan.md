@@ -69,6 +69,21 @@ npx vitest run src/server/      # Server
 npx vitest run eval/scorer*     # Eval scorer
 ```
 
+## Live generated-task acceptance harness
+
+Use the harness against a running Kanade server to submit a generated task and collect acceptance evidence before deciding whether to merge:
+
+```bash
+npm run live:accept -- \
+  --base-url http://127.0.0.1:7781 \
+  --model gpt-5.3-codex-spark \
+  --prompt "Small focused Kanade task..." \
+  --check "npm run typecheck" \
+  --check "npm run lint"
+```
+
+The report checks task status, semantic workflow validation, result status, worktree commit/dirty state, main workspace dirty state, usage, and optional local commands. A `finished` task is still only a candidate; inspect the generated workflow and worktree diff before merging.
+
 ## Generated workflow acceptance checks
 
 These checks ensure that LLM-generated workflows remain safe and correct:
@@ -80,7 +95,7 @@ These checks ensure that LLM-generated workflows remain safe and correct:
 3. **Quality gates are explicit** – Generated workflows must follow the V1 quality gates:
    - `reviewChange` with `status: 'approved'` means no blocking issues remain.
    - reviewer-reported issues must trigger one `continueImplementation` fix pass.
-   - `testChange` on medium/complex tasks must return `status: 'passed'` or `status: 'failed'`.
+   - `testChange` on medium/complex tasks must return `status: 'passed'` or `status: 'failed'`, using `issues` only for blocking validation failures and `warnings` for non-blocking notes.
    - validation failures must follow `Fix validation` then `Re-validate` (a second `testChange` pass after one `continueImplementation` fix iteration).
 
 4. **Worktree auto-commit failures abort the task** – If a worktree auto-commit operation fails, the task must transition to a failed state immediately. The system must not report a misleading "finished" status when the commit (and thus the deliverable) did not succeed.
