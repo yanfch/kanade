@@ -619,12 +619,15 @@ export async function runWorkflow<T = unknown>(
 			role: opts.role,
 			defaultRole: "reviewer",
 			fallbackInstructions:
-				"Act as a careful reviewer. Inspect the implementation result for correctness, completeness, and test coverage gaps.",
-			guidance: opts.guidance,
+				"Act as a careful reviewer. Inspect the implementation result for correctness, completeness, and test coverage gaps. If you report any blocking issue, status must be needs_fix. Only use approved when issues is empty.",
+			guidance: joinInstructions(
+				"If status is approved, issues must be empty. If issues contains any blocking item, status must be needs_fix.",
+				opts.guidance,
+			),
 			output: opts.output ?? defaultReviewSchema(),
 			isolation: hasImplementationLineage(input) ? "worktree" : undefined,
 		});
-		return createStepResult("reviewChange", result);
+		return createStepResult("reviewChange", normalizeReviewResult(result));
 	};
 
 	const continueImplementation = async <TSchemaDef extends TSchema | undefined = undefined>(
@@ -1060,6 +1063,25 @@ function normalizeContinueImplementationOptions<TSchemaDef extends TSchema | und
 		label: optionalString(options.label, "step label"),
 		feedback: options.feedback,
 	};
+}
+
+function normalizeReviewResult(result: unknown): unknown {
+	if (!result || typeof result !== "object" || Array.isArray(result)) return result;
+	const review = result as Record<string, unknown>;
+	const issues = Array.isArray(review.issues)
+		? review.issues.filter((issue) => typeof issue === "string" && issue.trim().length > 0)
+		: [];
+	if (review.status === "approved" && issues.length > 0) {
+		return {
+			...review,
+			status: "needs_fix",
+			summary:
+				typeof review.summary === "string" && review.summary.trim()
+					? `${review.summary}\n\nRuntime note: review reported issues, so approved was treated as needs_fix.`
+					: "Review reported issues, so approved was treated as needs_fix.",
+		};
+	}
+	return result;
 }
 
 function defaultReviewSchema(): TSchema {

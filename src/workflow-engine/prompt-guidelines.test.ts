@@ -16,6 +16,8 @@ describe("workflow author prompt guidelines", () => {
 		expect(prompt).toContain("testChange(input, opts)");
 		expect(prompt).toContain("request_human(request)");
 		expect(prompt).toContain("Current task complexity hint: medium");
+		expect(prompt).toContain("validation.status === 'failed'");
+		expect(prompt).toContain("Fix validation");
 		expect(prompt).not.toContain("Available globals: agent(prompt, opts)");
 		expect(prompt).not.toContain("compareCandidates(");
 		expect(prompt).not.toContain("integrateChanges(");
@@ -30,6 +32,8 @@ describe("workflow author prompt guidelines", () => {
 		expect(text).toContain("kanade iterate uses a separate built-in refinement workflow");
 		expect(text).toContain("parallel() is available, but in V1 use it only for bounded read-oriented fan-out");
 		expect(text).toContain("feedback is required");
+		expect(text).toContain("approved means no blocking issues");
+		expect(text).toContain("If validation.status is failed");
 	});
 
 	it("keeps the legacy prompt available for eval comparisons", () => {

@@ -836,6 +836,44 @@ return { dev, review }`;
 		expect(calls[2].prompt).toContain("missing edge case");
 	});
 
+	it("treats approved reviews with issues as needs_fix", async () => {
+		const script = `export const meta = { name: 'review_normalize', description: 'Review normalize' }
+const dev = await implement('Do the change.', { role: 'developer' })
+const review = await reviewChange(dev, { role: 'reviewer' })
+if (review.status === 'needs_fix') {
+  const fix = await continueImplementation(dev, { role: 'developer', feedback: review })
+  return { review, fix }
+}
+return { review }`;
+
+		const calls: string[] = [];
+		const result = await runWorkflow(script, {
+			loadRole: semanticRoleLoader,
+			agent: {
+				async run<TSchemaDef extends TSchema | undefined = undefined>(
+					_prompt: string,
+					options: AgentRunOptions<TSchemaDef> = {},
+				): Promise<AgentRunResult<TSchemaDef>> {
+					calls.push(options.role ?? "none");
+					if (options.role === "reviewer") {
+						return {
+							status: "approved",
+							summary: "looks ok but missing generated coverage",
+							issues: ["missing generated coverage"],
+						} as AgentRunResult<TSchemaDef>;
+					}
+					return { status: "done", summary: "implemented", filesChanged: ["src/a.ts"] } as AgentRunResult<TSchemaDef>;
+				},
+			},
+		});
+
+		const output = result.result as { review: { status: string; summary: string }; fix?: unknown };
+		expect(output.review.status).toBe("needs_fix");
+		expect(output.review.summary).toContain("Runtime note");
+		expect(output.fix).toBeTruthy();
+		expect(calls).toEqual(["developer", "reviewer", "developer"]);
+	});
+
 	it("rejects continueImplementation without feedback", async () => {
 		const script = `export const meta = { name: 'no_feedback', description: 'No feedback' }
 const dev = { status: 'done' }
