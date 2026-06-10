@@ -183,8 +183,9 @@ Use for:
 - targeted regression checks
 - lint/test/build verification
 
-Rule:
-- exact commands belong in prompt/guidance text, not in extra option fields like `command`
+Rules:
+- exact commands belong in prompt/guidance text, not in extra option fields like `command`.
+- for medium/complex tasks, `testChange` must return explicit `status` values: `'passed'` or `'failed'`.
 
 ---
 
@@ -321,6 +322,15 @@ if (review.status === 'needs_fix') {
 
 return { dev, review }
 ```
+
+## Generated workflow quality gates
+
+Generated workflow output should enforce these minimal gates:
+
+- **reviewChange**: `status: 'approved'` means no blocking issues remain.
+- **Reviewer issues** (typically `status: 'needs_fix'`): must trigger one `continueImplementation(...)` fix pass using the review result as `feedback` before moving forward.
+- **testChange (medium/complex tasks)**: must return either `status: 'passed'` or `status: 'failed'`.
+- **Validation failures**: when validation fails, run `continueImplementation(..., { guidance: 'Fix validation' })` and then a fresh `testChange(...)` pass (`Re-validate`).
 
 ## Shape D: risky redesign with approval gate
 
