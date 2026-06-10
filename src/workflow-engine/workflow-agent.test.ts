@@ -560,9 +560,14 @@ describe("WorkflowAgent — isolation", () => {
 			commitDirtyWorktree: async () => {},
 		};
 
+		const toolCwds: string[] = [];
 		const mock = createMockSessionFactory();
 		const agent = new WorkflowAgent({
 			createSession: mock.createSession,
+			createCodingTools: (cwd) => {
+				toolCwds.push(cwd);
+				return [fakeTool(`read:${cwd}`)];
+			},
 			isolationManager: mockIsolation as never,
 			taskId: "T-001",
 		});
@@ -572,8 +577,10 @@ describe("WorkflowAgent — isolation", () => {
 		expect(prepared).toHaveLength(1);
 		expect(prepared[0]).toMatchObject({ taskId: "T-001", label: "dev", mode: "worktree" });
 		expect(cleanedUp).toContain("dev");
-		// session cwd should be the worktree path
+		// session cwd and coding tools should both use the worktree path
 		expect(mock.calls[0].cwd).toBe("/tmp/worktree-mock");
+		expect(toolCwds).toEqual(["/tmp/worktree-mock"]);
+		expect(mock.calls[0].customTools?.map((tool) => tool.name)).toContain("read:/tmp/worktree-mock");
 	});
 
 	it("skips isolationManager when isolation is not set", async () => {

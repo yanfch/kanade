@@ -120,7 +120,8 @@ export type AgentRunResult<TSchemaDef extends TSchema | undefined> = TSchemaDef 
 
 export class WorkflowAgent {
 	private readonly cwd: string;
-	private readonly baseTools: ToolDefinition[];
+	private readonly tools?: ToolDefinition[];
+	private readonly createCodingTools: CreateCodingTools;
 	private readonly sessionOptions: Partial<CreateAgentSessionOptions>;
 	private readonly instructions?: string;
 	private readonly rolesDir?: string;
@@ -141,7 +142,8 @@ export class WorkflowAgent {
 
 	constructor(options: WorkflowAgentOptions = {}) {
 		this.cwd = options.cwd ?? process.cwd();
-		this.baseTools = options.tools ?? (options.createCodingTools ?? createCodingTools)(this.cwd);
+		this.tools = options.tools;
+		this.createCodingTools = options.createCodingTools ?? createCodingTools;
 		this.sessionOptions = options.session ?? {};
 		this.instructions = options.instructions;
 		this.rolesDir = options.rolesDir;
@@ -180,7 +182,8 @@ export class WorkflowAgent {
 		const effectiveCwd = isoCtx?.cwd ?? this.cwd;
 		const roleConfig = options.role ? await this.loadRole(options.role) : null;
 		const schema = options.schema ?? (roleConfig?.defaultSchema as TSchema | undefined);
-		const baseTools = roleConfig ? filterToolsByWhitelist(this.baseTools, roleConfig.tools.allow) : this.baseTools;
+		const cwdTools = this.tools ?? this.createCodingTools(effectiveCwd);
+		const baseTools = roleConfig ? filterToolsByWhitelist(cwdTools, roleConfig.tools.allow) : cwdTools;
 		const requestedModel = options.model ?? roleConfig?.defaultModel;
 		const additionalInstructions = this.buildAdditionalInstructions(options.instructions);
 		const workspaceFingerprint = await this.computeWorkspaceFingerprint(effectiveCwd);
