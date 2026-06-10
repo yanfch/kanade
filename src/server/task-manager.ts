@@ -742,8 +742,9 @@ export class TaskManager {
 	}
 
 	private prepareCommandsForTask(options: TaskOptions): string[] {
-		const rawTaskCommands = (options as { prepare_commands?: unknown; prepareCommands?: unknown }).prepare_commands
-			?? (options as { prepareCommands?: unknown }).prepareCommands;
+		const rawTaskCommands =
+			(options as { prepare_commands?: unknown; prepareCommands?: unknown }).prepare_commands ??
+			(options as { prepareCommands?: unknown }).prepareCommands;
 		const taskDefaults = this.normalizePrepareCommands(rawTaskCommands);
 		const globalDefaults = (this.config.isolation.prepareCommands ?? []).slice();
 		return [...globalDefaults, ...taskDefaults];

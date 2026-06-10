@@ -1,6 +1,6 @@
+import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { execSync } from "node:child_process";
 import { simpleGit } from "simple-git";
 import type { MergeConfig } from "../config/index.ts";
 import type { StateStore, WorktreeRow } from "../store/index.ts";

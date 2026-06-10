@@ -51,12 +51,7 @@ describe("loadConfig", () => {
 		const root = tempKanadeDir();
 		writeFileSync(
 			join(root, "config.yml"),
-			[
-				"isolation:",
-				"  prepareCommands:",
-				"    - npm install",
-				"    - npm run test",
-			].join("\n"),
+			["isolation:", "  prepareCommands:", "    - npm install", "    - npm run test"].join("\n"),
 		);
 
 		const config = loadConfig();
