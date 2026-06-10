@@ -13,6 +13,7 @@ interface Args {
 	timeoutMs: number;
 	pollMs: number;
 	checks: string[];
+	prepare: string[];
 	json: boolean;
 }
 
@@ -67,6 +68,7 @@ interface AcceptanceReport {
 		worktreeDirty: Array<{ path: string; dirty: boolean; status: string }>;
 		commits: Array<{ path: string; head: string }>;
 	};
+	prepare: CheckResult[];
 	checks: CheckResult[];
 	checksCwd: string;
 	recommendation: "accept" | "inspect" | "reject";
@@ -80,6 +82,7 @@ function parseArgs(argv: string[]): Args {
 		timeoutMs: 30 * 60 * 1000,
 		pollMs: 10_000,
 		checks: [],
+		prepare: [],
 		json: false,
 	};
 	for (let i = 0; i < argv.length; i++) {
@@ -96,6 +99,7 @@ function parseArgs(argv: string[]): Args {
 		else if (arg === "--cwd") args.cwd = resolve(next());
 		else if (arg === "--timeout-ms") args.timeoutMs = Number(next());
 		else if (arg === "--poll-ms") args.pollMs = Number(next());
+		else if (arg === "--prepare") args.prepare.push(next());
 		else if (arg === "--check") args.checks.push(next());
 		else if (arg === "--json") args.json = true;
 		else if (arg === "--help" || arg === "-h") usageAndExit(0);
@@ -106,7 +110,7 @@ function parseArgs(argv: string[]): Args {
 
 function usageAndExit(code: number): never {
 	console.log(`Usage:
-  npm run live:accept -- --prompt "..." --model gpt-5.3-codex-spark --base-url http://127.0.0.1:7781 --check "npm run typecheck" --check "npm run lint"
+  npm run live:accept -- --prompt "..." --model gpt-5.3-codex-spark --base-url http://127.0.0.1:7781 --prepare "npm install" --check "npm run typecheck" --check "npm run lint"
 
 Options:
   --prompt TEXT          Generated task prompt
@@ -116,6 +120,7 @@ Options:
   --base-url URL         Kanade server URL (default: KANADE_URL or http://127.0.0.1:7777)
   --timeout-ms N         Poll timeout (default: 1800000)
   --poll-ms N            Poll interval (default: 10000)
+  --prepare COMMAND      Worktree preparation command before checks, e.g. npm install; repeatable
   --check COMMAND        Local acceptance check to run after task completion; repeatable
   --json                 Print machine-readable JSON only
 `);
@@ -231,7 +236,8 @@ async function main() {
 
 	const parsedResult = parseResult(detail.task.result);
 	const checksCwd = worktreesResponse.worktrees[0]?.worktree_path ?? args.cwd;
-	const checks = args.checks.map((check) => runCheck(checksCwd, check));
+	const prepare = args.prepare.map((command) => runCheck(checksCwd, command));
+	const checks = prepare.every((step) => step.ok) ? args.checks.map((check) => runCheck(checksCwd, check)) : [];
 	const worktreeDirty = worktreesResponse.worktrees.map((worktree) => {
 		const status = safeGit(worktree.worktree_path, "status --short");
 		return { path: worktree.worktree_path, dirty: status.trim().length > 0, status };
@@ -250,6 +256,9 @@ async function main() {
 	if (worktreesResponse.worktrees.length === 0) reasons.push("no worktree was recorded");
 	if (worktreeDirty.some((entry) => entry.dirty)) reasons.push("one or more worktrees are dirty");
 	if (mainStatus.trim()) reasons.push("main workspace is dirty");
+	for (const step of prepare) {
+		if (!step.ok) reasons.push(`prepare failed: ${step.command}`);
+	}
 	for (const check of checks) {
 		if (!check.ok) reasons.push(`check failed: ${check.command}`);
 	}
@@ -269,6 +278,7 @@ async function main() {
 			worktreeDirty,
 			commits,
 		},
+		prepare,
 		checks,
 		checksCwd,
 		recommendation,
@@ -285,7 +295,8 @@ async function main() {
 		);
 		console.log(`worktrees: ${report.worktrees.length}`);
 		for (const commit of report.git.commits) console.log(`commit: ${commit.head} (${commit.path})`);
-		if (report.checks.length) console.log(`checks cwd: ${report.checksCwd}`);
+		if (report.prepare.length || report.checks.length) console.log(`checks cwd: ${report.checksCwd}`);
+		for (const step of report.prepare) console.log(`prepare ${step.ok ? "ok" : "failed"}: ${step.command}`);
 		for (const check of report.checks) console.log(`check ${check.ok ? "ok" : "failed"}: ${check.command}`);
 		console.log(`recommendation: ${report.recommendation}`);
 		if (report.reasons.length) console.log(`reasons:\n- ${report.reasons.join("\n- ")}`);

@@ -78,11 +78,12 @@ npm run live:accept -- \
   --base-url http://127.0.0.1:7781 \
   --model gpt-5.3-codex-spark \
   --prompt "Small focused Kanade task..." \
+  --prepare "npm install" \
   --check "npm run typecheck" \
   --check "npm run lint"
 ```
 
-The report checks task status, semantic workflow validation, result status, worktree commit/dirty state, main workspace dirty state, usage, and optional local commands. A `finished` task is still only a candidate; inspect the generated workflow and worktree diff before merging.
+The report checks task status, semantic workflow validation, result status, worktree commit/dirty state, main workspace dirty state, usage, optional worktree preparation commands, and optional local checks. A `finished` task is still only a candidate; inspect the generated workflow and worktree diff before merging.
 
 ## Generated workflow acceptance checks
 
