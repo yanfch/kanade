@@ -33,7 +33,7 @@ export type CreateSession = (options: CreateAgentSessionOptions) => Promise<Crea
 export type CreateCodingTools = (cwd: string) => ToolDefinition[];
 export type ModelResolver = (
 	modelName: string,
-	context: { modelRegistry?: CreateAgentSessionOptions["modelRegistry"] },
+	context: { modelRegistry?: CreateAgentSessionOptions["modelRegistry"]; defaultProvider?: string | null },
 ) => PiModel | undefined | Promise<PiModel | undefined>;
 
 export interface AgentJournal {
@@ -336,7 +336,10 @@ export class WorkflowAgent {
 			return { ...this.sessionOptions, authStorage, modelRegistry, settingsManager };
 		}
 
-		const model = await this.modelResolver(modelName, { modelRegistry });
+		const model = await this.modelResolver(modelName, {
+			modelRegistry,
+			defaultProvider: settingsManager.getDefaultProvider(),
+		});
 		if (!model) throw new Error(`Model not found: ${modelName}`);
 
 		return {
@@ -499,7 +502,7 @@ export class WorkflowAgent {
 
 export function resolveModelSpec(
 	modelName: string,
-	context: { modelRegistry?: CreateAgentSessionOptions["modelRegistry"] } = {},
+	context: { modelRegistry?: CreateAgentSessionOptions["modelRegistry"]; defaultProvider?: string | null } = {},
 ): PiModel | undefined {
 	const modelRegistry = context.modelRegistry;
 	if (!modelRegistry) return undefined;
@@ -507,6 +510,11 @@ export function resolveModelSpec(
 	const explicit = parseExplicitModelSpec(modelName);
 	if (explicit) {
 		return modelRegistry.find(explicit.provider, explicit.modelId) as PiModel | undefined;
+	}
+
+	if (context.defaultProvider) {
+		const defaultProviderMatch = modelRegistry.find(context.defaultProvider, modelName) as PiModel | undefined;
+		if (defaultProviderMatch) return defaultProviderMatch;
 	}
 
 	const matches = modelRegistry

@@ -1,7 +1,10 @@
 #!/usr/bin/env npx tsx
 import { loadConfig } from "../config/index.ts";
+import { configureHttpDispatcher } from "../net/http-dispatcher.ts";
 import { startServer } from "../server/index.ts";
 import { createMockSessionFactory } from "../server/test-session-mock.ts";
+
+configureHttpDispatcher();
 
 const config = loadConfig();
 const mockSessionText = process.env.KANADE_MOCK_SESSION_TEXT?.trim();
