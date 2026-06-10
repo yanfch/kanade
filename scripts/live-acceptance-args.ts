@@ -75,7 +75,7 @@ Options:
   --timeout-ms N             Poll timeout (default: 1800000)
   --poll-ms N                Poll interval (default: 10000)
   --check COMMAND            Local acceptance check to run after task completion; repeatable
-  --json                    Print machine-readable JSON only
+  --json                     Print machine-readable JSON only
 `);
 	process.exit(code);
 }
