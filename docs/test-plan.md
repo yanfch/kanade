@@ -77,6 +77,12 @@ These checks ensure that LLM-generated workflows remain safe and correct:
 
 2. **Validation rejects raw agent/pipeline constructs** – The workflow validation layer must reject any generated workflow that includes raw `agent`, `pipeline`, or other low-level execution controls. This prevents the LLM from injecting unsafe or uncontrolled execution paths.
 
-3. **Worktree auto-commit failures abort the task** – If a worktree auto-commit operation fails, the task must transition to a failed state immediately. The system must not report a misleading "finished" status when the commit (and thus the deliverable) did not succeed.
+3. **Quality gates are explicit** – Generated workflows must follow the V1 quality gates:
+   - `reviewChange` with `status: 'approved'` means no blocking issues remain.
+   - reviewer-reported issues must trigger one `continueImplementation` fix pass.
+   - `testChange` on medium/complex tasks must return `status: 'passed'` or `status: 'failed'`.
+   - validation failures must follow `Fix validation` then `Re-validate` (a second `testChange` pass after one `continueImplementation` fix iteration).
 
-4. **Isolated-agent coding tools use worktree cwd** – Coding tools (bash, file read/write, edit) dispatched to isolated agents must execute against the effective worktree working directory, not the server or main-repo cwd.
+4. **Worktree auto-commit failures abort the task** – If a worktree auto-commit operation fails, the task must transition to a failed state immediately. The system must not report a misleading "finished" status when the commit (and thus the deliverable) did not succeed.
+
+5. **Isolated-agent coding tools use worktree cwd** – Coding tools (bash, file read/write, edit) dispatched to isolated agents must execute against the effective worktree working directory, not the server or main-repo cwd.
