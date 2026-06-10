@@ -88,6 +88,11 @@ cleanup:
 announcers: []                 # Event notifications (http_post, macos_notification, tts_local)
 ```
 
+## Run command note
+
+Use `--prepare-command` on `kanade run` to pass task-level worktree preparation commands (repeatable), which are sent to `/tasks` as `options.prepare_commands`.
+In the live acceptance script, `--prepare` still means local pre-check commands (harness-only).
+
 ## Tests
 
 ```bash

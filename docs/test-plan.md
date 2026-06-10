@@ -73,14 +73,13 @@ npx vitest run eval/scorer*     # Eval scorer
 
 Use the harness against a running Kanade server to submit a generated task and collect acceptance evidence before deciding whether to merge:
 
-Task payload options now support per-task worktree preparation via `prepare_commands` (string[]):
+Task payload options now support per-task worktree preparation via `options.prepare_commands` (string[]). `live-acceptance` uses `--prepare-command` for this (repeatable), while keeping `--prepare` for local pre-check commands.
 
 ```bash
 curl -X POST $BASE_URL/tasks \
   -H 'Content-Type: application/json' \
   -d '{"source":"generated","prompt":"...","options":{"prepare_commands":["npm install","npm run lint"]}}'
 ```
-
 Configuration also supports `isolation.prepareCommands` as global defaults:
 
 ```yaml
@@ -98,12 +97,13 @@ npm run live:accept -- \
   --agent-model gpt-5.3-codex-spark \
   --role-model reviewer=gpt-5.4 \
   --prompt "Small focused Kanade task..." \
+  --prepare-command "npm install" \
   --prepare "npm install" \
   --check "npm run typecheck" \
   --check "npm run lint"
 ```
 
-The report checks task status, semantic workflow validation, result status, worktree commit/dirty state, main workspace dirty state, usage, optional worktree preparation commands, and optional local checks. A `finished` task is still only a candidate; inspect the generated workflow and worktree diff before merging.
+The report checks task status, semantic workflow validation, result status, worktree commit/dirty state, main workspace dirty state, usage, optional task-level worktree preparation commands, and optional local checks. A `finished` task is still only a candidate; inspect the generated workflow and worktree diff before merging.
 
 ## Generated workflow acceptance checks
 
