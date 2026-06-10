@@ -56,6 +56,16 @@ describe("loadConfig", () => {
 		expect(config.paths.tracesDir).toBe(join(config.paths.root, "traces"));
 	});
 
+	it("ignores stringified null path env values", () => {
+		process.env.KANADE_DIR = "null";
+		process.env.KANADE_TRACES_DIR = "null";
+
+		const config = loadConfig();
+
+		expect(config.paths.root).toBe(join(homedir(), ".kanade"));
+		expect(config.paths.tracesDir).toBe(join(config.paths.root, "traces"));
+	});
+
 	it("merges explicit kanade model config", () => {
 		const root = tempKanadeDir();
 		writeFileSync(
