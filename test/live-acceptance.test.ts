@@ -20,7 +20,14 @@ describe("live-acceptance argument parsing", () => {
 	});
 
 	it("accepts repeatable role-model and run-level model flags", () => {
-		const args = parseArgs(["--prompt", "run this", "--role-model", "reviewer=gpt-5.4", "--role-model", "dev=gpt-5.3-codex-spark"]);
+		const args = parseArgs([
+			"--prompt",
+			"run this",
+			"--role-model",
+			"reviewer=gpt-5.4",
+			"--role-model",
+			"dev=gpt-5.3-codex-spark",
+		]);
 
 		expect(args.roleModels).toEqual({ reviewer: "gpt-5.4", dev: "gpt-5.3-codex-spark" });
 	});

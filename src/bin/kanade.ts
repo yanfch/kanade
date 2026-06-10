@@ -524,7 +524,7 @@ function parseStringArray(value: unknown): string[] {
 	const values = Array.isArray(value) ? value : value === undefined ? [] : [value];
 	const out: string[] = [];
 	for (const entry of values) {
-		if (typeof entry === "string") out.push(entry);
+		if (typeof entry === "string" && entry.trim()) out.push(entry);
 	}
 	return out;
 }

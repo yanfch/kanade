@@ -212,7 +212,7 @@ describe("CLI — run", () => {
 
 	it("passes split model routing options and task-level prepare commands for generated runs", async () => {
 		const out = cli(
-			"run --prompt 'return {}' --author-model gpt-5.4 --agent-model gpt-5.3-codex-spark --role-model reviewer=gpt-5.4 --role-model developer=gpt-5.3-codex-spark --prepare-command 'npm install' --prepare-command 'npm run test'",
+			"run --prompt 'return {}' --author-model gpt-5.4 --agent-model gpt-5.3-codex-spark --role-model reviewer=gpt-5.4 --role-model developer=gpt-5.3-codex-spark --prepare-command 'echo prepare-one' --prepare-command 'echo prepare-two'",
 		);
 		const taskId = out.match(/Task\s+([A-Za-z0-9-]+)/)?.[1];
 		expect(taskId).toBeTruthy();
@@ -223,7 +223,7 @@ describe("CLI — run", () => {
 		expect(options.author_model).toBe("gpt-5.4");
 		expect(options.agent_model).toBe("gpt-5.3-codex-spark");
 		expect(options.role_models).toEqual({ reviewer: "gpt-5.4", developer: "gpt-5.3-codex-spark" });
-		expect(options.prepare_commands).toEqual(["npm install", "npm run test"]);
+		expect(options.prepare_commands).toEqual(["echo prepare-one", "echo prepare-two"]);
 	});
 
 	it("passes split model routing options and task-level prepare commands for saved runs", async () => {
@@ -236,7 +236,7 @@ describe("CLI — run", () => {
 		});
 
 		const out = cli(
-			"run cli-run-models --agent-model gpt-5.4 --role-model reviewer=gpt-5.3-codex-spark --prepare-command 'npm install'",
+			"run cli-run-models --agent-model gpt-5.4 --role-model reviewer=gpt-5.3-codex-spark --prepare-command 'echo prepare-saved'",
 		);
 		const taskId = out.match(/Task\s+([A-Za-z0-9-]+)/)?.[1];
 		expect(taskId).toBeTruthy();
@@ -246,7 +246,7 @@ describe("CLI — run", () => {
 		const options = JSON.parse(body.task.options);
 		expect(options.agent_model).toBe("gpt-5.4");
 		expect(options.role_models).toEqual({ reviewer: "gpt-5.3-codex-spark" });
-		expect(options.prepare_commands).toEqual(["npm install"]);
+		expect(options.prepare_commands).toEqual(["echo prepare-saved"]);
 	});
 
 	it("shows workspace info in output when --cwd is specified", async () => {
