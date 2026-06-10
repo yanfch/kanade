@@ -68,6 +68,7 @@ interface AcceptanceReport {
 		commits: Array<{ path: string; head: string }>;
 	};
 	checks: CheckResult[];
+	checksCwd: string;
 	recommendation: "accept" | "inspect" | "reject";
 	reasons: string[];
 }
@@ -229,7 +230,8 @@ async function main() {
 	}
 
 	const parsedResult = parseResult(detail.task.result);
-	const checks = args.checks.map((check) => runCheck(args.cwd, check));
+	const checksCwd = worktreesResponse.worktrees[0]?.worktree_path ?? args.cwd;
+	const checks = args.checks.map((check) => runCheck(checksCwd, check));
 	const worktreeDirty = worktreesResponse.worktrees.map((worktree) => {
 		const status = safeGit(worktree.worktree_path, "status --short");
 		return { path: worktree.worktree_path, dirty: status.trim().length > 0, status };
@@ -268,6 +270,7 @@ async function main() {
 			commits,
 		},
 		checks,
+		checksCwd,
 		recommendation,
 		reasons,
 	};
@@ -282,6 +285,7 @@ async function main() {
 		);
 		console.log(`worktrees: ${report.worktrees.length}`);
 		for (const commit of report.git.commits) console.log(`commit: ${commit.head} (${commit.path})`);
+		if (report.checks.length) console.log(`checks cwd: ${report.checksCwd}`);
 		for (const check of report.checks) console.log(`check ${check.ok ? "ok" : "failed"}: ${check.command}`);
 		console.log(`recommendation: ${report.recommendation}`);
 		if (report.reasons.length) console.log(`reasons:\n- ${report.reasons.join("\n- ")}`);
