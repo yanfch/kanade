@@ -349,6 +349,18 @@ describe("resolveModelSpec", () => {
 		expect(resolveModelSpec("gpt-5.3-codex-spark", { modelRegistry, defaultProvider: "openai-codex" })).toBe(codex);
 	});
 
+	it("falls back to openai-codex for bare Codex model ids", () => {
+		const codex = { provider: "openai-codex", id: "gpt-5.3-codex-spark", name: "GPT 5.3 Codex Spark" } as PiModel;
+		const modelRegistry = {
+			find(provider: string, modelId: string) {
+				return provider === codex.provider && modelId === codex.id ? codex : undefined;
+			},
+			getAll: () => [],
+		} as unknown as CreateAgentSessionOptions["modelRegistry"];
+
+		expect(resolveModelSpec("gpt-5.3-codex-spark", { modelRegistry, defaultProvider: "anthropic" })).toBe(codex);
+	});
+
 	it("resolves bare id or display name only when unique", () => {
 		const a = { provider: "p1", id: "same-id", name: "A" } as PiModel;
 		const b = { provider: "p2", id: "same-id", name: "B" } as PiModel;

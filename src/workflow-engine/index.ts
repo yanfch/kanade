@@ -1,5 +1,5 @@
 export type { AgentRunOptions, AgentRunResult, WorkflowAgentOptions } from "./workflow-agent.ts";
-export { WorkflowAgent } from "./workflow-agent.ts";
+export { WorkflowAgent, resolveModelSpec } from "./workflow-agent.ts";
 export type { StructuredOutputCapture, StructuredOutputToolOptions } from "./structured-output.ts";
 export { createStructuredOutputTool } from "./structured-output.ts";
 export type {

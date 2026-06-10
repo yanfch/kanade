@@ -2,10 +2,12 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { configureHttpDispatcher } from "../../src/net/http-dispatcher.ts";
 import { formatAuthorEval } from "./report.ts";
 import { runAuthorEval } from "./runner.ts";
 
 async function main() {
+	configureHttpDispatcher();
 	const args = process.argv.slice(2);
 	const modelIndex = args.indexOf("--model");
 	const model = modelIndex >= 0 ? args[modelIndex + 1] : undefined;

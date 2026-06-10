@@ -15,9 +15,9 @@ export interface AuthorEvalRunnerOptions {
 
 export async function runAuthorEval(opts: AuthorEvalRunnerOptions = {}): Promise<AuthorEvalResult[]> {
 	const variants = opts.variants ?? ["current-no-read", "semantic-no-read"];
-	const author = new PromptAuthor();
 	const outputDir = opts.outputDir ?? join(tmpdir(), "kanade-eval-artifacts", "workflow-author");
 	mkdirSync(outputDir, { recursive: true });
+	const author = new PromptAuthor({ persistDir: join(outputDir, "debug", "sessions") });
 	const cases = opts.caseIds?.length
 		? AUTHOR_EVAL_CASES.filter((evalCase) => opts.caseIds?.includes(evalCase.id))
 		: AUTHOR_EVAL_CASES;

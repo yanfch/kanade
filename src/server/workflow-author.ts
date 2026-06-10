@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	AuthStorage,
@@ -11,7 +11,7 @@ import {
 	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
-import { createStructuredOutputTool } from "../workflow-engine/index.ts";
+import { createStructuredOutputTool, resolveModelSpec } from "../workflow-engine/index.ts";
 import { buildWorkflowAuthorPrompt } from "../workflow-engine/prompt-guidelines.ts";
 
 export interface WorkflowAuthor {
@@ -52,7 +52,7 @@ export class LlmWorkflowAuthor implements WorkflowAuthor {
 		const requestedModel = options?.model ?? this.opts.model;
 		const authStorage = AuthStorage.create(this.opts.authPath ?? join(agentDir, "auth.json"));
 		const modelRegistry = ModelRegistry.create(authStorage, this.opts.modelsPath ?? join(agentDir, "models.json"));
-		const settingsManager = SettingsManager.inMemory();
+		const settingsManager = SettingsManager.create(process.cwd(), agentDir);
 		const resourceLoader = new DefaultResourceLoader({
 			cwd: process.cwd(),
 			agentDir,
@@ -85,7 +85,10 @@ export class LlmWorkflowAuthor implements WorkflowAuthor {
 			settingsManager,
 			...(requestedModel
 				? {
-						model: this.resolveModel(modelRegistry, requestedModel) as never,
+						model: resolveModelSpec(requestedModel, {
+							modelRegistry,
+							defaultProvider: settingsManager.getDefaultProvider() ?? readDefaultProvider(agentDir),
+						}) as never,
 					}
 				: {}),
 		});
@@ -118,21 +121,15 @@ export class LlmWorkflowAuthor implements WorkflowAuthor {
 			session.dispose();
 		}
 	}
+}
 
-	private resolveModel(modelRegistry: ModelRegistry, modelName: string): unknown {
-		// Support provider/model or provider:model format
-		const colon = modelName.indexOf(":");
-		const slash = modelName.indexOf("/");
-		const sep = colon > 0 ? colon : slash > 0 ? slash : -1;
-
-		if (sep > 0) {
-			const provider = modelName.slice(0, sep);
-			const modelId = modelName.slice(sep + 1);
-			const found = modelRegistry.find(provider, modelId);
-			if (found) return found;
-		}
-
-		// Fallback: search by id or name
-		return modelRegistry.getAll().find((m) => m.id === modelName || m.name === modelName);
+function readDefaultProvider(agentDir: string): string | undefined {
+	try {
+		const settings = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf8")) as { defaultProvider?: unknown };
+		return typeof settings.defaultProvider === "string" && settings.defaultProvider.trim()
+			? settings.defaultProvider
+			: undefined;
+	} catch {
+		return undefined;
 	}
 }

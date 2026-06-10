@@ -517,6 +517,11 @@ export function resolveModelSpec(
 		if (defaultProviderMatch) return defaultProviderMatch;
 	}
 
+	if (modelName.toLowerCase().includes("codex")) {
+		const codexMatch = modelRegistry.find("openai-codex", modelName) as PiModel | undefined;
+		if (codexMatch) return codexMatch;
+	}
+
 	const matches = modelRegistry
 		.getAll()
 		.filter(

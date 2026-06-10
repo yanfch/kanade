@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	AuthStorage,
@@ -9,7 +9,16 @@ import {
 	createAgentSession,
 	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
+import type { TSchema } from "typebox";
+import { createStructuredOutputTool, resolveModelSpec } from "../../src/workflow-engine/index.ts";
 import { parseWorkflowScript } from "../../src/workflow-engine/runtime.ts";
+
+const SCRIPT_SCHEMA = {
+	type: "object",
+	properties: { script: { type: "string" } },
+	required: ["script"],
+	additionalProperties: false,
+} as const;
 
 export class PromptAuthor {
 	constructor(
@@ -27,12 +36,20 @@ export class PromptAuthor {
 		const requestedModel = options?.model ?? this.opts.model;
 		const authStorage = AuthStorage.create(this.opts.authPath ?? join(agentDir, "auth.json"));
 		const modelRegistry = ModelRegistry.create(authStorage, this.opts.modelsPath ?? join(agentDir, "models.json"));
-		const settingsManager = SettingsManager.inMemory();
+		const settingsManager = SettingsManager.create(process.cwd(), agentDir);
 		const resourceLoader = new DefaultResourceLoader({
 			cwd: process.cwd(),
 			agentDir,
 			settingsManager,
 			noContextFiles: true,
+		});
+		const capture: { called: boolean; value: { script: string } | undefined } = {
+			called: false,
+			value: undefined,
+		};
+		const outputTool = createStructuredOutputTool({
+			schema: SCRIPT_SCHEMA as unknown as TSchema,
+			capture: capture as never,
 		});
 
 		const { session } = await createAgentSession({
@@ -46,18 +63,21 @@ export class PromptAuthor {
 						return SessionManager.create(process.cwd(), this.opts.persistDir);
 					})()
 				: SessionManager.inMemory(),
-			customTools: [],
+			customTools: [outputTool as never],
 			settingsManager,
 			...(requestedModel
 				? {
-						model: resolveModel(modelRegistry, requestedModel) as never,
+						model: resolveModelSpec(requestedModel, {
+							modelRegistry,
+							defaultProvider: settingsManager.getDefaultProvider() ?? readDefaultProvider(agentDir),
+						}) as never,
 					}
 				: {}),
 		});
 
 		try {
 			await session.prompt(prompt);
-			let script = extractScript(session.messages ?? []);
+			let script = capture.value?.script ?? extractScript(session.messages ?? []);
 			if (!isValidWorkflowScript(script)) {
 				await session.prompt(
 					[
@@ -69,7 +89,7 @@ export class PromptAuthor {
 						"- no markdown fences, no JSON wrapper, no commentary",
 					].join("\n"),
 				);
-				script = extractScript(session.messages ?? []);
+				script = capture.value?.script ?? extractScript(session.messages ?? []);
 			}
 			if (!isValidWorkflowScript(script)) {
 				const recent = (session.messages ?? [])
@@ -85,19 +105,15 @@ export class PromptAuthor {
 	}
 }
 
-function resolveModel(modelRegistry: ModelRegistry, modelName: string): unknown {
-	const colon = modelName.indexOf(":");
-	const slash = modelName.indexOf("/");
-	const sep = colon > 0 ? colon : slash > 0 ? slash : -1;
-
-	if (sep > 0) {
-		const provider = modelName.slice(0, sep);
-		const modelId = modelName.slice(sep + 1);
-		const found = modelRegistry.find(provider, modelId);
-		if (found) return found;
+function readDefaultProvider(agentDir: string): string | undefined {
+	try {
+		const settings = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf8")) as { defaultProvider?: unknown };
+		return typeof settings.defaultProvider === "string" && settings.defaultProvider.trim()
+			? settings.defaultProvider
+			: undefined;
+	} catch {
+		return undefined;
 	}
-
-	return modelRegistry.getAll().find((m) => m.id === modelName || m.name === modelName);
 }
 
 function isValidWorkflowScript(script: string | undefined): script is string {
