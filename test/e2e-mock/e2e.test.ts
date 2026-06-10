@@ -868,7 +868,81 @@ return { a, b }`,
 	});
 });
 
-// ── Worktree cleanup verification ───────────────────────────────────────────
+// ── Worktree preparation commands ───────────────────────────────────────
+describe("E2E — worktree preparation commands", () => {
+	it("does nothing when no commands are configured", async () => {
+		const mock = createMockSessionFactory({ text: "ok" });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+return { static: true }`,
+				options: { prepare_commands: [] },
+			});
+
+			await waitForTask(ctx.taskManager, task.task_id);
+			expect(ctx.taskManager.get(task.task_id)?.status).toBe("finished");
+			expect(ctx.taskManager.getWorktrees(task.task_id)).toEqual([]);
+		} finally {
+			ctx.cleanup();
+		}
+	});
+
+	it("runs successful commands in task worktree", async () => {
+		const mock = createMockSessionFactory({ text: "ok" });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			ctx.config.isolation.prepareCommands = ["echo prepared-by-global-config > prep-marker.txt"];
+
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+return { static: true }`,
+				options: {
+					prepare_commands: ["echo prepared-by-task-command >> prep-marker.txt"],
+				},
+			});
+
+			await waitForTask(ctx.taskManager, task.task_id);
+			expect(ctx.taskManager.get(task.task_id)?.status).toBe("finished");
+
+			const worktrees = ctx.taskManager.getWorktrees(task.task_id);
+			expect(worktrees).toHaveLength(1);
+			const marker = join(worktrees[0].worktree_path, "prep-marker.txt");
+			expect(existsSync(marker)).toBe(true);
+			expect(readFileSync(marker, "utf8")).toContain("prepared-by-global-config");
+			expect(readFileSync(marker, "utf8")).toContain("prepared-by-task-command");
+		} finally {
+			ctx.cleanup();
+			cleanupBranches();
+		}
+	});
+
+	it("fails task before agent execution when preparation command fails", async () => {
+		const mock = createMockSessionFactory({ text: "ok" });
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const command = 'node -e "console.log(\"prep out\"); console.error(\"prep err\"); process.exit(9);"';
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+return await agent('do work', { label: 'dev', isolation: 'worktree' })`,
+				options: { prepare_commands: [command] },
+			});
+
+			await waitForTask(ctx.taskManager, task.task_id, "failed", 10_000);
+			expect(ctx.taskManager.get(task.task_id)?.error).toContain("Failed to run worktree preparation command");
+			expect(ctx.taskManager.get(task.task_id)?.error).toContain("prep out");
+			expect(ctx.taskManager.get(task.task_id)?.error).toContain("prep err");
+			expect(ctx.taskManager.get(task.task_id)?.error).toContain("Exit code");
+			expect(mock.sessions).toHaveLength(0);
+		} finally {
+			ctx.cleanup();
+			cleanupBranches();
+		}
+	});
+});
 
 describe("E2E — worktree cleanup", () => {
 	it("task finish keeps worktree dir and branch for inspection", async () => {

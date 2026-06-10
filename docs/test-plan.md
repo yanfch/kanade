@@ -73,6 +73,24 @@ npx vitest run eval/scorer*     # Eval scorer
 
 Use the harness against a running Kanade server to submit a generated task and collect acceptance evidence before deciding whether to merge:
 
+Task payload options now support per-task worktree preparation via `prepare_commands` (string[]):
+
+```bash
+curl -X POST $BASE_URL/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"generated","prompt":"...","options":{"prepare_commands":["npm install","npm run lint"]}}'
+```
+
+Configuration also supports `isolation.prepareCommands` as global defaults:
+
+```yaml
+isolation:
+  prepareCommands:
+    - "npm install"
+    - "npm run test"
+```
+
+
 ```bash
 npm run live:accept -- \
   --base-url http://127.0.0.1:7781 \

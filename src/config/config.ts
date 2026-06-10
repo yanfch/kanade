@@ -39,6 +39,7 @@ export interface IsolationConfig {
 	autoCleanupOnAbort: boolean;
 	staleAfterDays: number;
 	maxConcurrent: number;
+	prepareCommands?: string[];
 }
 
 export interface MergeConfig {
@@ -209,7 +210,9 @@ function defaultConfig(paths: KanadePaths): KanadeConfig {
 			autoCleanupOnAbort: true,
 			staleAfterDays: 7,
 			maxConcurrent: 16,
+			prepareCommands: [],
 		},
+
 		merge: {
 			targetBranch: "main",
 			useNoFf: true,

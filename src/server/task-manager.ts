@@ -33,6 +33,8 @@ export interface TaskOptions {
 	cost_budget?: number;
 	/** Per-agent timeout in milliseconds. 0 disables timeout. Overrides global default. */
 	agent_timeout_ms?: number;
+	/** Shell commands to run in the task worktree before agent execution. */
+	prepare_commands?: string[];
 }
 
 export type CreateTaskInput =
@@ -584,8 +586,14 @@ export class TaskManager {
 		const span = taskTrace.span;
 		const traceContext = taskTrace.context;
 		const taskLog = this.logger.forTask(taskId).withContext(traceContext);
+		let taskPreparation: { cleanup: () => Promise<void> } | null = null;
 
 		try {
+			const task = this.store.getTask(taskId);
+			if (!task) {
+				throw new AppError(`Task not found: ${taskId}`, 404);
+			}
+
 			// Rate limiting
 			const max = this.config.defaults.maxConcurrentTasks;
 			if (max > 0 && this.runningCount > max) {
@@ -595,7 +603,7 @@ export class TaskManager {
 				);
 			}
 
-			if (this.store.getTask(taskId)?.status === "aborted") {
+			if (task.status === "aborted") {
 				span.setStatus({ code: SpanStatusCode.OK });
 				span.setAttribute(Attrs.TASK_STATUS, "aborted");
 				taskLog.info("task already aborted before run started");
@@ -607,14 +615,28 @@ export class TaskManager {
 			this.store.updateTask(taskId, { status: "running", started_at: Date.now() });
 			this.events.emit("task.running", { taskId }, taskId);
 
+			const prepareCommands = this.prepareCommandsForTask(options);
+			if (this.config.isolation.defaultMode === "worktree" && prepareCommands.length > 0) {
+				taskPreparation = await this.isolation.prepareWithCommands({
+					taskId,
+					label: "task",
+					mode: "worktree",
+					baseRepo: task.base_repo ?? process.cwd(),
+					baseBranch: task.base_branch,
+					commands: prepareCommands,
+				});
+			}
+
 			// Initialize snapshot for real-time progress tracking
 			const scriptMeta = this.parseScriptMeta(script);
 			if (scriptMeta) this.snapshotBuilder.init(taskId, scriptMeta);
 
+			const effectiveCwd = options.cwd ?? taskPreparation?.cwd;
+
 			const result = await runWorkflow(script, {
 				args,
 				taskId,
-				cwd: options.cwd,
+				cwd: effectiveCwd,
 				agentModel: options.agent_model ?? this.config.defaults.agentModel ?? undefined,
 				roleModels: options.role_models,
 				concurrency: options.concurrency ?? this.config.defaults.concurrency,
@@ -671,6 +693,7 @@ export class TaskManager {
 
 			this.store.endCurrentPhase(taskId, Date.now());
 			try {
+				await taskPreparation?.cleanup();
 				await this.isolation.finalizeWorktrees(taskId, "approved");
 			} catch (cleanupError) {
 				taskLog.warn("worktree finalization failed after successful task", {
@@ -692,6 +715,7 @@ export class TaskManager {
 			const decision = aborted ? "aborted" : "rejected";
 			const finalStatus = aborted ? "aborted" : "failed";
 			try {
+				await taskPreparation?.cleanup();
 				await this.isolation.finalizeWorktrees(taskId, decision);
 			} catch (cleanupError) {
 				taskLog.warn("worktree finalization failed after task error", {
@@ -715,6 +739,19 @@ export class TaskManager {
 			journal.close();
 			this.controllers.delete(taskId);
 		}
+	}
+
+	private prepareCommandsForTask(options: TaskOptions): string[] {
+		const rawTaskCommands = (options as { prepare_commands?: unknown; prepareCommands?: unknown }).prepare_commands
+			?? (options as { prepareCommands?: unknown }).prepareCommands;
+		const taskDefaults = this.normalizePrepareCommands(rawTaskCommands);
+		const globalDefaults = (this.config.isolation.prepareCommands ?? []).slice();
+		return [...globalDefaults, ...taskDefaults];
+	}
+
+	private normalizePrepareCommands(commands: unknown): string[] {
+		if (!Array.isArray(commands)) return [];
+		return commands.filter((command): command is string => typeof command === "string" && command.trim().length > 0);
 	}
 
 	private startTaskTrace(taskId: string, source: string): TaskTrace {
