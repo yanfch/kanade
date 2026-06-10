@@ -498,3 +498,82 @@ describe("IsolationManager — merge", () => {
 		expect(rows[0].status).toBe("rejected");
 	});
 });
+
+describe("IsolationManager — preparation commands", () => {
+	let baseRepo: string;
+	let store: StateStore;
+
+	beforeEach(async () => {
+		({ baseRepo, store } = await makeRepo());
+	});
+	afterEach(() => store?.close());
+
+	it("does nothing when no commands are configured", async () => {
+		const mgr = new IsolationManager(store, {
+			defaultBaseBranch: "develop",
+			branchPrefix: "kanade",
+		});
+
+		const ctx = await mgr.prepareWithCommands({
+			taskId: "T-0001",
+			label: "task",
+			mode: "worktree",
+			baseRepo,
+			commands: [],
+		});
+
+		expect(ctx.cwd).toBe(baseRepo);
+		expect(ctx.worktree).toBeUndefined();
+		expect(store.findWorktreesByTask("T-0001")).toEqual([]);
+
+		await ctx.cleanup();
+	});
+
+	it("runs commands in isolated worktree cwd", async () => {
+		const mgr = new IsolationManager(store, {
+			defaultBaseBranch: "develop",
+			branchPrefix: "kanade",
+		});
+
+		const ctx = await mgr.prepareWithCommands({
+			taskId: "T-0001",
+			label: "task",
+			mode: "worktree",
+			baseRepo,
+			commands: ["echo prepared-in-worktree > prep-marker.txt"],
+		});
+
+		expect(ctx.worktree).toBeDefined();
+		expect(existsSync(join(ctx.cwd, "prep-marker.txt"))).toBe(true);
+		expect(existsSync(join(baseRepo, "prep-marker.txt"))).toBe(false);
+
+		await ctx.cleanup();
+	});
+
+	it("fails with command diagnostics when preparation command exits non-zero", async () => {
+		const mgr = new IsolationManager(store, {
+			defaultBaseBranch: "develop",
+			branchPrefix: "kanade",
+		});
+		const command = 'node -e "console.log(\\"prep out\\"); console.error(\\"prep err\\"); process.exit(7);"';
+
+		try {
+			await mgr.prepareWithCommands({
+				taskId: "T-0001",
+				label: "task",
+				mode: "worktree",
+				baseRepo,
+				commands: [command],
+			});
+			throw new Error("expected failure");
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			expect(message).toContain("Failed to run worktree preparation command");
+			expect(message).toContain("prep out");
+			expect(message).toContain("prep err");
+			expect(message).toContain("Exit code");
+			expect(message).toContain("STDOUT");
+			expect(message).toContain("STDERR");
+		}
+	});
+});

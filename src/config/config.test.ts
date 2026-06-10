@@ -43,7 +43,20 @@ describe("loadConfig", () => {
 		});
 		expect(config.paths.worktreesDir).toBe(join(root, "worktrees"));
 		expect(config.isolation.worktreeBaseDir).toBe(config.paths.worktreesDir);
+		expect(config.isolation.prepareCommands).toEqual([]);
 		expect(existsSync(config.paths.worktreesDir)).toBe(true);
+	});
+
+	it("loads isolation.prepareCommands from yaml", () => {
+		const root = tempKanadeDir();
+		writeFileSync(
+			join(root, "config.yml"),
+			["isolation:", "  prepareCommands:", "    - npm install", "    - npm run test"].join("\n"),
+		);
+
+		const config = loadConfig();
+
+		expect(config.isolation.prepareCommands).toEqual(["npm install", "npm run test"]);
 	});
 
 	it("ignores stringified undefined path env values", () => {

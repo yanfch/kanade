@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { simpleGit } from "simple-git";
@@ -26,6 +27,7 @@ export interface IsolationConfig {
 	autoCleanupOnReject?: boolean;
 	autoCleanupOnApprove?: boolean;
 	autoCleanupOnAbort?: boolean;
+	prepareCommands?: string[];
 }
 
 export interface MergeResult {
@@ -42,6 +44,10 @@ export interface PrepareOptions {
 	baseRepo?: string;
 	baseBranch?: string;
 	reuseBranch?: string;
+}
+
+export interface PrepareWithCommandsOptions extends PrepareOptions {
+	commands?: string[];
 }
 
 function generateId(): string {
@@ -61,6 +67,41 @@ export class IsolationManager {
 			return { cwd, cleanup: async () => {} };
 		}
 		return this.prepareWorktree(opts);
+	}
+
+	/**
+	 * Prepare the task worktree and execute shell commands in it.
+	 * Returns early with no worktree side-effects if no commands are provided.
+	 */
+	async prepareWithCommands(opts: PrepareWithCommandsOptions): Promise<IsolationContext> {
+		const commands = this.normalizePrepareCommands(opts.commands);
+		if (opts.mode !== "worktree" || commands.length === 0) {
+			const cwd = opts.baseRepo ?? this.config.defaultBaseRepo ?? process.cwd();
+			return { cwd, cleanup: async () => {} };
+		}
+
+		const context = await this.prepareWorktree(opts);
+		for (const command of commands) {
+			try {
+				execSync(command, {
+					shell: "/bin/bash",
+					cwd: context.cwd,
+					encoding: "utf8",
+					stdio: ["ignore", "pipe", "pipe"],
+				});
+			} catch (error) {
+				const status =
+					(error as { status?: number }).status ??
+					(error instanceof Error && (error as { code?: number }).code ? (error as { code?: number }).code : undefined);
+				const stdout = this.toCommandOutput((error as { stdout?: unknown }).stdout);
+				const stderr = this.toCommandOutput((error as { stderr?: unknown }).stderr);
+				await context.cleanup().catch(() => {});
+				throw new Error(
+					`Failed to run worktree preparation command:\n${command}\nExit code: ${String(status)}\nSTDOUT:\n${stdout}\nSTDERR:\n${stderr}`,
+				);
+			}
+		}
+		return context;
 	}
 
 	/**
@@ -260,17 +301,31 @@ export class IsolationManager {
 
 	// ── private ──────────────────────────────────────────────────────────────
 
+	private normalizePrepareCommands(commands?: string[]): string[] {
+		if (!Array.isArray(commands)) return [];
+		return commands.filter((command): command is string => typeof command === "string" && command.trim().length > 0);
+	}
+
+	private toCommandOutput(value: unknown): string {
+		if (typeof value === "string") return value.trim();
+		if (Buffer.isBuffer(value)) return value.toString("utf8").trim();
+		return "";
+	}
+
 	private async prepareWorktree(opts: PrepareOptions): Promise<IsolationContext> {
 		const baseRepo = opts.baseRepo ?? this.config.defaultBaseRepo ?? process.cwd();
 		// If no explicit baseBranch, use the current branch of the base repo, falling back to config default
-		let baseBranch = opts.baseBranch;
+		let baseBranch: string = opts.baseBranch ?? "";
 		if (!baseBranch) {
 			try {
 				const git = simpleGit(baseRepo);
-				baseBranch = (await git.branchLocal()).current;
+				baseBranch = (await git.branchLocal()).current || this.config.defaultBaseBranch;
 			} catch {
 				baseBranch = this.config.defaultBaseBranch;
 			}
+		}
+		if (!baseBranch) {
+			baseBranch = this.config.defaultBaseBranch;
 		}
 
 		// Reuse existing task-scoped worktree by default so phases/agents can hand off code changes.

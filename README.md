@@ -72,6 +72,9 @@ defaults:
 isolation:
   defaultMode: worktree
   defaultBaseBranch: develop
+  prepareCommands:
+    - "npm install"
+    - "npm run lint -- --no-fix"
 
 debug:
   dumpArtifacts: false
