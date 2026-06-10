@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@earendil-works/pi-coding-agent";
@@ -689,7 +689,23 @@ export class TaskManager {
 		const prefix = this.config.defaults.taskIdPrefix ?? "T";
 		while (true) {
 			const id = `${prefix}-${String(this.nextTaskSeq++).padStart(4, "0")}`;
-			if (!this.store.getTask(id) && !existsSync(join(this.config.paths.runsDir, id))) return id;
+			if (!this.store.getTask(id) && !existsSync(join(this.config.paths.runsDir, id)) && !this.taskBranchExists(id)) {
+				return id;
+			}
+		}
+	}
+
+	private taskBranchExists(taskId: string): boolean {
+		const baseRepo = this.config.isolation.defaultBaseRepo ?? process.cwd();
+		const branch = `${this.config.isolation.branchPrefix}/${taskId}`;
+		try {
+			execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], {
+				cwd: baseRepo,
+				stdio: "ignore",
+			});
+			return true;
+		} catch {
+			return false;
 		}
 	}
 

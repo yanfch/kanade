@@ -36,6 +36,21 @@ function setup(
 }
 
 describe("TaskManager — core", () => {
+	it("skips task ids whose worktree branch already exists", () => {
+		const prefix = `UTbr${Math.random().toString(36).slice(2, 8)}`;
+		const existingBranch = `kanade/${prefix}-0001`;
+		execSync(`git branch ${existingBranch} HEAD`);
+		const { config, store, manager } = setup();
+		config.defaults.taskIdPrefix = prefix;
+		try {
+			const task = manager.create({ source: "inline", script: SIMPLE_SCRIPT });
+			expect(task.task_id).toBe(`${prefix}-0002`);
+		} finally {
+			store.close();
+			execSync(`git branch -D ${existingBranch}`);
+		}
+	});
+
 	it("runs an inline task to completion", async () => {
 		const { store, manager } = setup();
 		try {
