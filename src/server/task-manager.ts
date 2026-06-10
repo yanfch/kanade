@@ -1,5 +1,5 @@
 import { execFileSync, execSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@earendil-works/pi-coding-agent";
 import { type Context, type Span, SpanStatusCode, type Tracer, context, trace } from "@opentelemetry/api";
@@ -128,7 +128,7 @@ export class TaskManager {
 		const runDir = join(this.config.paths.runsDir, taskId);
 		mkdirSync(runDir, { recursive: true });
 		const workflowPath = join(runDir, "workflow.js");
-		const base = this.resolveTaskBase();
+		const base = this.resolveTaskBase(options?.cwd);
 
 		const now = Date.now();
 		this.store.insertTask({
@@ -211,7 +211,7 @@ export class TaskManager {
 		mkdirSync(runDir, { recursive: true });
 		const workflowPath = join(runDir, "workflow.js");
 		writeFileSync(workflowPath, script, "utf8");
-		const base = this.resolveTaskBase();
+		const base = this.resolveTaskBase(options?.cwd);
 
 		const now = Date.now();
 		this.store.insertTask({
@@ -322,19 +322,47 @@ export class TaskManager {
 		return this.store.getTask(taskId);
 	}
 
-	private resolveTaskBase(): { baseRepo: string; baseBranch: string } {
-		const baseRepo = this.config.isolation.defaultBaseRepo ?? process.cwd();
+	private resolveTaskBase(cwd?: string): { baseRepo: string; baseBranch: string } {
+		const configuredBaseRepo = this.canonicalPath(this.config.isolation.defaultBaseRepo ?? process.cwd());
+		if (cwd) {
+			try {
+				const baseRepo = this.canonicalPath(
+					execSync("git rev-parse --show-toplevel", {
+						cwd,
+						encoding: "utf8",
+						stdio: ["ignore", "pipe", "ignore"],
+					}).trim(),
+				);
+				const branch = execSync("git rev-parse --abbrev-ref HEAD", {
+					cwd: baseRepo,
+					encoding: "utf8",
+					stdio: ["ignore", "pipe", "ignore"],
+				}).trim();
+				if (branch) return { baseRepo, baseBranch: branch };
+			} catch {
+				// cwd is not inside a git repo; fall back to the configured/server base.
+			}
+		}
+
 		try {
 			const branch = execSync("git rev-parse --abbrev-ref HEAD", {
-				cwd: baseRepo,
+				cwd: configuredBaseRepo,
 				encoding: "utf8",
 				stdio: ["ignore", "pipe", "ignore"],
 			}).trim();
-			if (branch) return { baseRepo, baseBranch: branch };
+			if (branch) return { baseRepo: configuredBaseRepo, baseBranch: branch };
 		} catch {
 			// Fall back to configured default when git branch detection is unavailable.
 		}
-		return { baseRepo, baseBranch: this.config.isolation.defaultBaseBranch };
+		return { baseRepo: configuredBaseRepo, baseBranch: this.config.isolation.defaultBaseBranch };
+	}
+
+	private canonicalPath(path: string): string {
+		try {
+			return realpathSync(path);
+		} catch {
+			return path;
+		}
 	}
 
 	list(status?: TaskStatus): TaskRow[] {

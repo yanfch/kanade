@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -18,6 +18,21 @@ function currentBranch(): string {
 	} catch {
 		return "main";
 	}
+}
+
+function createTemporaryGitRepo(branch = "feature/test-branch"): { repo: string; child: string } {
+	const repo = realpathSync(mkdtempSync(join(tmpdir(), "kanade-task-base-")));
+	const child = join(repo, "nested", "project");
+	mkdirSync(child, { recursive: true });
+	execSync("git init", { cwd: repo, stdio: "ignore" });
+	execSync(`git checkout -b ${branch}`, { cwd: repo, stdio: "ignore" });
+	writeFileSync(join(repo, "README.md"), "test repo\n");
+	execSync("git add README.md", { cwd: repo, stdio: "ignore" });
+	execSync("git -c user.name='Kanade Test' -c user.email='kanade@example.com' commit -m 'init'", {
+		cwd: repo,
+		stdio: "ignore",
+	});
+	return { repo, child };
 }
 
 function setup(
@@ -803,6 +818,68 @@ describe("TaskManager — task metadata", () => {
 			expect(row?.created_at).toBeTruthy();
 		} finally {
 			store.close();
+		}
+	});
+
+	it("uses options.cwd git repo and branch for inline task base metadata", () => {
+		const { repo, child } = createTemporaryGitRepo();
+		const { store, manager } = setup();
+		try {
+			const task = manager.create({ source: "inline", script: SIMPLE_SCRIPT, options: { cwd: child } });
+			const row = manager.get(task.task_id);
+			expect(row?.base_repo).toBe(repo);
+			expect(row?.base_branch).toBe("feature/test-branch");
+			expect(row?.workflow_source).toBe("inline");
+		} finally {
+			store.close();
+			rmSync(repo, { recursive: true, force: true });
+		}
+	});
+
+	it("uses options.cwd git repo and branch for generated task base metadata", () => {
+		const { repo, child } = createTemporaryGitRepo();
+		const { store, manager } = setup({ generate: async () => SIMPLE_SCRIPT });
+		try {
+			const task = manager.create({ source: "generated", prompt: "do it", options: { cwd: child } });
+			const row = manager.get(task.task_id);
+			expect(row?.base_repo).toBe(repo);
+			expect(row?.base_branch).toBe("feature/test-branch");
+			expect(row?.workflow_source).toBe("generated");
+		} finally {
+			store.close();
+			rmSync(repo, { recursive: true, force: true });
+		}
+	});
+
+	it("uses options.cwd git repo and branch for saved task base metadata", () => {
+		const { repo, child } = createTemporaryGitRepo();
+		const { store, manager } = setup();
+		try {
+			const sourceTask = manager.create({ source: "inline", script: SIMPLE_SCRIPT });
+			manager.save(sourceTask.task_id, "base-cwd-test");
+			const task = manager.create({ source: "saved", workflow_name: "base-cwd-test", options: { cwd: child } });
+			const row = manager.get(task.task_id);
+			expect(row?.base_repo).toBe(repo);
+			expect(row?.base_branch).toBe("feature/test-branch");
+			expect(row?.workflow_source).toBe("saved");
+		} finally {
+			store.close();
+			rmSync(repo, { recursive: true, force: true });
+		}
+	});
+
+	it("falls back to process.cwd when options.cwd is not a git repo", () => {
+		const nonGitDir = realpathSync(mkdtempSync(join(tmpdir(), "kanade-non-git-")));
+		const { config, store, manager } = setup();
+		config.isolation.defaultBaseRepo = null;
+		try {
+			const task = manager.create({ source: "inline", script: SIMPLE_SCRIPT, options: { cwd: nonGitDir } });
+			const row = manager.get(task.task_id);
+			expect(row?.base_repo).toBe(realpathSync(process.cwd()));
+			expect(row?.base_branch).toBe(currentBranch());
+		} finally {
+			store.close();
+			rmSync(nonGitDir, { recursive: true, force: true });
 		}
 	});
 
