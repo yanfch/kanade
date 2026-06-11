@@ -10,7 +10,12 @@ import {
 	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
-import { createStructuredOutputTool, parseWorkflowScript, resolveModelSpec } from "../workflow-engine/index.ts";
+import {
+	createStructuredOutputTool,
+	parseWorkflowScript,
+	resolveModelSpec,
+	validateSemanticWorkflowScript,
+} from "../workflow-engine/index.ts";
 import { buildWorkflowAuthorPrompt } from "../workflow-engine/prompt-guidelines.ts";
 
 export interface WorkflowAuthor {
@@ -33,6 +38,8 @@ const SCRIPT_SCHEMA = {
 	required: ["script"],
 	additionalProperties: false,
 } as const;
+
+const MAX_GENERATION_ATTEMPTS = 3;
 
 /** Real LLM-backed author using the pi SDK. */
 export class LlmWorkflowAuthor implements WorkflowAuthor {
@@ -94,47 +101,81 @@ export class LlmWorkflowAuthor implements WorkflowAuthor {
 		});
 
 		try {
-			await session.prompt(buildWorkflowAuthorPrompt(prompt));
-			let script = selectValidScript(capture.value?.script, session.messages ?? []);
-			if (!script) {
-				await session.prompt(
-					[
-						"Your previous response did not return a complete valid JavaScript workflow.",
-						"Reply again with ONLY the complete JavaScript workflow, or call structured_output with a valid script.",
-						"Requirements:",
-						"- include export const meta = { name, description } as the first statement",
-						"- return complete syntactically valid JavaScript",
-						"- no markdown fences, no JSON wrapper, no commentary",
-					].join("\n"),
-				);
-				script = selectValidScript(capture.value?.script, session.messages ?? []);
+			let lastValidationError: string | undefined;
+			for (let attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt++) {
+				capture.called = false;
+				capture.value = undefined;
+				const promptToUse =
+					attempt === 1 ? buildWorkflowAuthorPrompt(prompt) : buildWorkflowRepairPrompt(lastValidationError, attempt);
+				await session.prompt(promptToUse);
+				const capturedScript = (capture.value as { script: string } | undefined)?.script;
+				const selection = selectWorkflowScript(capturedScript, session.messages ?? []);
+				if (selection.script) return selection.script;
+				lastValidationError = selection.validationError;
 			}
-			if (!script)
-				throw new Error(
-					`Workflow author did not produce a valid script. ${debugSessionMessages(session.messages ?? [])}`,
-				);
-			return script;
+			throw new Error(
+				buildWorkflowAuthorFailureMessage(MAX_GENERATION_ATTEMPTS, lastValidationError, session.messages ?? []),
+			);
 		} finally {
 			session.dispose();
 		}
 	}
 }
 
-function selectValidScript(capturedScript: string | undefined, messages: unknown[]): string | undefined {
-	if (isValidWorkflowScript(capturedScript)) return capturedScript;
-	const extracted = extractScript(messages);
-	if (isValidWorkflowScript(extracted)) return extracted;
-	return undefined;
-}
-
-function isValidWorkflowScript(script: string | undefined): script is string {
-	if (!script?.trim()) return false;
+export function validateWorkflowScript(script: string | undefined): string | undefined {
+	if (!script?.trim()) return "Workflow script is empty.";
 	try {
 		parseWorkflowScript(script);
-		return true;
-	} catch {
-		return false;
+		validateSemanticWorkflowScript(script);
+		return undefined;
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
 	}
+}
+
+export function selectWorkflowScript(
+	capturedScript: string | undefined,
+	messages: unknown[],
+): { script?: string; validationError?: string } {
+	const captured = capturedScript?.trim();
+	if (captured) {
+		const capturedError = validateWorkflowScript(captured);
+		if (!capturedError) return { script: captured };
+		const extractedScript = extractScript(messages);
+		if (extractedScript) {
+			const extractedError = validateWorkflowScript(extractedScript);
+			if (!extractedError) return { script: extractedScript };
+			return { validationError: extractedError };
+		}
+		return { validationError: capturedError };
+	}
+	const extractedScript = extractScript(messages);
+	if (!extractedScript) return { validationError: "No valid workflow script candidate found." };
+	const extractedError = validateWorkflowScript(extractedScript);
+	if (!extractedError) return { script: extractedScript };
+	return { validationError: extractedError };
+}
+
+function buildWorkflowRepairPrompt(lastError: string | undefined, attempt: number): string {
+	return [
+		`Attempt ${attempt}: your previous response did not return a complete valid JavaScript workflow.`,
+		"Reply again with ONLY the complete JavaScript workflow, or call structured_output with a valid script.",
+		"Requirements:",
+		`- fix the previous validation error: ${lastError ?? "validation failure"}`,
+		"- include export const meta = { name, description } as the first statement",
+		"- return complete syntactically valid JavaScript",
+		"- no markdown fences, no JSON wrapper, no commentary",
+	].join("\n");
+}
+
+export function buildWorkflowAuthorFailureMessage(
+	attempts: number,
+	lastValidationError: string | undefined,
+	messages: unknown[],
+): string {
+	const summary = summarizeRecentSessionMessages(messages);
+	const errorInfo = lastValidationError ? ` Last validation error: ${lastValidationError}.` : "";
+	return `Workflow author did not produce a valid script after ${attempts} attempts.${errorInfo} ${summary}`;
 }
 
 function extractScript(messages: unknown[]): string | undefined {
@@ -154,7 +195,7 @@ function extractScript(messages: unknown[]): string | undefined {
 	return undefined;
 }
 
-function debugSessionMessages(messages: unknown[]): string {
+function summarizeRecentSessionMessages(messages: unknown[]): string {
 	const debugInfo = messages.slice(-3).map((m: unknown) => {
 		const msg = m as { role?: string; content?: unknown };
 		const content = msg?.content;
