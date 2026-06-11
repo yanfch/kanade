@@ -110,6 +110,22 @@ describe("live-acceptance usage/result helpers", () => {
 		expect(accept.recommendation).toBe("accept");
 		expect(accept.reasons).toEqual([]);
 
+		const emptyResult = classifyAcceptance({
+			taskStatus: "finished",
+			semanticWorkflowOk: true,
+			hasFailedValidation: false,
+			hasWorktrees: true,
+			hasAtLeastOneWorktreeCommit: true,
+			allWorktreesClean: true,
+			mainClean: true,
+			prepareOk: true,
+			checksOk: true,
+			taskError: null,
+			hasResult: false,
+		});
+		expect(emptyResult.recommendation).toBe("inspect");
+		expect(emptyResult.reasons).toContain("task result is empty");
+
 		const inspect = classifyAcceptance({
 			taskStatus: "finished",
 			semanticWorkflowOk: true,

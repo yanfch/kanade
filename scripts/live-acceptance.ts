@@ -386,6 +386,7 @@ export function classifyAcceptance(inputs: RecommendationInput): RecommendationR
 
 	const canAccept =
 		taskStatus === "finished" &&
+		inputs.hasResult &&
 		inputs.semanticWorkflowOk &&
 		!inputs.hasFailedValidation &&
 		inputs.hasWorktrees &&
