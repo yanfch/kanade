@@ -80,41 +80,46 @@ Use the harness against a running Kanade server to submit a generated task and c
 **Java / Maven project:**
 
 ```bash
-curl -X POST $BASE_URL/tasks \
-  -H 'Content-Type: application/json' \
-  -d '{"source":"generated","prompt":"...","options":{"prepare_commands":["./mvnw test"]}}'
+npm run live:accept -- \
+  --prompt "Update the Java scheduler error handling..." \
+  --prepare-command "./mvnw -q -DskipTests dependency:go-offline" \
+  --check "./mvnw test"
 ```
 
 **Java / Gradle project:**
 
 ```bash
-curl -X POST $BASE_URL/tasks \
-  -H 'Content-Type: application/json' \
-  -d '{"source":"generated","prompt":"...","options":{"prepare_commands":["./gradlew test"]}}'
+npm run live:accept -- \
+  --prompt "Update the Java service validation path..." \
+  --prepare-command "./gradlew --version" \
+  --check "./gradlew test"
 ```
 
 **Python project:**
 
 ```bash
-curl -X POST $BASE_URL/tasks \
-  -H 'Content-Type: application/json' \
-  -d '{"source":"generated","prompt":"...","options":{"prepare_commands":["pytest"]}}'
+npm run live:accept -- \
+  --prompt "Fix the Python CLI argument parsing edge case..." \
+  --prepare-command "python -m pip install -r requirements.txt" \
+  --check "python -m pytest"
 ```
 
 **Rust project:**
 
 ```bash
-curl -X POST $BASE_URL/tasks \
-  -H 'Content-Type: application/json' \
-  -d '{"source":"generated","prompt":"...","options":{"prepare_commands":["cargo test"]}}'
+npm run live:accept -- \
+  --prompt "Update the Rust parser behavior..." \
+  --prepare-command "cargo fetch" \
+  --check "cargo test"
 ```
 
 **Go project:**
 
 ```bash
-curl -X POST $BASE_URL/tasks \
-  -H 'Content-Type: application/json' \
-  -d '{"source":"generated","prompt":"...","options":{"prepare_commands":["go test ./..."]}}'
+npm run live:accept -- \
+  --prompt "Update the Go API handler behavior..." \
+  --prepare-command "go mod download" \
+  --check "go test ./..."
 ```
 
 Kanade (Node/TypeScript) repository-specific `isolation.prepareCommands` defaults can also be set globally as:

@@ -56,18 +56,21 @@ describe("workflow author scorer", () => {
 				"export const meta = { name: 'java_maven', description: 'Project-appropriate java guidance' };",
 				"phase('Implement');",
 				"const implementation = await implement('Refactor Java error handling in the scheduler.', { role: 'developer' });",
+				"phase('Review');",
+				"const review = await reviewChange(implementation, { role: 'reviewer', guidance: 'Review Java scheduler correctness and test coverage.' });",
 				"phase('Validate');",
 				"const validation = await testChange(implementation, {",
 				"  role: 'tester',",
 				"  guidance: 'Inspect pom.xml and run ./mvnw test.',",
 				"  output: { type: 'object', properties: { status: { type: 'string', enum: ['passed', 'failed'] }, summary: { type: 'string' }, issues: { type: 'array', items: { type: 'string' } }, warnings: { type: 'array', items: { type: 'string' } } }, required: ['status', 'summary', 'issues'] }",
 				"});",
-				"return { implementation, validation };",
+				"return { implementation, review, validation };",
 			].join("\n"),
 		});
 
 		expect(result.score).toBeGreaterThan(0.85);
 		expect(result.notes.join(" | ")).toContain("validation guidance uses project-appropriate command for java-maven");
+		expect(result.notes.join(" | ")).not.toContain("uses forbidden step kind for this case: reviewChange");
 	});
 
 	it("rewards Python workflows with pytest guidance", () => {
