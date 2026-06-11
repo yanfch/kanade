@@ -14,7 +14,7 @@ import { createMockSessionFactory } from "./test-session-mock.ts";
 const SIMPLE_SCRIPT = "export const meta = { name: 'demo', description: 'Demo' }\nreturn { ok: true }";
 
 function setup(
-	author?: { generate(prompt: string, options?: { model?: string }): Promise<string> },
+	author?: { generate(prompt: string, options?: { model?: string; workspaceRoot?: string }): Promise<string> },
 	sessionFactory?: ConstructorParameters<typeof TaskManager>[6],
 ) {
 	const root = mkdtempSync(join(tmpdir(), "kanade-app-"));
@@ -535,7 +535,7 @@ describe("POST /workflows/generate", () => {
 	it("returns generated script without creating a task", async () => {
 		const script = "export const meta = { name: 'dry', description: 'Dry' }\nreturn { ok: true }";
 		const { store, taskManager, app } = setup({
-			async generate(prompt: string, options?: { model?: string }) {
+			async generate(prompt: string, options?: { model?: string; workspaceRoot?: string }) {
 				expect(prompt).toBe("make workflow");
 				expect(options?.model).toBe("gpt-5.4");
 				return script;

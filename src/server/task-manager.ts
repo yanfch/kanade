@@ -121,7 +121,8 @@ export class TaskManager {
 
 	async generateWorkflow(prompt: string, options?: TaskOptions): Promise<GenerateWorkflowResult> {
 		if (!prompt?.trim()) throw new AppError("prompt is required", 400);
-		const script = await this.author.generate(prompt, { model: options?.author_model });
+		const workspaceRoot = this.resolveProfileRoot(options?.cwd);
+		const script = await this.author.generate(prompt, { model: options?.author_model, workspaceRoot });
 		validateSemanticWorkflowScript(script);
 		return { script };
 	}
@@ -147,6 +148,7 @@ export class TaskManager {
 		mkdirSync(runDir, { recursive: true });
 		const workflowPath = join(runDir, "workflow.js");
 		const base = this.resolveTaskBase(options?.cwd);
+		const workspaceRoot = this.resolveProfileRoot(options?.cwd);
 
 		const now = Date.now();
 		this.store.insertTask({
@@ -169,7 +171,9 @@ export class TaskManager {
 		const taskTrace = this.startTaskTrace(taskId, "generated");
 		this.events.emit("task.created", { taskId, runDir, workflowPath }, taskId);
 		this.logger.forTask(taskId).withContext(taskTrace.context).info("task created", { source: "generated" });
-		void this.runGenerated(taskId, workflowPath, prompt, args, options, taskTrace).catch(() => undefined);
+		void this.runGenerated(taskId, workflowPath, prompt, args, options, workspaceRoot, taskTrace).catch(
+			() => undefined,
+		);
 		return { task_id: taskId, run_dir: runDir, workflow_path: workflowPath, generated: true };
 	}
 
@@ -179,6 +183,7 @@ export class TaskManager {
 		prompt: string,
 		args: unknown,
 		options: TaskOptions | undefined,
+		workspaceRoot: string,
 		taskTrace: TaskTrace,
 	): Promise<void> {
 		try {
@@ -189,7 +194,10 @@ export class TaskManager {
 			);
 			let script: string;
 			try {
-				script = await this.author.generate(prompt, { model: options?.author_model });
+				script = await this.author.generate(prompt, {
+					model: options?.author_model,
+					workspaceRoot,
+				});
 				authorSpan.setStatus({ code: SpanStatusCode.OK });
 			} catch (error) {
 				authorSpan.setStatus({ code: SpanStatusCode.ERROR, message: String(error) });
@@ -378,6 +386,21 @@ export class TaskManager {
 			// Fall back to configured default when git branch detection is unavailable.
 		}
 		return { baseRepo: configuredBaseRepo, baseBranch: this.config.isolation.defaultBaseBranch };
+	}
+
+	private resolveProfileRoot(cwd?: string): string {
+		if (!cwd) return process.cwd();
+		try {
+			return this.canonicalPath(
+				execSync("git rev-parse --show-toplevel", {
+					cwd,
+					encoding: "utf8",
+					stdio: ["ignore", "pipe", "ignore"],
+				}).trim(),
+			);
+		} catch {
+			return this.canonicalPath(cwd);
+		}
 	}
 
 	private canonicalPath(path: string): string {

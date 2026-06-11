@@ -17,14 +17,15 @@ import {
 	validateSemanticWorkflowScript,
 } from "../workflow-engine/index.ts";
 import { buildWorkflowAuthorPrompt } from "../workflow-engine/prompt-guidelines.ts";
+import { detectProjectProfile } from "../workspace/project-profile.ts";
 
 export interface WorkflowAuthor {
-	generate(prompt: string, options?: { model?: string }): Promise<string>;
+	generate(prompt: string, options?: { model?: string; workspaceRoot?: string }): Promise<string>;
 }
 
 /** Stub used in tests and when no LLM is configured. Wraps the raw prompt as a minimal valid script. */
 export class StubWorkflowAuthor implements WorkflowAuthor {
-	async generate(prompt: string, _options?: { model?: string }): Promise<string> {
+	async generate(prompt: string, _options?: { model?: string; workspaceRoot?: string }): Promise<string> {
 		// Produce a minimal valid script whose body is the raw prompt text.
 		// This lets unit tests exercise the full create→run path without a real LLM.
 		const body = prompt.trim().startsWith("return ") ? prompt.trim() : "return {}";
@@ -53,8 +54,10 @@ export class LlmWorkflowAuthor implements WorkflowAuthor {
 		} = {},
 	) {}
 
-	async generate(prompt: string, options?: { model?: string }): Promise<string> {
+	async generate(prompt: string, options?: { model?: string; workspaceRoot?: string }): Promise<string> {
 		const agentDir = this.opts.agentDir ?? getAgentDir();
+		const workspaceRoot = options?.workspaceRoot ?? process.cwd();
+		const projectProfile = detectProjectProfile(workspaceRoot);
 		const requestedModel = options?.model ?? this.opts.model;
 		const authStorage = AuthStorage.create(this.opts.authPath ?? join(agentDir, "auth.json"));
 		const modelRegistry = ModelRegistry.create(authStorage, this.opts.modelsPath ?? join(agentDir, "models.json"));
@@ -106,7 +109,9 @@ export class LlmWorkflowAuthor implements WorkflowAuthor {
 				capture.called = false;
 				capture.value = undefined;
 				const promptToUse =
-					attempt === 1 ? buildWorkflowAuthorPrompt(prompt) : buildWorkflowRepairPrompt(lastValidationError, attempt);
+					attempt === 1
+						? buildWorkflowAuthorPrompt(prompt, { projectProfile })
+						: buildWorkflowRepairPrompt(lastValidationError, attempt);
 				await session.prompt(promptToUse);
 				const capturedScript = (capture.value as { script: string } | undefined)?.script;
 				const selection = selectWorkflowScript(capturedScript, session.messages ?? []);

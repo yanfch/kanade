@@ -1,6 +1,6 @@
 # 测试规划
 
-## 当前覆盖：294 tests, 16 files
+## 当前覆盖：302 tests, 17 files
 
 ### 单元测试 (50)
 
@@ -171,3 +171,5 @@ These checks ensure that LLM-generated workflows remain safe and correct:
 4. **Worktree auto-commit failures abort the task** – If a worktree auto-commit operation fails, the task must transition to a failed state immediately. The system must not report a misleading "finished" status when the commit (and thus the deliverable) did not succeed.
 
 5. **Isolated-agent coding tools use worktree cwd** – Coding tools (bash, file read/write, edit) dispatched to isolated agents must execute against the effective worktree working directory, not the server or main-repo cwd.
+
+6. **Deterministic workspace profile snapshot is advisory for generated prompts** – Generation must derive a project profile using only deterministic filesystem marker existence checks under the task root (no command execution or AST parsing). The snapshot is injected into the author prompt as context only and is user-overridable; unknown/marker-less repos must not receive forced stack defaults.

@@ -1,6 +1,8 @@
 // Portions of this file are derived from pi-dynamic-workflows
 // (https://github.com/Michaelliv/pi-dynamic-workflows), MIT licensed.
 
+import { type ProjectProfileSnapshot, renderProjectProfileSummary } from "../workspace/project-profile.ts";
+
 export const WORKFLOW_AUTHOR_PROMPT_SNIPPET =
 	"Write a deterministic JavaScript workflow. Required script header: export const meta = { name: 'short_snake_case', description: 'non-empty description' }. Use the semantic workflow helpers as the authoring surface. meta.phases is optional documentation; live progress is driven by phase(title).";
 
@@ -16,6 +18,7 @@ export const WORKFLOW_AUTHOR_GUIDELINES = [
 	"Prefer validation commands inferred from workspace context (scripts, config files, manifests). If no command can be inferred, state what was inspected and why no command is emitted.",
 	"When stack tooling is clear, include concrete checks (e.g., package.json scripts, Maven/Gradle goals, pytest, cargo test, go test).",
 	"If stack is unclear, use generic guidance such as 'Run relevant project checks' and avoid hardcoded defaults.",
+	"User instructions are authoritative; advisory profile suggestions may be overridden by explicit task instructions in the request.",
 	"testChange() validates an implementation or continued implementation. Put exact validation guidance in the prompt or guidance text, not in invented option fields like command or testCommand.",
 	"For medium/complex code changes, make testChange() return structured status passed/failed plus issues/warnings. issues means blocking validation failures only; put non-blocking environment or retry notes in warnings. If validation.status is failed, call continueImplementation() once with the validation feedback, then run testChange() again.",
 	"parallel() is available, but in V1 use it only for bounded read-oriented fan-out. Never run code-changing implementation branches in parallel.",
@@ -29,15 +32,22 @@ export const WORKFLOW_AUTHOR_GUIDELINES = [
 
 export interface WorkflowAuthorPromptOptions {
 	complexityHint?: "simple" | "medium" | "complex";
+	projectProfile?: ProjectProfileSnapshot;
 }
 
 export function buildWorkflowAuthorPrompt(taskPrompt: string, options: WorkflowAuthorPromptOptions = {}): string {
+	const renderedProfile = options.projectProfile
+		? renderProjectProfileSummary(options.projectProfile)
+		: "Workspace profile snapshot unavailable; treat commands from explicit user instructions as authoritative.";
+
 	return [
 		"Write a kanade workflow script for the following task.",
 		WORKFLOW_AUTHOR_PROMPT_SNIPPET,
 		"Guidelines:",
 		...WORKFLOW_AUTHOR_GUIDELINES.map((line) => `- ${line}`),
 		options.complexityHint ? `- Current task complexity hint: ${options.complexityHint}.` : null,
+		"",
+		renderedProfile,
 		"",
 		"Example (simple task):",
 		"export const meta = { name: 'fix_login_retry', description: 'Fix login retry bug' };",
@@ -97,13 +107,8 @@ export function buildWorkflowAuthorPrompt(taskPrompt: string, options: WorkflowA
 		"}",
 		"return { dev, review, candidate, final, validation };",
 		"Example (stack-aware validation guidance):",
-		"- Node/TypeScript: inspect package.json and run npm test",
-		"- Java/Maven: inspect pom.xml and run ./mvnw test or mvn test",
-		"- Java/Gradle: inspect build.gradle(.kts) and run ./gradlew test",
-		"- Python: inspect requirements files and run pytest",
-		"- Rust: inspect Cargo.toml and run cargo test",
-		"- Go: inspect go.mod and run go test ./...",
-		"- If no project check command can be confidently inferred, use guidance like 'Run relevant project checks after inspecting build/test docs and report what was observed.'",
+		"The workspace profile snapshot provides concrete stack-aware command suggestions.",
+		"If no project check command can be confidently inferred, use guidance like 'Run relevant project checks after inspecting build/test docs and report what was observed.'",
 		"",
 		"Task:",
 		taskPrompt,
