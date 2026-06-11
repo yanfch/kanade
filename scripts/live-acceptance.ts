@@ -207,10 +207,27 @@ function hasFailedValidation(value: unknown): boolean {
 	return false;
 }
 
-function sanitizeForRegexExtraction(source: string): string {
+function sanitizeForRegexExtraction(source: string, preserveStringLiterals = true): string {
 	let output = "";
 	let i = 0;
-	let mode: "normal" | "line-comment" | "block-comment" = "normal";
+	let mode: "normal" | "line-comment" | "block-comment" | "single-quote" | "double-quote" | "template" = "normal";
+
+	function isEscaped(position: number): boolean {
+		let backslashCount = 0;
+		for (let index = position - 1; index >= 0; index -= 1) {
+			if (source[index] !== "\\") break;
+			backslashCount += 1;
+		}
+		return backslashCount % 2 === 1;
+	}
+
+	function appendSafe(ch: string): void {
+		if (preserveStringLiterals) {
+			output += ch;
+		} else {
+			output += ch === "\n" ? "\n" : " ";
+		}
+	}
 
 	while (i < source.length) {
 		const current = source[i];
@@ -225,6 +242,18 @@ function sanitizeForRegexExtraction(source: string): string {
 				mode = "block-comment";
 				output += "  ";
 				i += 2;
+			} else if (current === "'") {
+				mode = "single-quote";
+				output += "'";
+				i += 1;
+			} else if (current === '"') {
+				mode = "double-quote";
+				output += '"';
+				i += 1;
+			} else if (current === "`") {
+				mode = "template";
+				output += "`";
+				i += 1;
 			} else {
 				output += current;
 				i += 1;
@@ -239,12 +268,86 @@ function sanitizeForRegexExtraction(source: string): string {
 			continue;
 		}
 
-		if (current === "*" && next === "/") {
-			mode = "normal";
-			output += "  ";
-			i += 2;
-		} else {
-			output += current === "\n" ? "\n" : " ";
+		if (mode === "block-comment") {
+			if (current === "*" && next === "/") {
+				mode = "normal";
+				output += "  ";
+				i += 2;
+			} else {
+				output += current === "\n" ? "\n" : " ";
+				i += 1;
+			}
+			continue;
+		}
+
+		if (mode === "single-quote") {
+			if (current === "\\" && !preserveStringLiterals && next !== undefined) {
+				output += "  ";
+				appendSafe(next);
+				i += 2;
+				continue;
+			}
+			if (current === "\\" && preserveStringLiterals && next !== undefined) {
+				appendSafe(current);
+				appendSafe(next);
+				i += 2;
+				continue;
+			}
+			if (current === "'" && !isEscaped(i)) {
+				mode = "normal";
+				appendSafe(current);
+				i += 1;
+				continue;
+			}
+			appendSafe(current);
+			i += 1;
+			continue;
+		}
+
+		if (mode === "double-quote") {
+			if (current === "\\" && !preserveStringLiterals && next !== undefined) {
+				output += "  ";
+				appendSafe(next);
+				i += 2;
+				continue;
+			}
+			if (current === "\\" && preserveStringLiterals && next !== undefined) {
+				appendSafe(current);
+				appendSafe(next);
+				i += 2;
+				continue;
+			}
+			if (current === '"' && !isEscaped(i)) {
+				mode = "normal";
+				appendSafe(current);
+				i += 1;
+				continue;
+			}
+			appendSafe(current);
+			i += 1;
+			continue;
+		}
+
+		if (mode === "template") {
+			if (current === "\\" && !preserveStringLiterals && next !== undefined) {
+				output += "  ";
+				appendSafe(next);
+				i += 2;
+				continue;
+			}
+			if (current === "\\" && preserveStringLiterals && next !== undefined) {
+				appendSafe(current);
+				appendSafe(next);
+				i += 2;
+				continue;
+			}
+			if (current === "`") {
+				mode = "normal";
+				appendSafe(current);
+				i += 1;
+				continue;
+			}
+			appendSafe(current);
 			i += 1;
 		}
 	}
@@ -287,11 +390,12 @@ export function parseNameStatusChangedFiles(value: string): string[] {
 }
 
 export function extractWorkflowSummary(script: string): WorkflowSummary {
-	const cleaned = sanitizeForRegexExtraction(script);
+	const cleanedForPhases = sanitizeForRegexExtraction(script);
+	const cleanedForHelpers = sanitizeForRegexExtraction(script, false);
 	const phases: string[] = [];
 	const phaseSet = new Set<string>();
 	const phaseRegex = /\bphase\s*\(\s*(["'`])([\s\S]*?)\1/g;
-	for (const match of cleaned.matchAll(phaseRegex)) {
+	for (const match of cleanedForPhases.matchAll(phaseRegex)) {
 		const value = unescapeStringLiteral((match[2] ?? "").trim());
 		if (!value) continue;
 		if (!phaseSet.has(value)) {
@@ -310,7 +414,7 @@ export function extractWorkflowSummary(script: string): WorkflowSummary {
 
 	for (const helper of WORKFLOW_HELPERS) {
 		const regex = new RegExp(`\\b${helper}\\s*\\(`, "g");
-		for (const _ of cleaned.matchAll(regex)) {
+		for (const _ of cleanedForHelpers.matchAll(regex)) {
 			helperCalls[helper] += 1;
 		}
 	}
