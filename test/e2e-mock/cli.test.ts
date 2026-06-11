@@ -21,7 +21,8 @@ function cli(args: string): string {
 			timeout: 15_000,
 		}).trim();
 	} catch (err) {
-		return (err as { stderr?: string }).stderr ?? "";
+		const error = err as { stdout?: string; stderr?: string; message?: string };
+		return [error.stdout, error.stderr, error.message].filter(Boolean).join("\n").trim();
 	}
 }
 
@@ -211,14 +212,13 @@ describe("CLI — run", () => {
 	});
 
 	it("passes split model routing options and task-level prepare commands for generated runs", async () => {
-		const out = cli(
+		const created = cliJson(
 			"run --prompt 'return {}' --author-model gpt-5.4 --agent-model gpt-5.3-codex-spark --role-model reviewer=gpt-5.4 --role-model developer=gpt-5.3-codex-spark --prepare-command 'echo prepare-one' --prepare-command 'echo prepare-two'",
-		);
-		const taskId = out.match(/Task\s+([A-Za-z0-9-]+)/)?.[1];
-		expect(taskId).toBeTruthy();
-		await waitForTask(taskId as string);
+		) as { task_id: string };
+		expect(created.task_id).toBeTruthy();
+		await waitForTask(created.task_id);
 
-		const body = cliJson(`show ${taskId}`) as { task: { options: string } };
+		const body = cliJson(`show ${created.task_id}`) as { task: { options: string } };
 		const options = JSON.parse(body.task.options);
 		expect(options.author_model).toBe("gpt-5.4");
 		expect(options.agent_model).toBe("gpt-5.3-codex-spark");
@@ -235,14 +235,13 @@ describe("CLI — run", () => {
 			}),
 		});
 
-		const out = cli(
+		const created = cliJson(
 			"run cli-run-models --agent-model gpt-5.4 --role-model reviewer=gpt-5.3-codex-spark --prepare-command 'echo prepare-saved'",
-		);
-		const taskId = out.match(/Task\s+([A-Za-z0-9-]+)/)?.[1];
-		expect(taskId).toBeTruthy();
-		await waitForTask(taskId as string);
+		) as { task_id: string };
+		expect(created.task_id).toBeTruthy();
+		await waitForTask(created.task_id);
 
-		const body = cliJson(`show ${taskId}`) as { task: { options: string } };
+		const body = cliJson(`show ${created.task_id}`) as { task: { options: string } };
 		const options = JSON.parse(body.task.options);
 		expect(options.agent_model).toBe("gpt-5.4");
 		expect(options.role_models).toEqual({ reviewer: "gpt-5.3-codex-spark" });

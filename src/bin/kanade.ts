@@ -550,6 +550,11 @@ async function cmdRun(workflowName: string | undefined, args: ReturnType<typeof 
 			body: JSON.stringify({ source: "generated", prompt, options }),
 		})) as { task_id: string; generated?: boolean };
 
+		if (args.json) {
+			console.log(JSON.stringify(body, null, 2));
+			return;
+		}
+
 		console.log(pc.green(`✔ Task ${pc.bold(body.task_id)} created.`));
 		console.log(pc.dim("  Source: generated"));
 		console.log(pc.dim(`  Workspace: ${cwd}`));
@@ -604,6 +609,11 @@ async function cmdRun(workflowName: string | undefined, args: ReturnType<typeof 
 		method: "POST",
 		body: JSON.stringify({ source: "saved", workflow_name: workflowName, args: parsedArgs, options }),
 	})) as { task_id: string };
+
+	if (args.json) {
+		console.log(JSON.stringify(body, null, 2));
+		return;
+	}
 
 	console.log(pc.green(`✔ Task ${pc.bold(body.task_id)} created.`));
 	console.log(pc.dim(`  Workflow: ${workflowName}`));

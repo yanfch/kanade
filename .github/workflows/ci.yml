@@ -28,4 +28,4 @@ jobs:
         run: npm run typecheck
 
       - name: Test
-        run: npm test -- --run
+        run: npm test -- --exclude '.tmp/**'
