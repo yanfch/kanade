@@ -22,11 +22,11 @@ describe("workflow author prompt guidelines", () => {
 		expect(prompt).toContain("warnings: { type: 'array'");
 		expect(prompt).toContain("issues means blocking validation failures only");
 		expect(prompt).toContain("Prefer validation commands inferred from workspace context");
-		expect(prompt).toContain("Node/TypeScript: inspect package.json and run npm test");
-		expect(prompt).toContain("Java/Maven: inspect pom.xml and run ./mvnw test or mvn test");
-		expect(prompt).toContain("Python: inspect requirements files and run pytest");
-		expect(prompt).toContain("Rust: inspect Cargo.toml and run cargo test");
-		expect(prompt).toContain("Go: inspect go.mod and run go test ./...");
+		expect(prompt).toContain("Workspace profile snapshot");
+		expect(prompt).toContain(
+			"User instructions are authoritative; advisory profile suggestions may be overridden by explicit task instructions in the request.",
+		);
+		expect(prompt).toContain("The workspace profile snapshot provides concrete stack-aware command suggestions.");
 		expect(prompt).toContain("If no project check command can be confidently inferred");
 		expect(prompt).toContain("If stack is unclear, use generic guidance such as 'Run relevant project checks'");
 		expect(prompt).not.toContain("Available globals: agent(prompt, opts)");
@@ -60,5 +60,25 @@ describe("workflow author prompt guidelines", () => {
 		expect(text).toContain("task-scoped worktree");
 		expect(text).toContain("loop back to dev once max");
 		expect(text).toContain("Do not include line numbers");
+	});
+
+	it("injects deterministic project profile context into author prompts", () => {
+		const prompt = buildWorkflowAuthorPrompt("write a feature", {
+			projectProfile: {
+				root: "/tmp/example",
+				detectedStacks: ["python", "make"],
+				indicators: ["pyproject.toml", "Makefile"],
+				suggestedPrepareCommands: ["python -m pip install -r requirements.txt", "make"],
+				suggestedCheckCommands: ["python -m pytest", "make test"],
+				summary: "Detected python and make markers",
+			},
+		});
+
+		expect(prompt).toContain("Workspace profile snapshot (advisory):");
+		expect(prompt).toContain("python, make");
+		expect(prompt).toContain("python -m pytest");
+		expect(prompt).toContain(
+			"User instructions are authoritative; advisory profile suggestions may be overridden by explicit task instructions in the request.",
+		);
 	});
 });

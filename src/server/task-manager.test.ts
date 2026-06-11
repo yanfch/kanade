@@ -7,6 +7,8 @@ import { describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../config/index.ts";
 import { HumanGate } from "../human/index.ts";
 import { StateStore } from "../store/index.ts";
+import { buildWorkflowAuthorPrompt } from "../workflow-engine/prompt-guidelines.ts";
+import { detectProjectProfile } from "../workspace/project-profile.ts";
 import { EventBus } from "./event-bus.ts";
 import { TaskManager, resolveConfiguredAgentDir } from "./task-manager.ts";
 import { createMockSessionFactory } from "./test-session-mock.ts";
@@ -37,7 +39,7 @@ function createTemporaryGitRepo(branch = "feature/test-branch"): { repo: string;
 }
 
 function setup(
-	author?: { generate(prompt: string, options?: { model?: string }): Promise<string> },
+	author?: { generate(prompt: string, options?: { model?: string; workspaceRoot?: string }): Promise<string> },
 	sessionFactory?: ConstructorParameters<typeof TaskManager>[6],
 ) {
 	const root = mkdtempSync(join(tmpdir(), "kanade-server-"));
@@ -460,18 +462,57 @@ describe("TaskManager — save", () => {
 describe("TaskManager — create source:generated", () => {
 	it("dry-run generates a script without creating or running a task", async () => {
 		const generatedScript = "export const meta = { name: 'dry', description: 'Dry' }\nreturn { dry: true }";
+		const workspaceRoot = realpathSync(mkdtempSync(join(tmpdir(), "kanade-profile-empty-")));
 		const { store, manager } = setup({
-			async generate(prompt: string, options?: { model?: string }) {
+			async generate(prompt: string, options?: { model?: string; workspaceRoot?: string }) {
 				expect(prompt).toBe("make workflow");
 				expect(options?.model).toBe("gpt-5.4");
+				expect(options?.workspaceRoot).toBe(workspaceRoot);
 				return generatedScript;
 			},
 		});
 		try {
-			const result = await manager.generateWorkflow("make workflow", { author_model: "gpt-5.4" });
+			const result = await manager.generateWorkflow("make workflow", {
+				author_model: "gpt-5.4",
+				cwd: workspaceRoot,
+			});
 			expect(result.script).toBe(generatedScript);
 			expect(manager.list()).toHaveLength(0);
 		} finally {
+			rmSync(workspaceRoot, { recursive: true, force: true });
+			store.close();
+		}
+	});
+
+	it("passes rendered project profile context to workflow author without real LLM execution", async () => {
+		const projectRoot = mkdtempSync(join(tmpdir(), "kanade-profile-root-"));
+		const workspaceRoot = realpathSync(projectRoot);
+		writeFileSync(join(projectRoot, "pom.xml"), "<project></project>");
+		writeFileSync(join(projectRoot, "mvnw"), "echo mvnw");
+		mkdirSync(join(projectRoot, "src/main/java"), { recursive: true });
+		let capturedProfilePrompt = "";
+		const generatedScript = "export const meta = { name: 'dry', description: 'Dry' }\nreturn { ok: true }";
+		const { store, manager } = setup({
+			async generate(prompt: string, options?: { model?: string; workspaceRoot?: string }) {
+				expect(options?.workspaceRoot).toBe(workspaceRoot);
+				capturedProfilePrompt = buildWorkflowAuthorPrompt(prompt, {
+					projectProfile: detectProjectProfile(options?.workspaceRoot ?? process.cwd()),
+				});
+				return generatedScript;
+			},
+		});
+		try {
+			const task = manager.create({ source: "generated", prompt: "add maven docs", options: { cwd: workspaceRoot } });
+			await vi.waitFor(() => expect(manager.get(task.task_id)?.status).toBe("finished"), {
+				timeout: 5000,
+			});
+			expect(capturedProfilePrompt).toContain("Workspace profile snapshot");
+			expect(capturedProfilePrompt).toContain("java-maven");
+			expect(capturedProfilePrompt).toContain("./mvnw test");
+			const row = manager.get(task.task_id);
+			expect(row?.status).toBe("finished");
+		} finally {
+			rmSync(projectRoot, { recursive: true, force: true });
 			store.close();
 		}
 	});
