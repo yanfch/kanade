@@ -1,10 +1,26 @@
 #!/usr/bin/env tsx
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { validateSemanticWorkflowScript } from "../src/workflow-engine/runtime.ts";
 import { parseArgs, usageAndExit } from "./live-acceptance-args.ts";
+
+const WORKFLOW_HELPERS = [
+	"analyze",
+	"implement",
+	"reviewChange",
+	"continueImplementation",
+	"testChange",
+	"request_human",
+	"parallel",
+] as const;
+
+type WorkflowHelper = (typeof WORKFLOW_HELPERS)[number];
+
+type TaskStatus = "pending" | "running" | "finished" | "failed" | "aborted" | "needs_human";
+
+type TerminalRejectStatus = "failed" | "aborted" | "needs_human";
 
 interface TaskResponse {
 	task_id: string;
@@ -15,6 +31,7 @@ interface TaskResponse {
 
 interface TaskDetail {
 	task: {
+		task_id: string;
 		id: string;
 		status: string;
 		workflow_path: string;
@@ -42,6 +59,37 @@ interface CheckResult {
 	output: string;
 }
 
+interface WorkflowSummary {
+	phases: string[];
+	helperCalls: Record<WorkflowHelper, number>;
+	hasImplementation: boolean;
+	hasReview: boolean;
+	hasValidation: boolean;
+	hasFixLoop: boolean;
+}
+
+interface WorktreeDiffEvidence {
+	path: string;
+	head: string;
+	changedFiles: string[];
+	diffStat: string;
+}
+
+interface AcceptanceEvidence {
+	usage: {
+		hasUsageRecord: boolean;
+		isZeroUsage: boolean;
+	};
+	result: {
+		hasResult: boolean;
+		hasFailedValidation: boolean;
+	};
+	worktrees: {
+		count: number;
+		atLeastOneCommit: boolean;
+	};
+}
+
 interface AcceptanceReport {
 	taskId: string;
 	status: string;
@@ -52,6 +100,9 @@ interface AcceptanceReport {
 	resultStatusSummary: unknown;
 	usage: unknown;
 	worktrees: WorktreeRow[];
+	workflowSummary: WorkflowSummary;
+	worktreeDiffs: WorktreeDiffEvidence[];
+	evidence: AcceptanceEvidence;
 	git: {
 		mainDirty: boolean;
 		worktreeDirty: Array<{ path: string; dirty: boolean; status: string }>;
@@ -60,6 +111,25 @@ interface AcceptanceReport {
 	prepare: CheckResult[];
 	checks: CheckResult[];
 	checksCwd: string;
+	recommendation: "accept" | "inspect" | "reject";
+	reasons: string[];
+}
+
+interface RecommendationInput {
+	taskStatus: string;
+	semanticWorkflowOk: boolean;
+	hasFailedValidation: boolean;
+	hasWorktrees: boolean;
+	hasAtLeastOneWorktreeCommit: boolean;
+	allWorktreesClean: boolean;
+	mainClean: boolean;
+	prepareOk: boolean;
+	checksOk: boolean;
+	taskError: string | null;
+	hasResult: boolean;
+}
+
+interface RecommendationResult {
 	recommendation: "accept" | "inspect" | "reject";
 	reasons: string[];
 }
@@ -85,7 +155,12 @@ function safeGit(cwd: string, command: string): string {
 
 function runCheck(cwd: string, command: string): CheckResult {
 	try {
-		const output = execSync(command, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], shell: "/bin/bash" });
+		const output = execSync(command, {
+			cwd,
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "pipe"],
+			shell: "/bin/bash",
+		});
 		return { command, ok: true, output: output.trim() };
 	} catch (error) {
 		const err = error as { stdout?: Buffer | string; stderr?: Buffer | string; message?: string };
@@ -132,6 +207,280 @@ function hasFailedValidation(value: unknown): boolean {
 	return false;
 }
 
+function sanitizeForRegexExtraction(source: string): string {
+	let output = "";
+	let i = 0;
+	let mode: "normal" | "line-comment" | "block-comment" = "normal";
+
+	while (i < source.length) {
+		const current = source[i];
+		const next = source[i + 1];
+
+		if (mode === "normal") {
+			if (current === "/" && next === "/") {
+				mode = "line-comment";
+				output += "  ";
+				i += 2;
+			} else if (current === "/" && next === "*") {
+				mode = "block-comment";
+				output += "  ";
+				i += 2;
+			} else {
+				output += current;
+				i += 1;
+			}
+			continue;
+		}
+
+		if (mode === "line-comment") {
+			output += current === "\n" ? "\n" : " ";
+			if (current === "\n") mode = "normal";
+			i += 1;
+			continue;
+		}
+
+		if (current === "*" && next === "/") {
+			mode = "normal";
+			output += "  ";
+			i += 2;
+		} else {
+			output += current === "\n" ? "\n" : " ";
+			i += 1;
+		}
+	}
+
+	return output;
+}
+
+function unescapeStringLiteral(raw: string): string {
+	return raw.replace(/\\./g, (match) => {
+		const char = match[1] ?? "";
+		switch (char) {
+			case "n":
+				return "\n";
+			case "r":
+				return "\r";
+			case "t":
+				return "\t";
+			default:
+				return char;
+		}
+	});
+}
+
+export function parseNameStatusChangedFiles(value: string): string[] {
+	const files = new Set<string>();
+	for (const line of value.split("\n")) {
+		const tabIndex = line.indexOf("\t");
+		if (tabIndex < 0) continue;
+		const rest = line.slice(tabIndex + 1).trim();
+		if (!rest) continue;
+		for (const file of rest
+			.split("\t")
+			.map((entry) => entry.trim())
+			.filter(Boolean)) {
+			if (file === "/dev/null") continue;
+			files.add(file.replaceAll("\\", "/"));
+		}
+	}
+	return [...files].sort();
+}
+
+export function extractWorkflowSummary(script: string): WorkflowSummary {
+	const cleaned = sanitizeForRegexExtraction(script);
+	const phases: string[] = [];
+	const phaseSet = new Set<string>();
+	const phaseRegex = /\bphase\s*\(\s*(["'`])([\s\S]*?)\1/g;
+	for (const match of cleaned.matchAll(phaseRegex)) {
+		const value = unescapeStringLiteral((match[2] ?? "").trim());
+		if (!value) continue;
+		if (!phaseSet.has(value)) {
+			phaseSet.add(value);
+			phases.push(value);
+		}
+	}
+
+	const helperCalls = WORKFLOW_HELPERS.reduce(
+		(acc, name) => {
+			acc[name] = 0;
+			return acc;
+		},
+		{} as Record<WorkflowHelper, number>,
+	);
+
+	for (const helper of WORKFLOW_HELPERS) {
+		const regex = new RegExp(`\\b${helper}\\s*\\(`, "g");
+		for (const _ of cleaned.matchAll(regex)) {
+			helperCalls[helper] += 1;
+		}
+	}
+
+	return {
+		phases,
+		helperCalls,
+		hasImplementation: helperCalls.implement > 0,
+		hasReview: helperCalls.reviewChange > 0,
+		hasValidation: helperCalls.testChange > 0,
+		hasFixLoop: helperCalls.continueImplementation > 0,
+	};
+}
+
+export function isUsageZero(value: unknown): boolean {
+	if (value === null || value === undefined) return true;
+	if (typeof value === "number") return value === 0;
+	if (typeof value === "string") {
+		const numeric = Number(value);
+		if (Number.isFinite(numeric)) return numeric === 0;
+		return value.trim().length === 0;
+	}
+	if (typeof value === "boolean") return !value;
+	if (Array.isArray(value)) return value.every((item) => isUsageZero(item));
+	if (typeof value === "object") {
+		const values = Object.values(value as Record<string, unknown>);
+		if (values.length === 0) return true;
+		return values.every((item) => isUsageZero(item));
+	}
+	return false;
+}
+
+function extractUsageNumber(value: unknown, keys: string[]): number | undefined {
+	let current = value;
+	for (const key of keys) {
+		if (!current || typeof current !== "object") return undefined;
+		current = (current as Record<string, unknown>)[key];
+	}
+	if (typeof current === "number") return current;
+	if (typeof current === "string") {
+		const numeric = Number(current);
+		return Number.isFinite(numeric) ? numeric : undefined;
+	}
+	return undefined;
+}
+
+export function classifyAcceptance(inputs: RecommendationInput): RecommendationResult {
+	const reasons: string[] = [];
+	const taskStatus = inputs.taskStatus as TaskStatus;
+
+	if (inputs.taskStatus !== "finished") {
+		reasons.push(`task status is ${inputs.taskStatus}`);
+	}
+	if (!inputs.semanticWorkflowOk) reasons.push("workflow failed semantic validation");
+	if (!inputs.hasWorktrees) reasons.push("no worktree was recorded");
+	if (!inputs.hasAtLeastOneWorktreeCommit) reasons.push("no worktree commit was recorded");
+	if (!inputs.mainClean) reasons.push("main workspace is dirty");
+	if (!inputs.allWorktreesClean) reasons.push("one or more worktrees are dirty");
+	if (!inputs.prepareOk) reasons.push("prepare command(s) failed");
+	if (!inputs.checksOk) reasons.push("check command(s) failed");
+	if (!inputs.hasResult) reasons.push("task result is empty");
+	if (inputs.taskError) reasons.push(`task error: ${inputs.taskError}`);
+	if (inputs.hasFailedValidation) reasons.push("result contains failed validation status");
+
+	const hardRejectStatuses: TerminalRejectStatus[] = ["failed", "aborted", "needs_human"];
+	const isHardReject =
+		hardRejectStatuses.includes(taskStatus) ||
+		!inputs.semanticWorkflowOk ||
+		!inputs.mainClean ||
+		!inputs.allWorktreesClean ||
+		!inputs.prepareOk ||
+		!inputs.checksOk;
+
+	const canAccept =
+		taskStatus === "finished" &&
+		inputs.semanticWorkflowOk &&
+		!inputs.hasFailedValidation &&
+		inputs.hasWorktrees &&
+		inputs.hasAtLeastOneWorktreeCommit &&
+		inputs.allWorktreesClean &&
+		inputs.mainClean &&
+		inputs.prepareOk &&
+		inputs.checksOk;
+
+	if (canAccept) {
+		return { recommendation: "accept", reasons: [] };
+	}
+
+	return {
+		recommendation: isHardReject ? "reject" : "inspect",
+		reasons,
+	};
+}
+
+function isGitCommandError(value: string): boolean {
+	return /^\s*fatal:/.test(value) || value.includes("fatal:") || /not a git repository/.test(value);
+}
+
+function collectWorktreeDiffEvidence(worktree: WorktreeRow): WorktreeDiffEvidence {
+	const rawHead = safeGit(worktree.worktree_path, "log --oneline -1 --no-decorate");
+	const hasHead = rawHead.trim().length > 0 && !isGitCommandError(rawHead);
+	const diffStat = hasHead ? safeGit(worktree.worktree_path, "show --stat --pretty=format: HEAD --") : "";
+	const nameStatus = hasHead ? safeGit(worktree.worktree_path, "show --name-status --pretty=format: HEAD --") : "";
+	return {
+		path: worktree.worktree_path,
+		head: hasHead ? rawHead.trim() : "",
+		changedFiles: hasHead ? parseNameStatusChangedFiles(nameStatus) : [],
+		diffStat: isGitCommandError(diffStat) ? "" : diffStat.trim(),
+	};
+}
+
+function formatUsageSection(usage: unknown, worktreeCommitEvidence: boolean): void {
+	const cost = extractUsageNumber(usage, ["cost", "total"]);
+	const totalTokens = extractUsageNumber(usage, ["totalTokens"]);
+	console.log("usage/cost:");
+	console.log(`  usage.recorded=${usage !== null && usage !== undefined ? "yes" : "no"}`);
+	console.log(`  zero-usage=${isUsageZero(usage) ? "yes" : "no"}`);
+	console.log(`  worktree.commit.present=${worktreeCommitEvidence ? "yes" : "no"}`);
+	if (cost !== undefined) console.log(`  cost.total=$${cost.toFixed(4)}`);
+	if (totalTokens !== undefined) console.log(`  tokens.total=${Math.round(totalTokens)}`);
+}
+
+function formatWorkflowSummary(summary: WorkflowSummary): void {
+	console.log("workflow summary:");
+	console.log(`  phases: ${summary.phases.length > 0 ? summary.phases.join(" -> ") : "(none)"}`);
+	const helperSummary = WORKFLOW_HELPERS.map((name) => `${name}=${summary.helperCalls[name]}`).join(", ");
+	console.log(`  helper calls: ${helperSummary}`);
+	console.log(
+		`  traits: implementation=${summary.hasImplementation ? "yes" : "no"}, review=${summary.hasReview ? "yes" : "no"}, validation=${
+			summary.hasValidation ? "yes" : "no"
+		}, fix-loop=${summary.hasFixLoop ? "yes" : "no"}`,
+	);
+}
+
+function printNonJsonReport(report: AcceptanceReport): void {
+	console.log(`\nLive acceptance report: ${report.taskId}`);
+	console.log(`status: ${report.status}`);
+	console.log(`recommendation: ${report.recommendation}`);
+	formatWorkflowSummary(report.workflowSummary);
+
+	console.log("\nDiff summary:");
+	if (report.worktreeDiffs.length === 0) {
+		console.log("  (no worktrees)");
+	} else {
+		for (const diff of report.worktreeDiffs) {
+			const worktreePath = relative(process.cwd(), diff.path);
+			const stat = diff.diffStat ? ` | stat: ${diff.diffStat.replace(/\n/g, " ").trim()}` : "";
+			console.log(
+				`  ${worktreePath}: head=${diff.head || "<no commit>"}${stat.length > 0 ? stat : ""}, files=${diff.changedFiles.length}`,
+			);
+			if (diff.changedFiles.length > 0) {
+				console.log(`    files: ${diff.changedFiles.join(", ")}`);
+			}
+		}
+	}
+
+	console.log(`\nchecks cwd: ${report.checksCwd}`);
+	for (const step of report.prepare) console.log(`  prepare ${step.ok ? "ok" : "failed"}: ${step.command}`);
+	for (const check of report.checks) console.log(`  check ${check.ok ? "ok" : "failed"}: ${check.command}`);
+
+	console.log("\nUsage/cost:");
+	formatUsageSection(report.usage, report.evidence.worktrees.atLeastOneCommit);
+	console.log("\nRecommendation reasons:");
+	if (report.reasons.length === 0) {
+		console.log("  - none");
+	} else {
+		for (const reason of report.reasons) console.log(`  - ${reason}`);
+	}
+}
+
 async function main() {
 	const args = parseArgs(process.argv.slice(2));
 	const prompt = args.promptFile ? readFileSync(args.promptFile, "utf8") : args.prompt;
@@ -168,6 +517,8 @@ async function main() {
 		`${args.baseUrl}/tasks/${task.task_id}/worktrees`,
 	);
 	const workflowScript = existsSync(detail.task.workflow_path) ? readFileSync(detail.task.workflow_path, "utf8") : "";
+	const workflowSummary = extractWorkflowSummary(workflowScript);
+
 	let semanticWorkflowOk = true;
 	let semanticWorkflowError: string | undefined;
 	try {
@@ -180,32 +531,35 @@ async function main() {
 	const parsedResult = parseResult(detail.task.result);
 	const checksCwd = worktreesResponse.worktrees[0]?.worktree_path ?? args.cwd;
 	const prepare = args.prepare.map((command) => runCheck(checksCwd, command));
-	const checks = prepare.every((step) => step.ok) ? args.checks.map((check) => runCheck(checksCwd, check)) : [];
+	const prepareOk = prepare.every((step) => step.ok);
+	const checks = prepareOk ? args.checks.map((check) => runCheck(checksCwd, check)) : [];
+	const checksOk = checks.every((step) => step.ok);
 	const worktreeDirty = worktreesResponse.worktrees.map((worktree) => {
 		const status = safeGit(worktree.worktree_path, "status --short");
 		return { path: worktree.worktree_path, dirty: status.trim().length > 0, status };
 	});
-	const commits = worktreesResponse.worktrees.map((worktree) => ({
-		path: worktree.worktree_path,
-		head: safeGit(worktree.worktree_path, "log --oneline -1"),
-	}));
+	const allWorktreesClean = !worktreeDirty.some((entry) => entry.dirty);
+	const worktreeDiffs = worktreesResponse.worktrees.map(collectWorktreeDiffEvidence);
+	const commits = worktreeDiffs.map((diff) => ({ path: diff.path, head: diff.head }));
 	const mainStatus = safeGit(args.cwd, "status --short");
-	const reasons: string[] = [];
-	if (detail.task.status !== "finished") reasons.push(`task status is ${detail.task.status}`);
-	if (!semanticWorkflowOk) reasons.push("workflow failed semantic validation");
-	if (detail.task.error) reasons.push(`task error: ${detail.task.error}`);
-	if (!detail.task.result) reasons.push("task result is empty");
-	if (hasFailedValidation(parsedResult)) reasons.push("result contains failed validation status");
-	if (worktreesResponse.worktrees.length === 0) reasons.push("no worktree was recorded");
-	if (worktreeDirty.some((entry) => entry.dirty)) reasons.push("one or more worktrees are dirty");
-	if (mainStatus.trim()) reasons.push("main workspace is dirty");
-	for (const step of prepare) {
-		if (!step.ok) reasons.push(`prepare failed: ${step.command}`);
-	}
-	for (const check of checks) {
-		if (!check.ok) reasons.push(`check failed: ${check.command}`);
-	}
-	const recommendation = reasons.length === 0 ? "accept" : detail.task.status === "finished" ? "inspect" : "reject";
+	const hasAtLeastOneWorktreeCommit = worktreeDiffs.some((diff) => diff.head.length > 0);
+
+	const decision = classifyAcceptance({
+		taskStatus: detail.task.status,
+		semanticWorkflowOk,
+		hasFailedValidation: hasFailedValidation(parsedResult),
+		hasWorktrees: worktreesResponse.worktrees.length > 0,
+		hasAtLeastOneWorktreeCommit,
+		allWorktreesClean,
+		mainClean: mainStatus.trim().length === 0,
+		prepareOk,
+		checksOk,
+		taskError: detail.task.error,
+		hasResult: Boolean(detail.task.result),
+	});
+
+	const reasons = decision.reasons;
+
 	const report: AcceptanceReport = {
 		taskId: task.task_id,
 		status: detail.task.status,
@@ -216,6 +570,22 @@ async function main() {
 		resultStatusSummary: summarizeResult(parsedResult),
 		usage: detail.usage,
 		worktrees: worktreesResponse.worktrees,
+		workflowSummary,
+		worktreeDiffs,
+		evidence: {
+			usage: {
+				hasUsageRecord: detail.usage !== undefined,
+				isZeroUsage: isUsageZero(detail.usage),
+			},
+			result: {
+				hasResult: Boolean(detail.task.result),
+				hasFailedValidation: hasFailedValidation(parsedResult),
+			},
+			worktrees: {
+				count: worktreesResponse.worktrees.length,
+				atLeastOneCommit: hasAtLeastOneWorktreeCommit,
+			},
+		},
 		git: {
 			mainDirty: mainStatus.trim().length > 0,
 			worktreeDirty,
@@ -224,30 +594,18 @@ async function main() {
 		prepare,
 		checks,
 		checksCwd,
-		recommendation,
+		recommendation: decision.recommendation,
 		reasons,
 	};
 
 	if (args.json) {
 		console.log(JSON.stringify(report, null, 2));
 	} else {
-		console.log(`\nLive acceptance report: ${report.taskId}`);
-		console.log(`status: ${report.status}`);
-		console.log(
-			`workflow: ${report.semanticWorkflowOk ? "semantic-ok" : `semantic-failed: ${report.semanticWorkflowError}`}`,
-		);
-		console.log(`worktrees: ${report.worktrees.length}`);
-		for (const commit of report.git.commits) console.log(`commit: ${commit.head} (${commit.path})`);
-		if (report.prepare.length || report.checks.length) console.log(`checks cwd: ${report.checksCwd}`);
-		for (const step of report.prepare) console.log(`prepare ${step.ok ? "ok" : "failed"}: ${step.command}`);
-		for (const check of report.checks) console.log(`check ${check.ok ? "ok" : "failed"}: ${check.command}`);
-		console.log(`recommendation: ${report.recommendation}`);
-		if (report.reasons.length) console.log(`reasons:\n- ${report.reasons.join("\n- ")}`);
-		console.log(`\nJSON:\n${JSON.stringify(report, null, 2)}`);
+		printNonJsonReport(report);
 	}
 
-	if (recommendation === "reject") process.exitCode = 2;
-	else if (recommendation === "inspect") process.exitCode = 1;
+	if (decision.recommendation === "reject") process.exitCode = 2;
+	else if (decision.recommendation === "inspect") process.exitCode = 1;
 }
 
 const isEntry = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href === import.meta.url : false;
