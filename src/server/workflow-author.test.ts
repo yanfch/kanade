@@ -23,7 +23,12 @@ describe("workflow author helpers", () => {
 		expect(validateWorkflowScript(VALID_SEMANTIC_SCRIPT)).toBeUndefined();
 	});
 
-	it("rejects parse-invalid workflow script", () => {
+	it("rejects empty and parse-invalid workflow scripts", () => {
+		expect(validateWorkflowScript(undefined)).toContain("empty");
+		expect(validateWorkflowScript("export const meta =")).toBeTruthy();
+	});
+
+	it("rejects semantic-invalid workflow metadata", () => {
 		const invalid = "export const meta = { name: 'invalid' }";
 		expect(validateWorkflowScript(invalid)).toContain("meta.description");
 	});

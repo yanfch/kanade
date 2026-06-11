@@ -123,7 +123,7 @@ export class LlmWorkflowAuthor implements WorkflowAuthor {
 }
 
 export function validateWorkflowScript(script: string | undefined): string | undefined {
-	if (!script?.trim()) return undefined;
+	if (!script?.trim()) return "Workflow script is empty.";
 	try {
 		parseWorkflowScript(script);
 		validateSemanticWorkflowScript(script);
