@@ -21,6 +21,14 @@ describe("workflow author prompt guidelines", () => {
 		expect(prompt).toContain("Fix validation");
 		expect(prompt).toContain("warnings: { type: 'array'");
 		expect(prompt).toContain("issues means blocking validation failures only");
+		expect(prompt).toContain("Prefer validation commands inferred from workspace context");
+		expect(prompt).toContain("Node/TypeScript: inspect package.json and run npm test");
+		expect(prompt).toContain("Java/Maven: inspect pom.xml and run ./mvnw test or mvn test");
+		expect(prompt).toContain("Python: inspect requirements files and run pytest");
+		expect(prompt).toContain("Rust: inspect Cargo.toml and run cargo test");
+		expect(prompt).toContain("Go: inspect go.mod and run go test ./...");
+		expect(prompt).toContain("If no project check command can be confidently inferred");
+		expect(prompt).toContain("If stack is unclear, use generic guidance such as 'Run relevant project checks'");
 		expect(prompt).not.toContain("Available globals: agent(prompt, opts)");
 		expect(prompt).not.toContain("compareCandidates(");
 		expect(prompt).not.toContain("integrateChanges(");
