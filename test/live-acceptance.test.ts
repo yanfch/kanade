@@ -43,6 +43,9 @@ describe("live-acceptance workflow summary helper", () => {
 	it("extracts phases and helper call counts deterministically", () => {
 		const script = `
 			export const meta = { name: 'demo', description: 'demo workflow' };
+			const note = "await implement('ignored')";
+			// analyze("ignored")
+			/* request_human({ title: 'ignored' }) */
 			phase("analyze");
 			await analyze("Plan the task", { role: 'planner' });
 			await implement('Make the change', { role: 'developer' });
@@ -94,7 +97,7 @@ describe("live-acceptance usage/result helpers", () => {
 	});
 
 	it("classifies accept/inspect/reject decisions deterministically", () => {
-		const accept = classifyAcceptance({
+		const base = {
 			taskStatus: "finished",
 			semanticWorkflowOk: true,
 			hasFailedValidation: false,
@@ -106,54 +109,35 @@ describe("live-acceptance usage/result helpers", () => {
 			checksOk: true,
 			taskError: null,
 			hasResult: true,
-		});
+			usageIsZero: false,
+		};
+
+		const accept = classifyAcceptance(base);
 		expect(accept.recommendation).toBe("accept");
 		expect(accept.reasons).toEqual([]);
 
-		const emptyResult = classifyAcceptance({
-			taskStatus: "finished",
-			semanticWorkflowOk: true,
-			hasFailedValidation: false,
-			hasWorktrees: true,
-			hasAtLeastOneWorktreeCommit: true,
-			allWorktreesClean: true,
-			mainClean: true,
-			prepareOk: true,
-			checksOk: true,
-			taskError: null,
-			hasResult: false,
-		});
+		const emptyResult = classifyAcceptance({ ...base, hasResult: false });
 		expect(emptyResult.recommendation).toBe("inspect");
 		expect(emptyResult.reasons).toContain("task result is empty");
 
-		const inspect = classifyAcceptance({
-			taskStatus: "finished",
-			semanticWorkflowOk: true,
-			hasFailedValidation: false,
-			hasWorktrees: true,
-			hasAtLeastOneWorktreeCommit: false,
-			allWorktreesClean: true,
-			mainClean: true,
-			prepareOk: true,
-			checksOk: true,
-			taskError: null,
-			hasResult: true,
-		});
+		const zeroUsage = classifyAcceptance({ ...base, usageIsZero: true });
+		expect(zeroUsage.recommendation).toBe("inspect");
+		expect(zeroUsage.reasons).toContain("usage appears to be zero");
+
+		const inspect = classifyAcceptance({ ...base, hasAtLeastOneWorktreeCommit: false });
 		expect(inspect.recommendation).toBe("inspect");
 		expect(inspect.reasons).toContain("no worktree commit was recorded");
 
 		const reject = classifyAcceptance({
+			...base,
 			taskStatus: "failed",
 			semanticWorkflowOk: false,
 			hasFailedValidation: true,
-			hasWorktrees: true,
-			hasAtLeastOneWorktreeCommit: true,
-			allWorktreesClean: true,
-			mainClean: true,
 			prepareOk: false,
 			checksOk: false,
 			taskError: "boom",
 			hasResult: false,
+			usageIsZero: true,
 		});
 		expect(reject.recommendation).toBe("reject");
 		expect(reject.reasons).toContain("workflow failed semantic validation");

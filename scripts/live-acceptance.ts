@@ -127,6 +127,7 @@ interface RecommendationInput {
 	checksOk: boolean;
 	taskError: string | null;
 	hasResult: boolean;
+	usageIsZero: boolean;
 }
 
 interface RecommendationResult {
@@ -476,6 +477,7 @@ export function classifyAcceptance(inputs: RecommendationInput): RecommendationR
 	if (!inputs.prepareOk) reasons.push("prepare command(s) failed");
 	if (!inputs.checksOk) reasons.push("check command(s) failed");
 	if (!inputs.hasResult) reasons.push("task result is empty");
+	if (inputs.usageIsZero) reasons.push("usage appears to be zero");
 	if (inputs.taskError) reasons.push(`task error: ${inputs.taskError}`);
 	if (inputs.hasFailedValidation) reasons.push("result contains failed validation status");
 
@@ -486,11 +488,14 @@ export function classifyAcceptance(inputs: RecommendationInput): RecommendationR
 		!inputs.mainClean ||
 		!inputs.allWorktreesClean ||
 		!inputs.prepareOk ||
-		!inputs.checksOk;
+		!inputs.checksOk ||
+		Boolean(inputs.taskError);
 
 	const canAccept =
 		taskStatus === "finished" &&
 		inputs.hasResult &&
+		!inputs.usageIsZero &&
+		!inputs.taskError &&
 		inputs.semanticWorkflowOk &&
 		!inputs.hasFailedValidation &&
 		inputs.hasWorktrees &&
@@ -514,11 +519,21 @@ function isGitCommandError(value: string): boolean {
 	return /^\s*fatal:/.test(value) || value.includes("fatal:") || /not a git repository/.test(value);
 }
 
+function shellQuote(value: string): string {
+	return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
 function collectWorktreeDiffEvidence(worktree: WorktreeRow): WorktreeDiffEvidence {
 	const rawHead = safeGit(worktree.worktree_path, "log --oneline -1 --no-decorate");
 	const hasHead = rawHead.trim().length > 0 && !isGitCommandError(rawHead);
-	const diffStat = hasHead ? safeGit(worktree.worktree_path, "show --stat --pretty=format: HEAD --") : "";
-	const nameStatus = hasHead ? safeGit(worktree.worktree_path, "show --name-status --pretty=format: HEAD --") : "";
+	const baseRef = worktree.base_branch?.trim();
+	const diffRange = baseRef ? `${shellQuote(baseRef)}...HEAD` : "HEAD^..HEAD";
+	let diffStat = hasHead ? safeGit(worktree.worktree_path, `diff --stat ${diffRange} --`) : "";
+	let nameStatus = hasHead ? safeGit(worktree.worktree_path, `diff --name-status ${diffRange} --`) : "";
+	if (isGitCommandError(diffStat) || isGitCommandError(nameStatus)) {
+		diffStat = hasHead ? safeGit(worktree.worktree_path, "show --stat --pretty=format: HEAD --") : "";
+		nameStatus = hasHead ? safeGit(worktree.worktree_path, "show --name-status --pretty=format: HEAD --") : "";
+	}
 	return {
 		path: worktree.worktree_path,
 		head: hasHead ? rawHead.trim() : "",
@@ -648,6 +663,7 @@ async function main() {
 	const commits = worktreeDiffs.map((diff) => ({ path: diff.path, head: diff.head }));
 	const mainStatus = safeGit(args.cwd, "status --short");
 	const hasAtLeastOneWorktreeCommit = worktreeDiffs.some((diff) => diff.head.length > 0);
+	const usageIsZero = isUsageZero(detail.usage);
 
 	const decision = classifyAcceptance({
 		taskStatus: detail.task.status,
@@ -661,6 +677,7 @@ async function main() {
 		checksOk,
 		taskError: detail.task.error,
 		hasResult: Boolean(detail.task.result),
+		usageIsZero,
 	});
 
 	const reasons = decision.reasons;
@@ -680,7 +697,7 @@ async function main() {
 		evidence: {
 			usage: {
 				hasUsageRecord: detail.usage !== undefined,
-				isZeroUsage: isUsageZero(detail.usage),
+				isZeroUsage: usageIsZero,
 			},
 			result: {
 				hasResult: Boolean(detail.task.result),
