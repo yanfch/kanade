@@ -71,16 +71,53 @@ npx vitest run eval/scorer*     # Eval scorer
 
 ## Live generated-task acceptance harness
 
-Use the harness against a running Kanade server to submit a generated task and collect acceptance evidence before deciding whether to merge:
+Use the harness against a running Kanade server to submit a generated task and collect acceptance evidence before deciding whether to merge.
 
-Task payload options now support per-task worktree preparation via `options.prepare_commands` (string[]). `live-acceptance` uses `--prepare-command` for this (repeatable), while keeping `--prepare` for local pre-check commands.
+`--prepare-command` (`options.prepare_commands` over the task API) and `--check` are user/project-chosen shell commands. They are not global defaults; each repository should pass commands relevant to its own stack.
+
+### Project-agnostic examples (non-exhaustive)
+
+**Java / Maven project:**
 
 ```bash
 curl -X POST $BASE_URL/tasks \
   -H 'Content-Type: application/json' \
-  -d '{"source":"generated","prompt":"...","options":{"prepare_commands":["npm install","npm run lint"]}}'
+  -d '{"source":"generated","prompt":"...","options":{"prepare_commands":["./mvnw test"]}}'
 ```
-Configuration also supports `isolation.prepareCommands` as global defaults:
+
+**Java / Gradle project:**
+
+```bash
+curl -X POST $BASE_URL/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"generated","prompt":"...","options":{"prepare_commands":["./gradlew test"]}}'
+```
+
+**Python project:**
+
+```bash
+curl -X POST $BASE_URL/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"generated","prompt":"...","options":{"prepare_commands":["pytest"]}}'
+```
+
+**Rust project:**
+
+```bash
+curl -X POST $BASE_URL/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"generated","prompt":"...","options":{"prepare_commands":["cargo test"]}}'
+```
+
+**Go project:**
+
+```bash
+curl -X POST $BASE_URL/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"generated","prompt":"...","options":{"prepare_commands":["go test ./..."]}}'
+```
+
+Kanade (Node/TypeScript) repository-specific `isolation.prepareCommands` defaults can also be set globally as:
 
 ```yaml
 isolation:
@@ -89,6 +126,7 @@ isolation:
     - "npm run test"
 ```
 
+### Kanade self-development examples (Node/TypeScript, not universal defaults)
 
 ```bash
 npm run live:accept -- \

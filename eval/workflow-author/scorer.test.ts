@@ -26,6 +26,94 @@ describe("workflow author scorer", () => {
 		expect(result.notes.join(" | ")).toContain("uses forbidden step kind for this case: analyze");
 	});
 
+	it("penalizes Java workflows that use npm defaults", () => {
+		const result = scoreAuthorOutput({
+			evalCase: getCase("J1"),
+			variant: "semantic-no-read",
+			script: [
+				"export const meta = { name: 'java_npm', description: 'Bad java guidance' };",
+				"phase('Implement');",
+				"const implementation = await implement('Refactor Java error handling in the scheduler.', { role: 'developer' });",
+				"phase('Validate');",
+				"const validation = await testChange(implementation, {",
+				"  role: 'tester',",
+				"  guidance: 'Run npm test and report pass/fail clearly.',",
+				"  output: { type: 'object', properties: { status: { type: 'string', enum: ['passed', 'failed'] }, summary: { type: 'string' }, issues: { type: 'array', items: { type: 'string' } }, warnings: { type: 'array', items: { type: 'string' } } }, required: ['status', 'summary', 'issues'] }",
+				"});",
+				"return { implementation, validation };",
+			].join("\n"),
+		});
+
+		expect(result.passed).toBe(false);
+		expect(result.notes.join(" | ")).toContain("validation guidance used Node defaults for non-java-maven case");
+	});
+
+	it("rewards Java workflows that use project-appropriate Maven commands", () => {
+		const result = scoreAuthorOutput({
+			evalCase: getCase("J1"),
+			variant: "semantic-no-read",
+			script: [
+				"export const meta = { name: 'java_maven', description: 'Project-appropriate java guidance' };",
+				"phase('Implement');",
+				"const implementation = await implement('Refactor Java error handling in the scheduler.', { role: 'developer' });",
+				"phase('Validate');",
+				"const validation = await testChange(implementation, {",
+				"  role: 'tester',",
+				"  guidance: 'Inspect pom.xml and run ./mvnw test.',",
+				"  output: { type: 'object', properties: { status: { type: 'string', enum: ['passed', 'failed'] }, summary: { type: 'string' }, issues: { type: 'array', items: { type: 'string' } }, warnings: { type: 'array', items: { type: 'string' } } }, required: ['status', 'summary', 'issues'] }",
+				"});",
+				"return { implementation, validation };",
+			].join("\n"),
+		});
+
+		expect(result.score).toBeGreaterThan(0.85);
+		expect(result.notes.join(" | ")).toContain("validation guidance uses project-appropriate command for java-maven");
+	});
+
+	it("rewards Python workflows with pytest guidance", () => {
+		const result = scoreAuthorOutput({
+			evalCase: getCase("P1"),
+			variant: "semantic-no-read",
+			script: [
+				"export const meta = { name: 'python_pytest', description: 'Python pytest guidance' };",
+				"phase('Implement');",
+				"const implementation = await implement('Fix CLI argument parsing edge case.', { role: 'developer' });",
+				"phase('Validate');",
+				"const validation = await testChange(implementation, {",
+				"  role: 'tester',",
+				"  guidance: 'Inspect requirements.txt and pyproject.toml, then run pytest.',",
+				"  output: { type: 'object', properties: { status: { type: 'string', enum: ['passed', 'failed'] }, summary: { type: 'string' }, issues: { type: 'array', items: { type: 'string' } }, warnings: { type: 'array', items: { type: 'string' } } }, required: ['status', 'summary', 'issues'] }",
+				"});",
+				"return { implementation, validation };",
+			].join("\n"),
+		});
+
+		expect(result.score).toBeGreaterThan(0.85);
+		expect(result.notes.join(" | ")).toContain("validation guidance uses project-appropriate command for python");
+	});
+
+	it("accepts fallback Python guidance when command is not discoverable", () => {
+		const result = scoreAuthorOutput({
+			evalCase: getCase("P1"),
+			variant: "semantic-no-read",
+			script: [
+				"export const meta = { name: 'python_fallback', description: 'Python fallback guidance' };",
+				"phase('Implement');",
+				"const implementation = await implement('Fix CLI argument parsing edge case.', { role: 'developer' });",
+				"phase('Validate');",
+				"const validation = await testChange(implementation, {",
+				"  role: 'tester',",
+				"  guidance: 'Run relevant project checks after inspecting requirements and test docs; no automated command was discoverable.',",
+				"  output: { type: 'object', properties: { status: { type: 'string', enum: ['passed', 'failed'] }, summary: { type: 'string' }, issues: { type: 'array', items: { type: 'string' } }, warnings: { type: 'array', items: { type: 'string' } } }, required: ['status', 'summary', 'issues'] }",
+				"});",
+				"return { implementation, validation };",
+			].join("\n"),
+		});
+
+		expect(result.score).toBeGreaterThan(0.7);
+		expect(result.notes.join(" | ")).not.toContain("validation guidance used Node defaults for non-python case");
+	});
+
 	it("penalizes authored iterate branches in semantic workflows", () => {
 		const result = scoreAuthorOutput({
 			evalCase: getCase("M3"),

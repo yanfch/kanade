@@ -1,11 +1,14 @@
 export type AuthorCaseComplexity = "simple" | "medium" | "complex";
 
+export type WorkflowProjectStack = "node" | "java-maven" | "java-gradle" | "python" | "rust" | "go" | "unknown";
+
 export interface AuthorEvalCase {
 	id: string;
 	name: string;
 	complexity: AuthorCaseComplexity;
 	task: string;
 	workspaceBrief: string;
+	projectStack?: WorkflowProjectStack;
 	expectations: {
 		requiresKinds?: string[];
 		forbidsKinds?: string[];
@@ -29,6 +32,30 @@ const KANADE_WORKSPACE_BRIEF = [
 	"You do NOT have repository read/search tools in this mode. Use only the task brief and this workspace summary.",
 ].join("\n");
 
+const JAVA_MAVEN_WORKSPACE_BRIEF = [
+	"Repo: acme-service — Java Maven backend service.",
+	"The repository uses Maven and follows a multi-module layout.",
+	"Key areas:",
+	"- src/main/java: service and business logic",
+	"- src/test/java: unit and integration tests",
+	"- pom.xml: module and profile configuration",
+	"- test resources: src/test/resources",
+	"Common checks: inspect pom.xml and run ./mvnw test (or mvn test if wrapper unavailable).",
+	"You do NOT have repository read/search tools in this mode. Use only the task brief and this workspace summary.",
+].join("\n");
+
+const PYTHON_PYTEST_WORKSPACE_BRIEF = [
+	"Repo: analytics-cli — Python utility package.",
+	"The repository uses pytest for tests and dependency declarations in requirements.txt.",
+	"Key areas:",
+	"- src/: application logic",
+	"- tests/: unit and integration tests",
+	"- requirements.txt: runtime dependencies",
+	"- pyproject.toml: packaging and tooling metadata",
+	"Common checks: inspect requirements/pyproject and run pytest.",
+	"You do NOT have repository read/search tools in this mode. Use only the task brief and this workspace summary.",
+].join("\n");
+
 export const AUTHOR_EVAL_CASES: AuthorEvalCase[] = [
 	{
 		id: "S1",
@@ -36,6 +63,7 @@ export const AUTHOR_EVAL_CASES: AuthorEvalCase[] = [
 		complexity: "simple",
 		task: "Fix a retry bug in the login flow and add one targeted regression test.",
 		workspaceBrief: KANADE_WORKSPACE_BRIEF,
+		projectStack: "node",
 		expectations: {
 			forbidsKinds: [
 				"analyze",
@@ -56,6 +84,7 @@ export const AUTHOR_EVAL_CASES: AuthorEvalCase[] = [
 		complexity: "simple",
 		task: "Add milliseconds to kanade tail event timestamps and update the relevant CLI tests.",
 		workspaceBrief: KANADE_WORKSPACE_BRIEF,
+		projectStack: "node",
 		expectations: {
 			forbidsKinds: [
 				"analyze",
@@ -76,6 +105,7 @@ export const AUTHOR_EVAL_CASES: AuthorEvalCase[] = [
 		complexity: "simple",
 		task: "Add a small task-detail response field and run the focused app and CLI tests for that change only.",
 		workspaceBrief: KANADE_WORKSPACE_BRIEF,
+		projectStack: "node",
 		expectations: {
 			requiresKinds: ["implement", "testChange"],
 			forbidsKinds: [
@@ -97,6 +127,7 @@ export const AUTHOR_EVAL_CASES: AuthorEvalCase[] = [
 		complexity: "medium",
 		task: "Refactor workflow author prompt code into a cleaner module structure, keep current behavior, add or update focused tests, and include a reviewer pass after implementation.",
 		workspaceBrief: KANADE_WORKSPACE_BRIEF,
+		projectStack: "node",
 		expectations: {
 			requiresKinds: ["implement", "reviewChange"],
 			preferNoLowLevelControls: true,
@@ -110,6 +141,7 @@ export const AUTHOR_EVAL_CASES: AuthorEvalCase[] = [
 		complexity: "medium",
 		task: "Change journal cache key behavior so different workspaces do not incorrectly reuse results, then add tests covering the new behavior and run focused validation.",
 		workspaceBrief: KANADE_WORKSPACE_BRIEF,
+		projectStack: "node",
 		expectations: {
 			requiresKinds: ["implement", "testChange"],
 			preferNoLowLevelControls: true,
@@ -123,10 +155,55 @@ export const AUTHOR_EVAL_CASES: AuthorEvalCase[] = [
 		complexity: "medium",
 		task: "Improve the generated workflow author prompt so routine tasks stay minimal, preserve the built-in iterate policy as a separate system path, and add focused tests for the prompt builder behavior.",
 		workspaceBrief: KANADE_WORKSPACE_BRIEF,
+		projectStack: "node",
 		expectations: {
 			requiresKinds: ["implement", "testChange"],
 			preferNoLowLevelControls: true,
 			maxPrimarySteps: 4,
+			minPrimarySteps: 2,
+		},
+	},
+	{
+		id: "J1",
+		name: "java Maven module refactor",
+		complexity: "medium",
+		task: "Refactor error handling in the Java scheduler module and update focused tests. Keep changes confined to the affected area.",
+		workspaceBrief: JAVA_MAVEN_WORKSPACE_BRIEF,
+		projectStack: "java-maven",
+		expectations: {
+			requiresKinds: ["implement", "testChange"],
+			forbidsKinds: [
+				"analyze",
+				"reviewChange",
+				"continueImplementation",
+				"compareCandidates",
+				"integrateChanges",
+				"request_human",
+			],
+			preferNoLowLevelControls: true,
+			maxPrimarySteps: 3,
+			minPrimarySteps: 2,
+		},
+	},
+	{
+		id: "P1",
+		name: "python CLI bugfix with pytest",
+		complexity: "medium",
+		task: "Fix a Python CLI edge-case bug in argument parsing and add a regression test for it.",
+		workspaceBrief: PYTHON_PYTEST_WORKSPACE_BRIEF,
+		projectStack: "python",
+		expectations: {
+			requiresKinds: ["implement", "testChange"],
+			forbidsKinds: [
+				"analyze",
+				"reviewChange",
+				"continueImplementation",
+				"compareCandidates",
+				"integrateChanges",
+				"request_human",
+			],
+			preferNoLowLevelControls: true,
+			maxPrimarySteps: 3,
 			minPrimarySteps: 2,
 		},
 	},
@@ -136,6 +213,7 @@ export const AUTHOR_EVAL_CASES: AuthorEvalCase[] = [
 		complexity: "complex",
 		task: "Redesign the generated workflow author prompt so new tasks use a semantic V1 helper contract instead of raw agent orchestration, keep iterate on a separate built-in path, and update focused tests.",
 		workspaceBrief: KANADE_WORKSPACE_BRIEF,
+		projectStack: "node",
 		expectations: {
 			requiresKinds: ["analyze", "implement"],
 			forbidsKinds: ["compareCandidates", "integrateChanges"],
@@ -150,6 +228,7 @@ export const AUTHOR_EVAL_CASES: AuthorEvalCase[] = [
 		complexity: "complex",
 		task: "Redesign isolation semantics for dynamic workflows. If the correct direction is unclear or the change could invalidate existing behavior, require explicit human confirmation before major implementation proceeds.",
 		workspaceBrief: KANADE_WORKSPACE_BRIEF,
+		projectStack: "node",
 		expectations: {
 			requiresKinds: ["implement"],
 			preferNoLowLevelControls: true,

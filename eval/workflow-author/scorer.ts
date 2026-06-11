@@ -31,8 +31,66 @@ const KNOWN_KINDS = [
 ] as const;
 
 const WORKFLOW_CALL_NAMES = new Set<string>([...KNOWN_KINDS, "agent"]);
-const LOW_LEVEL_OPTION_KEYS = new Set(["isolation", "reuseBranch", "agentType", "branch"]);
+const LOW_LEVEL_OPTION_KEYS = new Set(["isolation", "reuseBranch", "agentType", "branch", "command", "testCommand"]);
 const ITERATE_ARG_KEYS = new Set(["instructions", "previousResult", "previousTaskId", "reuseBranch"]);
+
+interface ValidationPolicy {
+	allowedCommandHints: RegExp[];
+	disallowNodeDefaults?: RegExp[];
+	requiredFallbackTerms?: RegExp[];
+}
+
+const GENERIC_FALLBACK_TERMS = [/\brelevant project checks\b/i, /run.*validation/i, /run relevant/i, /run the checks/i];
+const STACK_VALIDATION_POLICIES: Record<string, ValidationPolicy> = {
+	node: {
+		allowedCommandHints: [/\bnpm\b/i, /\bnpx\b/i, /\byarn\b/i, /\bpnpm\b/i, /\bnpm run\b/i, /\btypecheck\b/i],
+	},
+	"java-maven": {
+		allowedCommandHints: [/\b(?:\.\/)?mvnw?(?:\s+test)?\b/i, /\bmvn\s+(?:-q\s+)?test\b/i],
+		disallowNodeDefaults: [/\bnpm\b/i, /\bnpx\b/i, /\byarn\b/i, /\bpnpm\b/i, /\btypecheck\b/i],
+		requiredFallbackTerms: [
+			/inspected/i,
+			/no (?:automated|reliable|clear) (?:command|checks?)/i,
+			/inspect(ed|ing) (?:pom\.xml|build|README|docs?)/i,
+		],
+	},
+	"java-gradle": {
+		allowedCommandHints: [/\b(?:\.\/)?gradlew\b/i, /\bgradle\b/i, /\bgradlew\s+test\b/i],
+		disallowNodeDefaults: [/\bnpm\b/i, /\bnpx\b/i, /\byarn\b/i, /\bpnpm\b/i, /\btypecheck\b/i],
+		requiredFallbackTerms: [
+			/inspected/i,
+			/no (?:automated|reliable|clear) (?:command|checks?)/i,
+			/inspect(ed|ing) (?:build\.gradle|gradle\.kts|README|docs?)/i,
+		],
+	},
+	python: {
+		allowedCommandHints: [/\bpytest\b/i, /\bpython -m pytest\b/i],
+		disallowNodeDefaults: [/\bnpm\b/i, /\bnpx\b/i, /\byarn\b/i, /\bpnpm\b/i, /\btypecheck\b/i],
+		requiredFallbackTerms: [
+			/inspected/i,
+			/no (?:automated|reliable|clear) (?:command|checks?)/i,
+			/inspect(ed|ing) (?:requirements\.txt|pyproject\.toml|tests?)\b/i,
+		],
+	},
+	go: {
+		allowedCommandHints: [/\bgo\s+test\b/i],
+		disallowNodeDefaults: [/\bnpm\b/i, /\bnpx\b/i, /\byarn\b/i, /\bpnpm\b/i, /\btypecheck\b/i],
+		requiredFallbackTerms: [
+			/inspected/i,
+			/no (?:automated|reliable|clear) (?:command|checks?)/i,
+			/inspect(ed|ing) (?:go\.mod|README|docs?)/i,
+		],
+	},
+	rust: {
+		allowedCommandHints: [/\bcargo\s+test\b/i],
+		disallowNodeDefaults: [/\bnpm\b/i, /\bnpx\b/i, /\byarn\b/i, /\bpnpm\b/i, /\btypecheck\b/i],
+		requiredFallbackTerms: [
+			/inspected/i,
+			/no (?:automated|reliable|clear) (?:command|checks?)/i,
+			/inspect(ed|ing) (?:Cargo\.toml|README|docs?)/i,
+		],
+	},
+};
 
 type AnyNode = Node & {
 	type: string;
@@ -43,6 +101,7 @@ interface ScriptSignals {
 	callCounts: Map<string, number>;
 	lowLevelControlCount: number;
 	iterateArgAccessCount: number;
+	validationGuidance: string[];
 }
 
 export function scoreAuthorOutput(input: {
@@ -102,6 +161,10 @@ export function scoreAuthorOutput(input: {
 		);
 	}
 
+	const validationSignal = scoreValidationGuidance(input.evalCase.projectStack, signals.validationGuidance);
+	score += validationSignal.delta;
+	notes.push(...validationSignal.notes);
+
 	const hasHumanGate = (signals.callCounts.get("request_human") ?? 0) > 0;
 	if (input.evalCase.expectations.requiresHumanGate && !hasHumanGate) {
 		score -= 0.18;
@@ -151,6 +214,7 @@ function analyzeScriptStructure(script: string): ScriptSignals {
 		callCounts: new Map<string, number>(),
 		lowLevelControlCount: 0,
 		iterateArgAccessCount: 0,
+		validationGuidance: [],
 	};
 
 	try {
@@ -164,6 +228,9 @@ function analyzeScriptStructure(script: string): ScriptSignals {
 					signals.callCounts.set(callName, (signals.callCounts.get(callName) ?? 0) + 1);
 					const optionsArg = Array.isArray(node.arguments) ? node.arguments[1] : undefined;
 					signals.lowLevelControlCount += countLowLevelOptionKeys(optionsArg);
+					if (callName === "testChange") {
+						signals.validationGuidance.push(...extractGuidanceTexts(optionsArg));
+					}
 				}
 			}
 
@@ -180,6 +247,94 @@ function analyzeScriptStructure(script: string): ScriptSignals {
 	}
 
 	return signals;
+}
+
+function scoreValidationGuidance(
+	stack: AuthorEvalCase["projectStack"],
+	guidanceTexts: string[],
+): {
+	delta: number;
+	notes: string[];
+} {
+	if (!stack) {
+		return { delta: 0, notes: [] };
+	}
+
+	const policy = STACK_VALIDATION_POLICIES[stack as keyof typeof STACK_VALIDATION_POLICIES];
+	if (!policy) {
+		return { delta: 0, notes: [] };
+	}
+
+	const joinedGuidance = guidanceTexts.join("\n").toLowerCase();
+	const hasAllowedCommand = policy.allowedCommandHints.some((pattern) => pattern.test(joinedGuidance));
+	const hasDisallowedNodeDefaults =
+		stack !== "node" && (policy.disallowNodeDefaults ?? []).some((pattern) => pattern.test(joinedGuidance));
+	const hasGenericFallback = GENERIC_FALLBACK_TERMS.some((pattern) => pattern.test(joinedGuidance));
+	const hasRequiredFallbackTerms = (policy.requiredFallbackTerms ?? []).some((pattern) => pattern.test(joinedGuidance));
+
+	let delta = 0;
+	const notes: string[] = [];
+
+	if (stack !== "node" && !hasAllowedCommand && !hasGenericFallback && !hasRequiredFallbackTerms) {
+		delta -= 0.2;
+		notes.push("validation guidance did not include project command guidance or fallback rationale");
+	}
+
+	if (stack !== "node" && hasAllowedCommand) {
+		delta += 0.08;
+		notes.push(`validation guidance uses project-appropriate command for ${stack}`);
+	}
+
+	if (stack !== "node" && hasDisallowedNodeDefaults) {
+		delta -= 0.22;
+		notes.push(`validation guidance used Node defaults for non-${stack} case`);
+	}
+
+	if (stack !== "node" && hasGenericFallback && !hasAllowedCommand) {
+		delta += 0.03;
+		if (!hasRequiredFallbackTerms) {
+			delta -= 0.08;
+			notes.push("fallback validation guidance lacked inspected context or explicit no-command rationale");
+		}
+	}
+
+	if (stack === "node" && hasAllowedCommand) {
+		delta += 0.03;
+	}
+
+	return { delta: Number(delta.toFixed(3)), notes };
+}
+
+function extractGuidanceTexts(node: unknown): string[] {
+	if (!isAstNode(node) || node.type !== "ObjectExpression" || !Array.isArray(node.properties)) return [];
+	const values: string[] = [];
+	for (const property of node.properties) {
+		if (!isAstNode(property) || property.type !== "Property") continue;
+		if (getPropertyName(property.key, Boolean(property.computed)) !== "guidance") continue;
+		if (!isAstNode(property.value)) continue;
+		values.push(...extractTextValues(property.value));
+	}
+	return values;
+}
+
+function extractTextValues(node: unknown): string[] {
+	if (!isAstNode(node)) return [];
+	if (node.type === "Literal" && typeof node.value === "string") return [node.value];
+	if (node.type === "TemplateLiteral" && Array.isArray(node.quasis)) {
+		return [
+			node.quasis
+				.map((q) => {
+					const value = (q as { value?: { cooked?: string; raw?: string } }).value;
+					if (value?.cooked) return value.cooked;
+					return value?.raw ?? "";
+				})
+				.join(""),
+		];
+	}
+	if (node.type === "BinaryExpression" && node.operator === "+") {
+		return [...extractTextValues(node.left), ...extractTextValues(node.right)];
+	}
+	return [];
 }
 
 function walkAst(node: unknown, parent: AnyNode | undefined, visit: (node: AnyNode, parent?: AnyNode) => void): void {
