@@ -1,7 +1,7 @@
 // Portions of this file are derived from pi-dynamic-workflows
 // (https://github.com/Michaelliv/pi-dynamic-workflows), MIT licensed.
 
-import { renderProjectProfileSummary } from "../workspace/project-profile.ts";
+import { type ProjectProfileSnapshot, renderProjectProfileSummary } from "../workspace/project-profile.ts";
 
 export const WORKFLOW_AUTHOR_PROMPT_SNIPPET =
 	"Write a deterministic JavaScript workflow. Required script header: export const meta = { name: 'short_snake_case', description: 'non-empty description' }. Use the semantic workflow helpers as the authoring surface. meta.phases is optional documentation; live progress is driven by phase(title).";
@@ -32,7 +32,7 @@ export const WORKFLOW_AUTHOR_GUIDELINES = [
 
 export interface WorkflowAuthorPromptOptions {
 	complexityHint?: "simple" | "medium" | "complex";
-	projectProfile?: import("../workspace/project-profile.ts").ProjectProfileSnapshot;
+	projectProfile?: ProjectProfileSnapshot;
 }
 
 export function buildWorkflowAuthorPrompt(taskPrompt: string, options: WorkflowAuthorPromptOptions = {}): string {

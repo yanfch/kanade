@@ -84,10 +84,8 @@ export function detectProjectProfile(root: string): ProjectProfileSnapshot {
 		detectedStacks.push("java-gradle");
 		pushMarkersIfPresent(profileRoot, GRADLE_MARKERS, indicators);
 		if (exists(profileRoot, "gradlew")) {
-			pushUnique(suggestedPrepareCommands, "./gradlew build");
 			pushUnique(suggestedCheckCommands, "./gradlew test");
 		} else {
-			pushUnique(suggestedPrepareCommands, "gradle build");
 			pushUnique(suggestedCheckCommands, "gradle test");
 		}
 	}
@@ -122,22 +120,19 @@ export function detectProjectProfile(root: string): ProjectProfileSnapshot {
 	if (hasAny(profileRoot, MAKE_MARKERS)) {
 		detectedStacks.push("make");
 		pushMarkersIfPresent(profileRoot, MAKE_MARKERS, indicators);
-		pushUnique(suggestedPrepareCommands, "make");
-		pushUnique(suggestedCheckCommands, "make test");
+		pushUnique(suggestedCheckCommands, "make test (if target exists)");
 	}
 
 	if (hasAny(profileRoot, JUST_MARKERS)) {
 		detectedStacks.push("just");
 		pushMarkersIfPresent(profileRoot, JUST_MARKERS, indicators);
-		pushUnique(suggestedPrepareCommands, "just");
-		pushUnique(suggestedCheckCommands, "just test");
+		pushUnique(suggestedCheckCommands, "just test (if recipe exists)");
 	}
 
 	if (hasAny(profileRoot, TASKFILE_MARKERS)) {
 		detectedStacks.push("taskfile");
 		pushMarkersIfPresent(profileRoot, TASKFILE_MARKERS, indicators);
-		pushUnique(suggestedPrepareCommands, "task");
-		pushUnique(suggestedCheckCommands, "task");
+		pushUnique(suggestedCheckCommands, "task test (if task exists)");
 	}
 
 	const summary =
@@ -158,6 +153,7 @@ export function detectProjectProfile(root: string): ProjectProfileSnapshot {
 export function renderProjectProfileSummary(profile: ProjectProfileSnapshot): string {
 	const lines = [
 		"Workspace profile snapshot (advisory):",
+		"- Use this deterministic scan as context only; prefer explicit user instructions when they conflict.",
 		`- detectedStacks: ${profile.detectedStacks.join(", ")}`,
 		`- indicators: ${profile.indicators.length ? profile.indicators.join(", ") : "none"}`,
 		`- suggestedPrepareCommands: ${

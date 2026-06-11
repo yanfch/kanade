@@ -49,10 +49,10 @@ describe("project-profile detection", () => {
 			const profile = detectProjectProfile(root);
 			expect(profile.detectedStacks).toContain("make");
 			expect(profile.detectedStacks).toContain("just");
-			expect(profile.suggestedPrepareCommands).toContain("make");
-			expect(profile.suggestedPrepareCommands).toContain("just");
-			expect(profile.suggestedCheckCommands).toContain("make test");
-			expect(profile.suggestedCheckCommands).toContain("just test");
+			expect(profile.suggestedPrepareCommands).not.toContain("make");
+			expect(profile.suggestedPrepareCommands).not.toContain("just");
+			expect(profile.suggestedCheckCommands).toContain("make test (if target exists)");
+			expect(profile.suggestedCheckCommands).toContain("just test (if recipe exists)");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

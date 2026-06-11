@@ -484,7 +484,7 @@ describe("TaskManager — create source:generated", () => {
 		}
 	});
 
-	it("passes rendered project profile context to workflow author without real LLM execution", async () => {
+	it("passes task workspace root so workflow author can render project profile context", async () => {
 		const projectRoot = mkdtempSync(join(tmpdir(), "kanade-profile-root-"));
 		const workspaceRoot = realpathSync(projectRoot);
 		writeFileSync(join(projectRoot, "pom.xml"), "<project></project>");
