@@ -62,6 +62,13 @@ Each iteration injects `previousResult` + `reuseBranch` into args. Full chain tr
 
 ```yaml
 # ~/.kanade/config.yml
+models:
+  mode: inherit-pi    # "pi" is accepted as a shorthand alias
+  agentDir: null
+  authPath: null
+  modelsPath: null
+  inheritPiSettings: true
+
 defaults:
   authorModel: gpt-5.4
   agentModel: gpt-5.3-codex-spark

@@ -79,6 +79,15 @@ describe("loadConfig", () => {
 		expect(config.paths.tracesDir).toBe(join(config.paths.root, "traces"));
 	});
 
+	it("normalises models.mode: pi to inherit-pi", () => {
+		const root = tempKanadeDir();
+		writeFileSync(join(root, "config.yml"), ["models:", "  mode: pi"].join("\n"));
+
+		const config = loadConfig();
+
+		expect(config.models.mode).toBe("inherit-pi");
+	});
+
 	it("merges explicit kanade model config", () => {
 		const root = tempKanadeDir();
 		writeFileSync(

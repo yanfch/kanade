@@ -61,7 +61,7 @@ export interface GenerateWorkflowResult {
 export function resolveConfiguredAgentDir(config: KanadeConfig): string | undefined {
 	if (config.models.agentDir) return config.models.agentDir;
 	if (config.models.piAgentDir) return config.models.piAgentDir;
-	if (config.models.mode === "inherit-pi") return getAgentDir();
+	if (config.models.mode === "inherit-pi" || config.models.mode === "pi") return getAgentDir();
 	return undefined;
 }
 

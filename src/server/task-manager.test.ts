@@ -76,6 +76,17 @@ describe("TaskManager — model configuration", () => {
 
 		expect(resolveConfiguredAgentDir(config)).toBeUndefined();
 	});
+
+	it("treats models.mode: pi the same as inherit-pi", () => {
+		const root = mkdtempSync(join(tmpdir(), "kanade-server-"));
+		process.env.KANADE_DIR = root;
+		const config = loadConfig();
+		config.models.mode = "pi";
+		config.models.agentDir = null;
+		config.models.piAgentDir = null;
+
+		expect(resolveConfiguredAgentDir(config)).toBe(getAgentDir());
+	});
 });
 
 describe("TaskManager — core", () => {

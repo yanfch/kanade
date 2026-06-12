@@ -98,7 +98,8 @@ export interface DefaultsConfig {
 }
 
 export interface ModelsConfig {
-	mode: "inherit-pi" | "kanade";
+	/** `"pi"` is accepted as a backwards-compatible alias for `"inherit-pi"`. */
+	mode: "inherit-pi" | "kanade" | "pi";
 	piAgentDir: string | null;
 	agentDir: string | null;
 	authPath: string | null;
@@ -329,6 +330,9 @@ export function loadConfig(): KanadeConfig {
 	const base = defaultConfig(paths);
 	const merged = deepMerge(base, userConfig);
 	merged.paths = paths;
+
+	// Normalise backwards-compatible aliases.
+	if (merged.models.mode === "pi") merged.models.mode = "inherit-pi";
 
 	return merged;
 }
