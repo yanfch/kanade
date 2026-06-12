@@ -554,7 +554,7 @@ export function truncateDiffPatch(
 	return { patch: patch.slice(0, limit), truncated: true, originalPatchLength: patch.length };
 }
 
-function collectWorktreeDiffEvidence(worktree: WorktreeRow): WorktreeDiffEvidence {
+export function collectWorktreeDiffEvidence(worktree: WorktreeRow): WorktreeDiffEvidence {
 	const rawHead = safeGit(worktree.worktree_path, "log --oneline -1 --no-decorate");
 	const hasHead = rawHead.trim().length > 0 && !isGitCommandError(rawHead);
 	const baseRef = worktree.base_branch?.trim();
