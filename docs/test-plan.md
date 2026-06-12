@@ -148,9 +148,11 @@ npm run live:accept -- \
 
 The report checks task status, semantic workflow validation, result status, worktree commit/dirty state, main workspace dirty state, usage, optional task-level worktree preparation commands, and optional local checks. A `finished` task is still only a candidate; inspect the generated workflow and worktree diff before merging.
 
+Each run writes a machine-readable evidence report to `<run_dir>/acceptance-evidence.json` by default, or to `--evidence-file PATH` when specified. The evidence report includes `schemaVersion`, `generatedAt`, the submitted prompt, task launch options, task response, generated workflow script, worktree diff stats/patches, usage, checks, and the final recommendation.
+
 Live acceptance now emits v2 evidence sections for review:
 - `workflowSummary`: regex-extracted ordered phases and helper call counts (`analyze`, `implement`, `reviewChange`, `continueImplementation`, `testChange`, `request_human`, `parallel`) plus `hasImplementation/hasReview/hasValidation/hasFixLoop`.
-- `worktreeDiffs`: per-worktree short `HEAD`, changed file list, and diff stat from the worktree path.
+- `worktreeDiffs`: per-worktree short `HEAD`, changed file list, diff stat, and diff patch from the worktree path.
 - `evidence.usage`, `evidence.result`, and `evidence.worktrees`: includes zero-usage and at-least-one-worktree-commit flags.
 - recommendation logic: only `accept` when finished + semantic-ok + no failed validation + at least one clean worktree commit + clean main/worktrees + pass prepare/checks; `reject` for failed/aborted/needs_human, semantic invalid, dirty worktrees, or failed prepare/checks; otherwise `inspect`.
 

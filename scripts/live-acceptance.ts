@@ -91,7 +91,20 @@ interface AcceptanceEvidence {
 	};
 }
 
+interface TaskLaunchOptions {
+	cwd: string;
+	author_model?: string;
+	agent_model?: string;
+	role_models?: Record<string, string>;
+	prepare_commands?: string[];
+}
+
 interface AcceptanceReport {
+	schemaVersion: 1;
+	generatedAt: string;
+	prompt: string;
+	taskOptions: TaskLaunchOptions;
+	taskResponse: TaskResponse;
 	taskId: string;
 	status: string;
 	runDir: string;
@@ -619,19 +632,21 @@ async function main() {
 	const prompt = args.promptFile ? readFileSync(args.promptFile, "utf8") : args.prompt;
 	if (!prompt?.trim()) usageAndExit(1);
 
+	const taskOptions: TaskLaunchOptions = {
+		cwd: args.cwd,
+		...(args.authorModel ? { author_model: args.authorModel } : {}),
+		...(args.agentModel ? { agent_model: args.agentModel } : {}),
+		...(Object.keys(args.roleModels).length ? { role_models: args.roleModels } : {}),
+		...(args.prepareCommands.length ? { prepare_commands: args.prepareCommands } : {}),
+	};
+
 	const task = await requestJson<TaskResponse>(`${args.baseUrl}/tasks`, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify({
 			source: "generated",
 			prompt,
-			options: {
-				cwd: args.cwd,
-				...(args.authorModel ? { author_model: args.authorModel } : {}),
-				...(args.agentModel ? { agent_model: args.agentModel } : {}),
-				...(Object.keys(args.roleModels).length ? { role_models: args.roleModels } : {}),
-				...(args.prepareCommands.length ? { prepare_commands: args.prepareCommands } : {}),
-			},
+			options: taskOptions,
 		}),
 	});
 	if (!args.json) console.error(`created ${task.task_id}`);
@@ -697,6 +712,11 @@ async function main() {
 	const evidencePath = args.evidenceFile ?? resolve(task.run_dir, "acceptance-evidence.json");
 
 	const report: AcceptanceReport = {
+		schemaVersion: 1,
+		generatedAt: new Date().toISOString(),
+		prompt,
+		taskOptions,
+		taskResponse: task,
 		taskId: task.task_id,
 		status: detail.task.status,
 		runDir: task.run_dir,
