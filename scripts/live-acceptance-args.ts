@@ -14,6 +14,7 @@ export interface Args {
 	prepare: string[];
 	prepareCommands: string[];
 	json: boolean;
+	evidenceFile?: string;
 }
 
 export function parseArgs(argv: string[]): Args {
@@ -52,6 +53,7 @@ export function parseArgs(argv: string[]): Args {
 		else if (arg === "--prepare-command") args.prepareCommands.push(next());
 		else if (arg === "--check") args.checks.push(next());
 		else if (arg === "--json") args.json = true;
+		else if (arg === "--evidence-file") args.evidenceFile = resolve(next());
 		else if (arg === "--help" || arg === "-h") usageAndExit(0);
 		else throw new Error(`Unknown argument: ${arg}`);
 	}
@@ -76,6 +78,7 @@ Options:
   --poll-ms N                Poll interval (default: 10000)
   --check COMMAND            Local acceptance check to run after task completion; repeatable
   --json                     Print machine-readable JSON only
+  --evidence-file PATH       Write machine-readable evidence JSON to PATH (default: task run dir)
 `);
 	process.exit(code);
 }

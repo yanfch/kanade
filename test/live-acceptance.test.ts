@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { parseArgs } from "../scripts/live-acceptance-args.ts";
@@ -23,6 +24,12 @@ describe("live-acceptance argument parsing", () => {
 
 		expect(args.prepare).toEqual(["npm install"]);
 		expect(args.prepareCommands).toEqual(["npm install", "npm run test"]);
+	});
+
+	it("parses an explicit evidence file path", () => {
+		const args = parseArgs(["--prompt", "run this", "--evidence-file", "./tmp/evidence.json"]);
+
+		expect(args.evidenceFile).toBe(resolve("./tmp/evidence.json"));
 	});
 
 	it("accepts repeatable role-model and run-level model flags", () => {

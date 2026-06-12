@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { relative, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { validateSemanticWorkflowScript } from "../src/workflow-engine/runtime.ts";
 import { parseArgs, usageAndExit } from "./live-acceptance-args.ts";
@@ -73,6 +73,7 @@ interface WorktreeDiffEvidence {
 	head: string;
 	changedFiles: string[];
 	diffStat: string;
+	diffPatch: string;
 }
 
 interface AcceptanceEvidence {
@@ -93,7 +94,9 @@ interface AcceptanceEvidence {
 interface AcceptanceReport {
 	taskId: string;
 	status: string;
+	runDir: string;
 	workflowPath: string;
+	workflowScript: string;
 	semanticWorkflowOk: boolean;
 	semanticWorkflowError?: string;
 	resultOk: boolean;
@@ -113,6 +116,7 @@ interface AcceptanceReport {
 	checksCwd: string;
 	recommendation: "accept" | "inspect" | "reject";
 	reasons: string[];
+	evidencePath: string;
 }
 
 interface RecommendationInput {
@@ -530,15 +534,18 @@ function collectWorktreeDiffEvidence(worktree: WorktreeRow): WorktreeDiffEvidenc
 	const diffRange = baseRef ? `${shellQuote(baseRef)}...HEAD` : "HEAD^..HEAD";
 	let diffStat = hasHead ? safeGit(worktree.worktree_path, `diff --stat ${diffRange} --`) : "";
 	let nameStatus = hasHead ? safeGit(worktree.worktree_path, `diff --name-status ${diffRange} --`) : "";
-	if (isGitCommandError(diffStat) || isGitCommandError(nameStatus)) {
+	let diffPatch = hasHead ? safeGit(worktree.worktree_path, `diff ${diffRange} --`) : "";
+	if (isGitCommandError(diffStat) || isGitCommandError(nameStatus) || isGitCommandError(diffPatch)) {
 		diffStat = hasHead ? safeGit(worktree.worktree_path, "show --stat --pretty=format: HEAD --") : "";
 		nameStatus = hasHead ? safeGit(worktree.worktree_path, "show --name-status --pretty=format: HEAD --") : "";
+		diffPatch = hasHead ? safeGit(worktree.worktree_path, "show --format=medium --patch HEAD --") : "";
 	}
 	return {
 		path: worktree.worktree_path,
 		head: hasHead ? rawHead.trim() : "",
 		changedFiles: hasHead ? parseNameStatusChangedFiles(nameStatus) : [],
 		diffStat: isGitCommandError(diffStat) ? "" : diffStat.trim(),
+		diffPatch: isGitCommandError(diffPatch) ? "" : diffPatch.trim(),
 	};
 }
 
@@ -565,10 +572,16 @@ function formatWorkflowSummary(summary: WorkflowSummary): void {
 	);
 }
 
+function writeEvidenceFile(path: string, report: AcceptanceReport): void {
+	mkdirSync(dirname(path), { recursive: true });
+	writeFileSync(path, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+}
+
 function printNonJsonReport(report: AcceptanceReport): void {
 	console.log(`\nLive acceptance report: ${report.taskId}`);
 	console.log(`status: ${report.status}`);
 	console.log(`recommendation: ${report.recommendation}`);
+	console.log(`evidence: ${report.evidencePath}`);
 	formatWorkflowSummary(report.workflowSummary);
 
 	console.log("\nDiff summary:");
@@ -681,11 +694,14 @@ async function main() {
 	});
 
 	const reasons = decision.reasons;
+	const evidencePath = args.evidenceFile ?? resolve(task.run_dir, "acceptance-evidence.json");
 
 	const report: AcceptanceReport = {
 		taskId: task.task_id,
 		status: detail.task.status,
+		runDir: task.run_dir,
 		workflowPath: detail.task.workflow_path,
+		workflowScript,
 		semanticWorkflowOk,
 		...(semanticWorkflowError ? { semanticWorkflowError } : {}),
 		resultOk: Boolean(detail.task.result) && !hasFailedValidation(parsedResult),
@@ -718,7 +734,10 @@ async function main() {
 		checksCwd,
 		recommendation: decision.recommendation,
 		reasons,
+		evidencePath,
 	};
+
+	writeEvidenceFile(evidencePath, report);
 
 	if (args.json) {
 		console.log(JSON.stringify(report, null, 2));
