@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -128,90 +129,94 @@ describe("live-acceptance diff patch truncation", () => {
 
 describe("live-acceptance collectWorktreeDiffEvidence truncation integration", () => {
 	it("includes truncated/originalPatchLength in evidence and preserves changedFiles/diffStat when patch exceeds limit", () => {
-		const tmpDir = join(process.env.TMPDIR ?? "/tmp", `ldp-truncation-test-${Date.now()}`);
-		mkdirSync(tmpDir, { recursive: true });
+		const tmpDir = mkdtempSync(join(tmpdir(), "ldp-truncation-test-"));
+		try {
+			// Initialize a git repo with a base commit
+			execSync("git init", { cwd: tmpDir, stdio: "ignore" });
+			execSync("git config user.email test@test", { cwd: tmpDir, stdio: "ignore" });
+			execSync("git config user.name test", { cwd: tmpDir, stdio: "ignore" });
+			writeFileSync(join(tmpDir, "base.txt"), "base content\n");
+			execSync("git add base.txt", { cwd: tmpDir, stdio: "ignore" });
+			execSync("git commit -m initial", { cwd: tmpDir, stdio: "ignore" });
 
-		// Initialize a git repo with a base commit
-		execSync("git init", { cwd: tmpDir, stdio: "ignore" });
-		execSync("git config user.email test@test", { cwd: tmpDir, stdio: "ignore" });
-		execSync("git config user.name test", { cwd: tmpDir, stdio: "ignore" });
-		writeFileSync(join(tmpDir, "base.txt"), "base content\n");
-		execSync("git add base.txt", { cwd: tmpDir, stdio: "ignore" });
-		execSync("git commit -m initial", { cwd: tmpDir, stdio: "ignore" });
+			// Create a worktree on a new branch
+			const worktreePath = join(tmpDir, "worktree-feature");
+			execSync(`git worktree add -b feature ${worktreePath}`, { cwd: tmpDir, stdio: "ignore" });
 
-		// Create a worktree on a new branch
-		const worktreePath = join(tmpDir, "worktree-feature");
-		execSync(`git worktree add -b feature ${worktreePath}`, { cwd: tmpDir, stdio: "ignore" });
+			// Add a file with content exceeding DIFF_PATCH_TRUNCATE_LIMIT to the worktree
+			const largeContent = "x".repeat(DIFF_PATCH_TRUNCATE_LIMIT + 1000);
+			writeFileSync(join(worktreePath, "large-file.txt"), `${largeContent}\n`);
+			writeFileSync(join(worktreePath, "small-file.txt"), "small change\n");
+			execSync("git add large-file.txt small-file.txt", { cwd: worktreePath, stdio: "ignore" });
+			execSync("git commit -m 'add files'", { cwd: worktreePath, stdio: "ignore" });
 
-		// Add a file with content exceeding DIFF_PATCH_TRUNCATE_LIMIT to the worktree
-		const largeContent = "x".repeat(DIFF_PATCH_TRUNCATE_LIMIT + 1000);
-		writeFileSync(join(worktreePath, "large-file.txt"), `${largeContent}\n`);
-		writeFileSync(join(worktreePath, "small-file.txt"), "small change\n");
-		execSync("git add large-file.txt small-file.txt", { cwd: worktreePath, stdio: "ignore" });
-		execSync("git commit -m 'add files'", { cwd: worktreePath, stdio: "ignore" });
+			const worktree = {
+				label: "LDP-0001",
+				branch: "feature",
+				base_branch: "main",
+				worktree_path: worktreePath,
+				status: "active",
+				merge_commit: null,
+			};
 
-		const worktree = {
-			label: "LDP-0001",
-			branch: "feature",
-			base_branch: "main",
-			worktree_path: worktreePath,
-			status: "active",
-			merge_commit: null,
-		};
+			const evidence = collectWorktreeDiffEvidence(worktree);
 
-		const evidence = collectWorktreeDiffEvidence(worktree);
+			// Verify truncation fields are present and correct
+			expect(evidence.truncated).toBe(true);
+			expect(evidence.originalPatchLength).toBeGreaterThan(DIFF_PATCH_TRUNCATE_LIMIT);
+			expect(evidence.diffPatch.length).toBeLessThanOrEqual(DIFF_PATCH_TRUNCATE_LIMIT);
 
-		// Verify truncation fields are present and correct
-		expect(evidence.truncated).toBe(true);
-		expect(evidence.originalPatchLength).toBeGreaterThan(DIFF_PATCH_TRUNCATE_LIMIT);
-		expect(evidence.diffPatch.length).toBeLessThanOrEqual(DIFF_PATCH_TRUNCATE_LIMIT);
+			// Verify changedFiles is still populated despite truncation
+			expect(evidence.changedFiles).toContain("large-file.txt");
+			expect(evidence.changedFiles).toContain("small-file.txt");
 
-		// Verify changedFiles is still populated despite truncation
-		expect(evidence.changedFiles).toContain("large-file.txt");
-		expect(evidence.changedFiles).toContain("small-file.txt");
+			// Verify diffStat is still populated despite truncation
+			expect(evidence.diffStat).toBeTruthy();
+			expect(evidence.diffStat).toContain("large-file.txt");
 
-		// Verify diffStat is still populated despite truncation
-		expect(evidence.diffStat).toBeTruthy();
-		expect(evidence.diffStat).toContain("large-file.txt");
-
-		// Verify head is populated
-		expect(evidence.head).toBeTruthy();
+			// Verify head is populated
+			expect(evidence.head).toBeTruthy();
+		} finally {
+			rmSync(tmpDir, { recursive: true, force: true });
+		}
 	});
 
 	it("does not set truncated when patch is under the limit", () => {
-		const tmpDir = join(process.env.TMPDIR ?? "/tmp", `ldp-no-truncation-${Date.now()}`);
-		mkdirSync(tmpDir, { recursive: true });
+		const tmpDir = mkdtempSync(join(tmpdir(), "ldp-no-truncation-"));
+		try {
+			execSync("git init", { cwd: tmpDir, stdio: "ignore" });
+			execSync("git config user.email test@test", { cwd: tmpDir, stdio: "ignore" });
+			execSync("git config user.name test", { cwd: tmpDir, stdio: "ignore" });
+			writeFileSync(join(tmpDir, "base.txt"), "base content\n");
+			execSync("git add base.txt", { cwd: tmpDir, stdio: "ignore" });
+			execSync("git commit -m initial", { cwd: tmpDir, stdio: "ignore" });
 
-		execSync("git init", { cwd: tmpDir, stdio: "ignore" });
-		execSync("git config user.email test@test", { cwd: tmpDir, stdio: "ignore" });
-		execSync("git config user.name test", { cwd: tmpDir, stdio: "ignore" });
-		writeFileSync(join(tmpDir, "base.txt"), "base content\n");
-		execSync("git add base.txt", { cwd: tmpDir, stdio: "ignore" });
-		execSync("git commit -m initial", { cwd: tmpDir, stdio: "ignore" });
+			const worktreePath = join(tmpDir, "worktree-feature");
+			execSync(`git worktree add -b feature ${worktreePath}`, { cwd: tmpDir, stdio: "ignore" });
 
-		const worktreePath = join(tmpDir, "worktree-feature");
-		execSync(`git worktree add -b feature ${worktreePath}`, { cwd: tmpDir, stdio: "ignore" });
+			// Add a small file that won't trigger truncation
+			writeFileSync(join(worktreePath, "tiny.txt"), "small\n");
+			execSync("git add tiny.txt", { cwd: worktreePath, stdio: "ignore" });
+			execSync("git commit -m 'add tiny'", { cwd: worktreePath, stdio: "ignore" });
 
-		// Add a small file that won't trigger truncation
-		writeFileSync(join(worktreePath, "tiny.txt"), "small\n");
-		execSync("git add tiny.txt", { cwd: worktreePath, stdio: "ignore" });
-		execSync("git commit -m 'add tiny'", { cwd: worktreePath, stdio: "ignore" });
+			const worktree = {
+				label: "LDP-0002",
+				branch: "feature",
+				base_branch: "main",
+				worktree_path: worktreePath,
+				status: "active",
+				merge_commit: null,
+			};
 
-		const worktree = {
-			label: "LDP-0002",
-			branch: "feature",
-			base_branch: "main",
-			worktree_path: worktreePath,
-			status: "active",
-			merge_commit: null,
-		};
+			const evidence = collectWorktreeDiffEvidence(worktree);
 
-		const evidence = collectWorktreeDiffEvidence(worktree);
-
-		expect(evidence.truncated).toBe(false);
-		expect(evidence.originalPatchLength).toBeLessThanOrEqual(DIFF_PATCH_TRUNCATE_LIMIT);
-		expect(evidence.changedFiles).toContain("tiny.txt");
-		expect(evidence.diffStat).toBeTruthy();
+			expect(evidence.truncated).toBe(false);
+			expect(evidence.originalPatchLength).toBeLessThanOrEqual(DIFF_PATCH_TRUNCATE_LIMIT);
+			expect(evidence.changedFiles).toContain("tiny.txt");
+			expect(evidence.diffStat).toBeTruthy();
+		} finally {
+			rmSync(tmpDir, { recursive: true, force: true });
+		}
 	});
 });
 
