@@ -276,31 +276,56 @@ async function cmdShow(taskId: string, args: ReturnType<typeof parseArgs>["value
 
 	console.log();
 	header("Usage & Cost");
-	const inputTokens = Number(usage?.input ?? 0);
-	const outputTokens = Number(usage?.output ?? 0);
-	const cacheRead = Number(usage?.cacheRead ?? 0);
-	const cacheWrite = Number(usage?.cacheWrite ?? 0);
-	const totalTokens = Number(usage?.totalTokens ?? inputTokens + outputTokens + cacheRead + cacheWrite);
-	const costTotal = Number(
-		usage && typeof usage.cost === "object" && usage.cost !== null
-			? ((usage.cost as Record<string, unknown>).total ?? 0)
-			: 0,
-	);
-	const hasUsage = totalTokens > 0 || costTotal > 0;
-	if (!usage || !hasUsage) {
+	if (!usage) {
 		console.log(pc.dim("  No usage data recorded yet."));
 	} else {
-		console.log(`  ${pc.dim("Input Tokens:")}  ${pc.white(String(inputTokens))}`);
-		console.log(`  ${pc.dim("Output Tokens:")} ${pc.white(String(outputTokens))}`);
-		console.log(`  ${pc.dim("Cache Read:")}    ${pc.white(String(cacheRead))}`);
-		console.log(`  ${pc.dim("Cache Write:")}   ${pc.white(String(cacheWrite))}`);
-		console.log(`  ${pc.dim("Total Tokens:")}  ${pc.bold(String(totalTokens))}`);
-		console.log(`  ${pc.dim("Cost:")}          ${pc.white(`$${costTotal.toFixed(4)}`)}`);
+		const costOf = (value: unknown) => {
+			const obj = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+			const cost = obj.cost && typeof obj.cost === "object" ? (obj.cost as Record<string, unknown>) : {};
+			return Number(cost.total ?? 0);
+		};
+		const tokensOf = (value: unknown) => {
+			const obj = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+			return Number(obj.totalTokens ?? 0);
+		};
+		const hasStructuredUsage =
+			(typeof usage.author === "object" && usage.author !== null) ||
+			(typeof usage.runtime === "object" && usage.runtime !== null) ||
+			(typeof usage.total === "object" && usage.total !== null);
+
+		if (hasStructuredUsage) {
+			const authorCost = costOf(usage.author);
+			const runtimeCost = costOf(usage.runtime);
+			const totalCost = costOf(usage.total ?? usage);
+			const totalTokens = tokensOf(usage.total ?? usage);
+			console.log(`  ${pc.dim("Author Cost:")}  ${pc.white(`$${authorCost.toFixed(4)}`)}`);
+			console.log(`  ${pc.dim("Agent Cost:")}   ${pc.white(`$${runtimeCost.toFixed(4)}`)}`);
+			console.log(`  ${pc.dim("Total Cost:")}   ${pc.bold(`$${totalCost.toFixed(4)}`)}`);
+			console.log(`  ${pc.dim("Total Tokens:")} ${pc.bold(String(totalTokens))}`);
+		} else {
+			const inputTokens = Number(usage.input ?? 0);
+			const outputTokens = Number(usage.output ?? 0);
+			const cacheRead = Number(usage.cacheRead ?? 0);
+			const cacheWrite = Number(usage.cacheWrite ?? 0);
+			const totalTokens = Number(usage.totalTokens ?? inputTokens + outputTokens + cacheRead + cacheWrite);
+			const costTotal = costOf(usage);
+			const hasUsage = totalTokens > 0 || costTotal > 0;
+			if (!hasUsage) {
+				console.log(pc.dim("  No usage data recorded yet."));
+			} else {
+				console.log(`  ${pc.dim("Input Tokens:")}  ${pc.white(String(inputTokens))}`);
+				console.log(`  ${pc.dim("Output Tokens:")} ${pc.white(String(outputTokens))}`);
+				console.log(`  ${pc.dim("Cache Read:")}    ${pc.white(String(cacheRead))}`);
+				console.log(`  ${pc.dim("Cache Write:")}   ${pc.white(String(cacheWrite))}`);
+				console.log(`  ${pc.dim("Total Tokens:")}  ${pc.bold(String(totalTokens))}`);
+				console.log(`  ${pc.dim("Cost:")}          ${pc.white(`$${costTotal.toFixed(4)}`)}`);
+			}
+		}
 	}
 
 	if (journal.agents.length > 0) {
 		console.log();
-		console.log(pc.bold("  Agent Calls"));
+		console.log(pc.bold("  Journal Cache"));
 		console.log(pc.dim(`  ${"─".repeat(50)}`));
 		for (const entry of journal.agents as Record<string, unknown>[]) {
 			const key = String(entry.cache_key ?? "").slice(0, 12);

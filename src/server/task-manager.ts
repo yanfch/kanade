@@ -14,13 +14,13 @@ import { Journal, type JournalAllEntries } from "../journal/index.ts";
 import type { NeedsHumanRow, StateStore, TaskRow, TaskStatus, WorkflowSource, WorktreeRow } from "../store/index.ts";
 import * as Attrs from "../tracing/attributes.ts";
 import type { TracingHandle, Logger as TracingLogger } from "../tracing/index.ts";
-import { runWorkflow, validateSemanticWorkflowScript } from "../workflow-engine/index.ts";
+import { type WorkflowUsage, runWorkflow, validateSemanticWorkflowScript } from "../workflow-engine/index.ts";
 import { SnapshotBuilder } from "../workflow-engine/snapshot-builder.ts";
 import type { WorkflowSnapshot } from "../workflow-engine/snapshot.ts";
 import { AppError } from "./errors.ts";
 import type { EventBus } from "./event-bus.ts";
 import { buildIterateWorkflowScript } from "./iterate-workflow.ts";
-import { LlmWorkflowAuthor, StubWorkflowAuthor, type WorkflowAuthor } from "./workflow-author.ts";
+import { type AuthorUsage, LlmWorkflowAuthor, StubWorkflowAuthor, type WorkflowAuthor } from "./workflow-author.ts";
 import { type WorkflowInfo, WorkflowStore } from "./workflow-store.ts";
 
 export interface TaskOptions {
@@ -68,6 +68,48 @@ export function resolveConfiguredAgentDir(config: KanadeConfig): string | undefi
 interface TaskTrace {
 	span: Span;
 	context: Context;
+}
+
+type UsageSummary = WorkflowUsage;
+
+function zeroUsage(): UsageSummary {
+	return {
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 0,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	};
+}
+
+function addUsage(a: UsageSummary, b: UsageSummary): UsageSummary {
+	return {
+		input: a.input + b.input,
+		output: a.output + b.output,
+		cacheRead: a.cacheRead + b.cacheRead,
+		cacheWrite: a.cacheWrite + b.cacheWrite,
+		totalTokens: a.totalTokens + b.totalTokens,
+		cost: {
+			input: a.cost.input + b.cost.input,
+			output: a.cost.output + b.cost.output,
+			cacheRead: a.cost.cacheRead + b.cost.cacheRead,
+			cacheWrite: a.cost.cacheWrite + b.cost.cacheWrite,
+			total: a.cost.total + b.cost.total,
+		},
+	};
+}
+
+function composeGeneratedUsage(
+	author: UsageSummary,
+	runtime: UsageSummary,
+): UsageSummary & {
+	author: UsageSummary;
+	runtime: UsageSummary;
+	total: UsageSummary;
+} {
+	const total = addUsage(author, runtime);
+	return { ...total, author, runtime, total };
 }
 
 export class TaskManager {
@@ -191,6 +233,7 @@ export class TaskManager {
 		taskTrace: TaskTrace,
 	): Promise<void> {
 		try {
+			let authorUsage = zeroUsage();
 			const authorSpan = this.tracer.startSpan(
 				"workflow.author",
 				{ attributes: { [Attrs.TASK_ID]: taskId, "kanade.author.model": options?.author_model ?? "" } },
@@ -201,6 +244,10 @@ export class TaskManager {
 				script = await this.author.generate(prompt, {
 					model: options?.author_model,
 					workspaceRoot,
+					onUsage: (usage: AuthorUsage) => {
+						authorUsage = usage;
+						this.addDailyCost(usage.cost.total);
+					},
 				});
 				authorSpan.setStatus({ code: SpanStatusCode.OK });
 			} catch (error) {
@@ -221,7 +268,7 @@ export class TaskManager {
 					role_models: options?.role_models ? JSON.stringify(options.role_models) : undefined,
 				});
 			this.events.emit("task.script_generated", { taskId, workflowPath }, taskId);
-			await this.run(taskId, script, args, options, taskTrace);
+			await this.run(taskId, script, args, options, taskTrace, authorUsage);
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);
 			this.store.updateTask(taskId, { status: "failed", finished_at: Date.now(), error: msg });
@@ -615,6 +662,7 @@ export class TaskManager {
 		args: unknown,
 		options: TaskOptions = {},
 		taskTrace = this.startTaskTrace(taskId, this.store.getTask(taskId)?.workflow_source ?? "unknown"),
+		authorUsage?: UsageSummary,
 	): Promise<void> {
 		const controller = new AbortController();
 		this.controllers.set(taskId, controller);
@@ -738,11 +786,12 @@ export class TaskManager {
 					error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
 				});
 			}
+			const persistedUsage = authorUsage ? composeGeneratedUsage(authorUsage, result.usage) : result.usage;
 			this.store.updateTask(taskId, {
 				status: "finished",
 				finished_at: Date.now(),
 				result: JSON.stringify(result.result),
-				usage: JSON.stringify(result.usage),
+				usage: JSON.stringify(persistedUsage),
 			});
 			this.events.emit("task.finished", { taskId, result: result.result }, taskId);
 			span.setStatus({ code: SpanStatusCode.OK });

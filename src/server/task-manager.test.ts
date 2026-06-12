@@ -39,7 +39,7 @@ function createTemporaryGitRepo(branch = "feature/test-branch"): { repo: string;
 }
 
 function setup(
-	author?: { generate(prompt: string, options?: { model?: string; workspaceRoot?: string }): Promise<string> },
+	author?: ConstructorParameters<typeof TaskManager>[4],
 	sessionFactory?: ConstructorParameters<typeof TaskManager>[6],
 ) {
 	const root = mkdtempSync(join(tmpdir(), "kanade-server-"));
@@ -1034,6 +1034,43 @@ describe("TaskManager — getUsage", () => {
 		const { store, manager } = setup();
 		try {
 			expect(manager.getUsage("T-9999")).toBeNull();
+		} finally {
+			store.close();
+		}
+	});
+
+	it("persists generated task usage with author, runtime, and total buckets", async () => {
+		const authorUsage = {
+			input: 10,
+			output: 20,
+			cacheRead: 30,
+			cacheWrite: 0,
+			totalTokens: 60,
+			cost: { input: 0.01, output: 0.02, cacheRead: 0.003, cacheWrite: 0, total: 0.033 },
+		};
+		const { store, manager } = setup({
+			async generate(_prompt, options) {
+				options?.onUsage?.(authorUsage);
+				return SIMPLE_SCRIPT;
+			},
+		});
+		try {
+			const task = manager.create({ source: "generated", prompt: "do it" });
+			await vi.waitFor(() => expect(manager.get(task.task_id)?.status).toBe("finished"), { timeout: 5000 });
+
+			expect(manager.getUsage(task.task_id)).toEqual({
+				...authorUsage,
+				author: authorUsage,
+				runtime: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				total: authorUsage,
+			});
 		} finally {
 			store.close();
 		}

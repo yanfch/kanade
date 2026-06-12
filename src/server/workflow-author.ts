@@ -20,13 +20,34 @@ import {
 import { buildWorkflowAuthorPrompt } from "../workflow-engine/prompt-guidelines.ts";
 import { detectProjectProfile } from "../workspace/project-profile.ts";
 
+export interface AuthorUsage {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	totalTokens: number;
+	cost: {
+		input: number;
+		output: number;
+		cacheRead: number;
+		cacheWrite: number;
+		total: number;
+	};
+}
+
+export interface WorkflowAuthorGenerateOptions {
+	model?: string;
+	workspaceRoot?: string;
+	onUsage?: (usage: AuthorUsage) => void;
+}
+
 export interface WorkflowAuthor {
-	generate(prompt: string, options?: { model?: string; workspaceRoot?: string }): Promise<string>;
+	generate(prompt: string, options?: WorkflowAuthorGenerateOptions): Promise<string>;
 }
 
 /** Stub used in tests and when no LLM is configured. Wraps the raw prompt as a minimal valid script. */
 export class StubWorkflowAuthor implements WorkflowAuthor {
-	async generate(prompt: string, _options?: { model?: string; workspaceRoot?: string }): Promise<string> {
+	async generate(prompt: string, _options?: WorkflowAuthorGenerateOptions): Promise<string> {
 		// Produce a minimal valid script whose body is the raw prompt text.
 		// This lets unit tests exercise the full create→run path without a real LLM.
 		const body = prompt.trim().startsWith("return ") ? prompt.trim() : "return {}";
@@ -55,7 +76,7 @@ export class LlmWorkflowAuthor implements WorkflowAuthor {
 		} = {},
 	) {}
 
-	async generate(prompt: string, options?: { model?: string; workspaceRoot?: string }): Promise<string> {
+	async generate(prompt: string, options?: WorkflowAuthorGenerateOptions): Promise<string> {
 		const agentDir = this.opts.agentDir ?? getAgentDir();
 		const workspaceRoot = options?.workspaceRoot ?? process.cwd();
 		const projectProfile = detectProjectProfile(workspaceRoot);
@@ -116,7 +137,10 @@ export class LlmWorkflowAuthor implements WorkflowAuthor {
 				await session.prompt(promptToUse);
 				const capturedScript = (capture.value as { script: string } | undefined)?.script;
 				const selection = selectWorkflowScript(capturedScript, session.messages ?? []);
-				if (selection.script) return selection.script;
+				if (selection.script) {
+					emitAuthorUsage(session.messages ?? [], options?.onUsage);
+					return selection.script;
+				}
 				lastValidationError = selection.validationError;
 			}
 			throw new Error(
@@ -125,6 +149,32 @@ export class LlmWorkflowAuthor implements WorkflowAuthor {
 		} finally {
 			session.dispose();
 		}
+	}
+}
+
+function emitAuthorUsage(messages: unknown[], onUsage?: (usage: AuthorUsage) => void): void {
+	if (!onUsage) return;
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i] as { usage?: unknown; message?: { usage?: unknown } } | undefined;
+		const usage = message?.usage ?? message?.message?.usage;
+		if (!usage || typeof usage !== "object") continue;
+		const u = usage as Record<string, unknown>;
+		const cost = u.cost && typeof u.cost === "object" ? (u.cost as Record<string, unknown>) : {};
+		onUsage({
+			input: Number(u.input ?? 0),
+			output: Number(u.output ?? 0),
+			cacheRead: Number(u.cacheRead ?? 0),
+			cacheWrite: Number(u.cacheWrite ?? 0),
+			totalTokens: Number(u.totalTokens ?? 0),
+			cost: {
+				input: Number(cost.input ?? 0),
+				output: Number(cost.output ?? 0),
+				cacheRead: Number(cost.cacheRead ?? 0),
+				cacheWrite: Number(cost.cacheWrite ?? 0),
+				total: Number(cost.total ?? 0),
+			},
+		});
+		return;
 	}
 }
 

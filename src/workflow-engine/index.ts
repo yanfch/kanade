@@ -10,6 +10,7 @@ export type {
 	WorkflowJournal,
 	WorkflowRunOptions,
 	WorkflowRunResult,
+	WorkflowUsage,
 } from "./runtime.ts";
 export { parseWorkflowScript, runWorkflow, validateSemanticWorkflowScript } from "./runtime.ts";
 export type { WorkflowAgentSnapshot, WorkflowAgentStatus, WorkflowSnapshot } from "./snapshot.ts";

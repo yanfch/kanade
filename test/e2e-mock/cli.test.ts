@@ -6,6 +6,7 @@ import { execSync, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 let BASE_URL = "http://127.0.0.1:17777";
@@ -292,6 +293,67 @@ describe("CLI — show usage", () => {
 		const out = cli(`show ${taskId}`);
 		expect(out).toContain("Usage & Cost");
 		expect(out).toContain("No usage data recorded yet");
+	});
+
+	it("shows structured author, agent, and total usage costs", async () => {
+		const taskId = await createTask(
+			`export const meta = { name: 'cli-show-structured-usage', description: 'Test' }\nreturn 'done'`,
+		);
+		const usage = {
+			input: 11,
+			output: 22,
+			cacheRead: 33,
+			cacheWrite: 0,
+			totalTokens: 66,
+			cost: { input: 0.01, output: 0.02, cacheRead: 0.003, cacheWrite: 0, total: 0.033 },
+			author: {
+				input: 1,
+				output: 2,
+				cacheRead: 3,
+				cacheWrite: 0,
+				totalTokens: 6,
+				cost: { input: 0.001, output: 0.002, cacheRead: 0.0003, cacheWrite: 0, total: 0.0033 },
+			},
+			runtime: {
+				input: 10,
+				output: 20,
+				cacheRead: 30,
+				cacheWrite: 0,
+				totalTokens: 60,
+				cost: { input: 0.009, output: 0.018, cacheRead: 0.0027, cacheWrite: 0, total: 0.0297 },
+			},
+			total: {
+				input: 11,
+				output: 22,
+				cacheRead: 33,
+				cacheWrite: 0,
+				totalTokens: 66,
+				cost: { input: 0.01, output: 0.02, cacheRead: 0.003, cacheWrite: 0, total: 0.033 },
+			},
+		};
+		const db = new Database(join(kanadeDir, "db", "state.db"));
+		try {
+			db.prepare("UPDATE tasks SET usage = ? WHERE id = ?").run(JSON.stringify(usage), taskId);
+		} finally {
+			db.close();
+		}
+
+		const out = cli(`show ${taskId}`);
+		expect(out).toContain("Author Cost:");
+		expect(out).toContain("Agent Cost:");
+		expect(out).toContain("Total Cost:");
+		expect(out).toContain("$0.0330");
+		expect(out).toContain("Total Tokens:");
+		expect(out).toContain("66");
+	});
+
+	it("labels journal cache entries separately from usage", async () => {
+		const taskId = await createTask(
+			`export const meta = { name: 'cli-show-journal-cache', description: 'Test' }\nreturn await agent('hello', { label: 'worker' })`,
+		);
+		const out = cli(`show ${taskId}`);
+		expect(out).toContain("Journal Cache");
+		expect(out).not.toContain("Agent Calls");
 	});
 
 	it("includes usage in --json output", async () => {
