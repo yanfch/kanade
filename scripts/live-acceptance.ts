@@ -6,6 +6,8 @@ import { pathToFileURL } from "node:url";
 import { validateSemanticWorkflowScript } from "../src/workflow-engine/runtime.ts";
 import { parseArgs, usageAndExit } from "./live-acceptance-args.ts";
 
+export const DIFF_PATCH_TRUNCATE_LIMIT = 4000;
+
 const WORKFLOW_HELPERS = [
 	"analyze",
 	"implement",
@@ -74,6 +76,8 @@ interface WorktreeDiffEvidence {
 	changedFiles: string[];
 	diffStat: string;
 	diffPatch: string;
+	truncated: boolean;
+	originalPatchLength: number;
 }
 
 interface AcceptanceEvidence {
@@ -540,6 +544,16 @@ function shellQuote(value: string): string {
 	return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
+export function truncateDiffPatch(
+	patch: string,
+	limit: number = DIFF_PATCH_TRUNCATE_LIMIT,
+): { patch: string; truncated: boolean; originalPatchLength: number } {
+	if (patch.length <= limit) {
+		return { patch, truncated: false, originalPatchLength: patch.length };
+	}
+	return { patch: patch.slice(0, limit), truncated: true, originalPatchLength: patch.length };
+}
+
 function collectWorktreeDiffEvidence(worktree: WorktreeRow): WorktreeDiffEvidence {
 	const rawHead = safeGit(worktree.worktree_path, "log --oneline -1 --no-decorate");
 	const hasHead = rawHead.trim().length > 0 && !isGitCommandError(rawHead);
@@ -553,12 +567,16 @@ function collectWorktreeDiffEvidence(worktree: WorktreeRow): WorktreeDiffEvidenc
 		nameStatus = hasHead ? safeGit(worktree.worktree_path, "show --name-status --pretty=format: HEAD --") : "";
 		diffPatch = hasHead ? safeGit(worktree.worktree_path, "show --format=medium --patch HEAD --") : "";
 	}
+	const cleanedPatch = isGitCommandError(diffPatch) ? "" : diffPatch.trim();
+	const { patch: finalPatch, truncated, originalPatchLength } = truncateDiffPatch(cleanedPatch);
 	return {
 		path: worktree.worktree_path,
 		head: hasHead ? rawHead.trim() : "",
 		changedFiles: hasHead ? parseNameStatusChangedFiles(nameStatus) : [],
 		diffStat: isGitCommandError(diffStat) ? "" : diffStat.trim(),
-		diffPatch: isGitCommandError(diffPatch) ? "" : diffPatch.trim(),
+		diffPatch: finalPatch,
+		truncated,
+		originalPatchLength,
 	};
 }
 

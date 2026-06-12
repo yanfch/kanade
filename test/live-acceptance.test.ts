@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest";
 
 import { parseArgs } from "../scripts/live-acceptance-args.ts";
 import {
+	DIFF_PATCH_TRUNCATE_LIMIT,
 	classifyAcceptance,
 	extractWorkflowSummary,
 	isUsageZero,
 	parseNameStatusChangedFiles,
+	truncateDiffPatch,
 } from "../scripts/live-acceptance.ts";
 
 describe("live-acceptance argument parsing", () => {
@@ -77,6 +79,47 @@ describe("live-acceptance workflow summary helper", () => {
 		expect(summary.hasReview).toBe(true);
 		expect(summary.hasValidation).toBe(true);
 		expect(summary.hasFixLoop).toBe(true);
+	});
+});
+
+describe("live-acceptance diff patch truncation", () => {
+	it("returns the full patch when under the limit", () => {
+		const patch = "a".repeat(DIFF_PATCH_TRUNCATE_LIMIT - 1);
+		const result = truncateDiffPatch(patch);
+		expect(result.patch).toBe(patch);
+		expect(result.truncated).toBe(false);
+		expect(result.originalPatchLength).toBe(patch.length);
+	});
+
+	it("returns the full patch when exactly at the limit", () => {
+		const patch = "b".repeat(DIFF_PATCH_TRUNCATE_LIMIT);
+		const result = truncateDiffPatch(patch);
+		expect(result.patch).toBe(patch);
+		expect(result.truncated).toBe(false);
+		expect(result.originalPatchLength).toBe(patch.length);
+	});
+
+	it("truncates a patch exceeding the limit and records metadata", () => {
+		const patch = "c".repeat(DIFF_PATCH_TRUNCATE_LIMIT + 500);
+		const result = truncateDiffPatch(patch);
+		expect(result.patch).toBe("c".repeat(DIFF_PATCH_TRUNCATE_LIMIT));
+		expect(result.truncated).toBe(true);
+		expect(result.originalPatchLength).toBe(DIFF_PATCH_TRUNCATE_LIMIT + 500);
+	});
+
+	it("supports a custom limit", () => {
+		const patch = "x".repeat(200);
+		const result = truncateDiffPatch(patch, 100);
+		expect(result.patch).toBe("x".repeat(100));
+		expect(result.truncated).toBe(true);
+		expect(result.originalPatchLength).toBe(200);
+	});
+
+	it("returns an empty patch as-is", () => {
+		const result = truncateDiffPatch("");
+		expect(result.patch).toBe("");
+		expect(result.truncated).toBe(false);
+		expect(result.originalPatchLength).toBe(0);
 	});
 });
 
