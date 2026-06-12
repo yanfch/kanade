@@ -9,6 +9,7 @@ import {
 	createAgentSession,
 	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
+import { type Node, parse } from "acorn";
 import type { TSchema } from "typebox";
 import {
 	createStructuredOutputTool,
@@ -153,11 +154,64 @@ export function validateGeneratedWorkflowScript(script: string | undefined): str
 	}
 }
 
-const SEMANTIC_HELPER_PATTERN =
-	/\b(analyze|implement|reviewChange|continueImplementation|testChange|request_human|parallel)\s*\(/;
+const SEMANTIC_HELPER_NAMES = new Set([
+	"analyze",
+	"implement",
+	"reviewChange",
+	"continueImplementation",
+	"testChange",
+	"request_human",
+	"parallel",
+]);
+
+type AnyNode = Node & {
+	body?: AnyNode[];
+	callee?: AnyNode & { name?: string };
+	arguments?: AnyNode[];
+	property?: AnyNode;
+	object?: AnyNode;
+	expression?: AnyNode;
+	[key: string]: unknown;
+};
 
 function containsSemanticHelperCall(body: string): boolean {
-	return SEMANTIC_HELPER_PATTERN.test(body);
+	try {
+		const ast = parse(body, {
+			ecmaVersion: "latest",
+			sourceType: "module",
+			allowAwaitOutsideFunction: true,
+			allowReturnOutsideFunction: true,
+		}) as unknown as AnyNode;
+
+		let found = false;
+		const visit = (node: AnyNode) => {
+			if (found) return;
+			if (node.type === "CallExpression" && node.callee?.type === "Identifier") {
+				if (node.callee.name && SEMANTIC_HELPER_NAMES.has(node.callee.name)) {
+					found = true;
+					return;
+				}
+			}
+			for (const key of Object.keys(node)) {
+				const value = node[key];
+				if (value && typeof value === "object") {
+					if (Array.isArray(value)) {
+						for (const child of value) {
+							if (child && typeof child === "object" && "type" in child) {
+								visit(child as AnyNode);
+							}
+						}
+					} else if ("type" in value) {
+						visit(value as AnyNode);
+					}
+				}
+			}
+		};
+		visit(ast);
+		return found;
+	} catch {
+		return false;
+	}
 }
 
 export function selectWorkflowScript(

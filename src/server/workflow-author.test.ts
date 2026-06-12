@@ -164,4 +164,27 @@ describe("validateGeneratedWorkflowScript", () => {
 		const script = "export const meta = { name: 'invalid' }";
 		expect(validateGeneratedWorkflowScript(script)).toContain("meta.description");
 	});
+
+	it("rejects script where helper name appears in string literal", () => {
+		const script = "export const meta = { name: 'stub', description: 'Stub' }\n" + "return 'implement('";
+		expect(validateGeneratedWorkflowScript(script)).toContain("must call at least one semantic helper");
+	});
+
+	it("rejects script where helper name appears in comment", () => {
+		const script = "export const meta = { name: 'stub', description: 'Stub' }\n" + "// implement()\n" + "return {}";
+		expect(validateGeneratedWorkflowScript(script)).toContain("must call at least one semantic helper");
+	});
+
+	it("rejects script where helper name appears as property access", () => {
+		const script =
+			"export const meta = { name: 'stub', description: 'Stub' }\n" +
+			"const obj = { implement: () => {} };\n" +
+			"return obj.implement()";
+		expect(validateGeneratedWorkflowScript(script)).toContain("must call at least one semantic helper");
+	});
+
+	it("rejects script where helper name appears in template literal", () => {
+		const script = "export const meta = { name: 'stub', description: 'Stub' }\n" + "return `implement()`";
+		expect(validateGeneratedWorkflowScript(script)).toContain("must call at least one semantic helper");
+	});
 });
