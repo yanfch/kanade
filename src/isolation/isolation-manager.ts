@@ -111,6 +111,7 @@ export class IsolationManager {
 	 * call merge() or reject() to decide the worktree's fate.
 	 *
 	 * - approved: mark inactive (keep dir + branch for inspection/merge)
+	 * - rejected/aborted: keep dir + branch by default for inspection/recovery
 	 * - rejected + autoCleanupOnReject: remove dir + branch
 	 * - aborted + autoCleanupOnAbort: remove dir + branch
 	 * - rejected/aborted without cleanup: mark status only
@@ -118,10 +119,10 @@ export class IsolationManager {
 	async finalizeWorktrees(taskId: string, decision: "approved" | "rejected" | "aborted"): Promise<void> {
 		const rows = this.store.findWorktreesByTask(taskId);
 		for (const row of rows) {
-			if (decision === "rejected" && (this.config.autoCleanupOnReject ?? true)) {
+			if (decision === "rejected" && (this.config.autoCleanupOnReject ?? false)) {
 				await this.removeWorktree(row);
 				this.store.updateWorktree(row.id, { status: "rejected", finished_at: Date.now() });
-			} else if (decision === "aborted" && (this.config.autoCleanupOnAbort ?? true)) {
+			} else if (decision === "aborted" && (this.config.autoCleanupOnAbort ?? false)) {
 				await this.removeWorktree(row);
 				this.store.updateWorktree(row.id, { status: "abandoned", finished_at: Date.now() });
 			} else if (decision === "approved") {

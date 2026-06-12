@@ -13,7 +13,7 @@ Files to add:
   - Creates worktrees via `simple-git` or spawning `git worktree add`
   - Reuses existing worktree when `reuseBranch` matches an active row in StateStore
   - `releaseWorktree(id)` marks `inactive` after agent call ends
-  - `finalizeWorktrees(taskId, decision)` decides keep/cleanup per config
+  - `finalizeWorktrees(taskId, decision)` decides keep/cleanup per config; failed/aborted worktrees are preserved by default for inspection/recovery
   - `cleanupStaleWorktrees()` removes worktrees idle > N days
   - Branch naming: `{branchPrefix}/{task_id}/{label}` (default `kanade/T-xxx/dev`)
 - `git-helpers.ts` — Thin wrappers: `ensureBranch`, `worktreeAdd`, `worktreeRemove`, `branchDelete`, `mergeBranch`. Use `simple-git` or spawn `git`.

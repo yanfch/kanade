@@ -192,7 +192,45 @@ describe("IsolationManager — mode:worktree", () => {
 		expect(branches.all).toContain("kanade/T-0001");
 	});
 
-	it("finalizeWorktrees rejected: removes worktree dir and branch", async () => {
+	it("finalizeWorktrees rejected keeps worktree dir and branch by default", async () => {
+		const mgr = new IsolationManager(store, {
+			defaultBaseBranch: "develop",
+			branchPrefix: "kanade",
+		});
+		const ctx = await mgr.prepare({ taskId: "T-0001", label: "dev", mode: "worktree", baseRepo });
+		writeFileSync(join(ctx.cwd, "partial.txt"), "partial agent work");
+		await ctx.cleanup();
+
+		await mgr.finalizeWorktrees("T-0001", "rejected");
+
+		const row = store.getWorktree(ctx.worktree!.id);
+		expect(row?.status).toBe("rejected");
+		expect(existsSync(row!.worktree_path)).toBe(true);
+		expect(readFileSync(join(row!.worktree_path, "partial.txt"), "utf8")).toBe("partial agent work");
+
+		const branches = await simpleGit(baseRepo).branchLocal();
+		expect(branches.all).toContain("kanade/T-0001");
+	});
+
+	it("finalizeWorktrees aborted keeps worktree dir and branch by default", async () => {
+		const mgr = new IsolationManager(store, {
+			defaultBaseBranch: "develop",
+			branchPrefix: "kanade",
+		});
+		const ctx = await mgr.prepare({ taskId: "T-0001", label: "dev", mode: "worktree", baseRepo });
+		await ctx.cleanup();
+
+		await mgr.finalizeWorktrees("T-0001", "aborted");
+
+		const row = store.getWorktree(ctx.worktree!.id);
+		expect(row?.status).toBe("abandoned");
+		expect(existsSync(row!.worktree_path)).toBe(true);
+
+		const branches = await simpleGit(baseRepo).branchLocal();
+		expect(branches.all).toContain("kanade/T-0001");
+	});
+
+	it("finalizeWorktrees rejected: removes worktree dir and branch when configured", async () => {
 		const mgr = new IsolationManager(store, {
 			defaultBaseBranch: "develop",
 			branchPrefix: "kanade",
@@ -210,7 +248,7 @@ describe("IsolationManager — mode:worktree", () => {
 		expect(branches.all).not.toContain("kanade/T-0001");
 	});
 
-	it("finalizeWorktrees aborted: removes worktree dir and branch", async () => {
+	it("finalizeWorktrees aborted: removes worktree dir and branch when configured", async () => {
 		const mgr = new IsolationManager(store, {
 			defaultBaseBranch: "develop",
 			branchPrefix: "kanade",

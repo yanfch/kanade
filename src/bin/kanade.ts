@@ -5,6 +5,7 @@
  * Usage: kanade <command> [options]
  */
 
+import { existsSync } from "node:fs";
 import { parseArgs } from "node:util";
 import pc from "picocolors";
 
@@ -258,6 +259,23 @@ async function cmdShow(taskId: string, args: ReturnType<typeof parseArgs>["value
 
 	if (t.error) {
 		console.log(`  ${pc.dim("Error:")}     ${pc.red(String(t.error))}`);
+	}
+
+	const terminalFailure = ["failed", "aborted"].includes(String(t.status));
+	const preservedWorktrees = worktrees.worktrees.filter((wt) => {
+		const path = String(wt.worktree_path ?? "");
+		return path.length > 0 && existsSync(path);
+	});
+	if (terminalFailure && preservedWorktrees.length > 0) {
+		console.log();
+		console.log(pc.yellow("  Worktree preserved for inspection/recovery."));
+		for (const wt of preservedWorktrees) {
+			console.log(`  ${pc.dim("Inspect:")}   cd ${pc.white(String(wt.worktree_path))} && git status && git diff`);
+		}
+		console.log(
+			`  ${pc.dim("Cleanup:")}   kanade reject ${String(t.id)} ${pc.dim("# removes preserved worktree/branch")}`,
+		);
+		console.log(`  ${pc.dim("Keep:")}      do nothing; stale cleanup policy applies later`);
 	}
 
 	if (t.result) {
@@ -731,7 +749,7 @@ async function cmdReject(taskId: string | undefined) {
 	}
 
 	await api(`/tasks/${taskId}/reject`, { method: "POST" });
-	console.log(pc.yellow(`⚑ Task ${pc.bold(taskId)} rejected. Branch removed.`));
+	console.log(pc.yellow(`⚑ Task ${pc.bold(taskId)} rejected. Preserved worktree/branch removed if present.`));
 }
 
 async function cmdIterate(taskId: string | undefined, args: ReturnType<typeof parseArgs>["values"]) {

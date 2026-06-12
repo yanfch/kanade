@@ -242,9 +242,11 @@ function defaultConfig(paths: KanadePaths): KanadeConfig {
 			defaultBaseRepo: null,
 			worktreeBaseDir: paths.worktreesDir,
 			branchPrefix: "kanade",
-			autoCleanupOnReject: true,
+			// Preserve failed/aborted task worktrees by default so partial agent work can be inspected or recovered.
+			// Explicit `kanade reject <task-id>` still removes the worktree and branch.
+			autoCleanupOnReject: false,
 			autoCleanupOnApprove: false,
-			autoCleanupOnAbort: true,
+			autoCleanupOnAbort: false,
 			staleAfterDays: 7,
 			maxConcurrent: 16,
 			prepareCommands: [],

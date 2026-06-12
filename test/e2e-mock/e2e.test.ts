@@ -923,7 +923,7 @@ return { static: true }`,
 		const mock = createMockSessionFactory({ text: "ok" });
 		const ctx = createE2EContext(mock.createSession);
 		try {
-			const command = 'node -e "console.log(\"prep out\"); console.error(\"prep err\"); process.exit(9);"';
+			const command = `node -e 'console.log("prep out"); console.error("prep err"); process.exit(9);'`;
 			const task = ctx.taskManager.create({
 				source: "inline",
 				script: `export const meta = { name: 'test', description: 'Test' }
@@ -968,7 +968,7 @@ return await agent('work', { label: 'dev', isolation: 'worktree' })`,
 		}
 	});
 
-	it("task abort removes worktree dir and branch", async () => {
+	it("task abort preserves worktree dir and branch for recovery", async () => {
 		cleanupBranches();
 		const mock = createMockSessionFactory({ text: "ok" });
 		const ctx = createE2EContext(mock.createSession);
@@ -976,20 +976,21 @@ return await agent('work', { label: 'dev', isolation: 'worktree' })`,
 			const task = ctx.taskManager.create({
 				source: "inline",
 				script: `export const meta = { name: 'test', description: 'Test' }
+await agent('work', { label: 'dev', isolation: 'worktree' })
 await request_human({ title: 'wait' })
-return await agent('work', { label: 'dev', isolation: 'worktree' })`,
+return 'done'`,
 			});
 
 			await waitForTask(ctx.taskManager, task.task_id, "needs_human", 5000);
 			await ctx.taskManager.abort(task.task_id);
 			await waitForTask(ctx.taskManager, task.task_id, "aborted", 5000);
 
-			// Branch should be deleted after abort (only check test branches)
+			// Branch should still exist so interrupted work can be inspected or recovered.
 			const branches = execSync("git branch 2>/dev/null | grep 'kanade/X-' || true", {
 				encoding: "utf8",
 				cwd: process.cwd(),
 			});
-			expect(branches.trim()).toBe("");
+			expect(branches).toContain(`kanade/${task.task_id}`);
 		} finally {
 			ctx.cleanup();
 			cleanupBranches();

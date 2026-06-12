@@ -91,6 +91,10 @@ defaults:
 isolation:
   defaultMode: worktree
   defaultBaseBranch: develop
+  # Failed/aborted task worktrees are preserved by default for inspection/recovery.
+  # Run `kanade reject <task-id>` to explicitly remove a preserved worktree/branch.
+  autoCleanupOnReject: false
+  autoCleanupOnAbort: false
   prepareCommands:
     - "npm install"
     - "npm run lint -- --no-fix"
@@ -137,8 +141,8 @@ In the live acceptance script, `--prepare` still means local pre-check commands 
 ## Tests
 
 ```bash
-npm test                        # All 294 tests
-npx vitest run test/e2e-mock/   # E2E (40 tests)
+npm test                        # All tests
+npx vitest run test/e2e-mock/   # E2E tests
 npx vitest run eval/scorer*     # Eval scorer (17 tests)
 npm run eval                    # Run eval suite (mock)
 npx tsx eval/run.ts             # Run eval suite (real LLM, ~$0.30)

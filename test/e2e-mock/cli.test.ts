@@ -141,6 +141,28 @@ describe("CLI — show", () => {
 		expect(out).toContain("Journal");
 	});
 
+	it("shows recovery hints when a failed task preserves its worktree", async () => {
+		const res = await fetch(`${BASE_URL}/tasks`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				source: "inline",
+				script: `export const meta = { name: 'cli-show-failed-preserved', description: 'Test' }\nawait agent('make partial work', { label: 'dev', isolation: 'worktree' })\nthrow new Error('boom')`,
+			}),
+		});
+		const body = (await res.json()) as { task_id: string };
+		await waitForTask(body.task_id, "failed");
+
+		try {
+			const out = cli(`show ${body.task_id}`);
+			expect(out).toContain("Worktree preserved for inspection/recovery");
+			expect(out).toContain("Inspect:");
+			expect(out).toContain(`kanade reject ${body.task_id}`);
+		} finally {
+			cli(`reject ${body.task_id}`);
+		}
+	});
+
 	it("--json returns full task object", async () => {
 		const taskId = await createTask(
 			`export const meta = { name: 'cli-show-json', description: 'Test' }\nreturn 'done'`,

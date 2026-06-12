@@ -44,6 +44,8 @@ describe("loadConfig", () => {
 		expect(config.paths.worktreesDir).toBe(join(root, "worktrees"));
 		expect(config.isolation.worktreeBaseDir).toBe(config.paths.worktreesDir);
 		expect(config.isolation.prepareCommands).toEqual([]);
+		expect(config.isolation.autoCleanupOnReject).toBe(false);
+		expect(config.isolation.autoCleanupOnAbort).toBe(false);
 		expect(config.defaults.roleModels).toEqual({});
 		expect(config.network).toEqual({
 			httpProxy: null,
