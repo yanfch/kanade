@@ -75,6 +75,39 @@ describe("project-profile detection", () => {
 		}
 	});
 
+	it("detects docs-only repositories without suggesting build commands", () => {
+		const root = mkdtempSync(join(tmpdir(), "kanade-project-profile-docs-"));
+		mkdirSync(join(root, "docs"), { recursive: true });
+		writeFileSync(join(root, "README.md"), "# Handbook\n");
+		writeFileSync(join(root, "CONTRIBUTING.md"), "# Writing\n");
+
+		try {
+			const profile = detectProjectProfile(root);
+			expect(profile.detectedStacks).toEqual(["docs-only"]);
+			expect(profile.indicators).toEqual(expect.arrayContaining(["README.md", "docs/", "CONTRIBUTING.md"]));
+			expect(profile.suggestedPrepareCommands).toEqual([]);
+			expect(profile.suggestedCheckCommands).toEqual([]);
+			expect(profile.summary).toMatch(/documentation-specific/i);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("does not add docs-only when code stack markers are present", () => {
+		const root = mkdtempSync(join(tmpdir(), "kanade-project-profile-node-docs-"));
+		writeFileSync(join(root, "package.json"), '{"name":"demo"}');
+		writeFileSync(join(root, "README.md"), "# Demo\n");
+
+		try {
+			const profile = detectProjectProfile(root);
+			expect(profile.detectedStacks).toEqual(["node"]);
+			expect(profile.indicators).toContain("package.json");
+			expect(profile.indicators).not.toContain("README.md");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("returns unknown with no forced defaults for an empty project", () => {
 		const root = mkdtempSync(join(tmpdir(), "kanade-project-profile-unknown-"));
 		try {

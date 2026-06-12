@@ -122,6 +122,14 @@ npm run live:accept -- \
   --check "go test ./..."
 ```
 
+**Docs-only project:** pass explicit docs checks only when the repository provides them; otherwise inspect the changed Markdown links/formatting in the worktree diff.
+
+```bash
+npm run live:accept -- \
+  --prompt "Clarify the on-call escalation documentation..." \
+  --check "make docs-check"
+```
+
 Kanade (Node/TypeScript) repository-specific `isolation.prepareCommands` defaults can also be set globally as:
 
 ```yaml

@@ -19,6 +19,7 @@ const GO_MARKERS = ["go.mod", "go.sum"];
 const MAKE_MARKERS = ["Makefile", "makefile", "GNUmakefile"];
 const JUST_MARKERS = ["Justfile", "justfile"];
 const TASKFILE_MARKERS = ["Taskfile.yml", "Taskfile.yaml"];
+const DOCS_ONLY_MARKERS = ["README.md", "readme.md", "docs/", "doc/", "CONTRIBUTING.md", "CHANGELOG.md"];
 
 function exists(root: string, path: string): boolean {
 	return existsSync(join(root, path));
@@ -135,10 +136,17 @@ export function detectProjectProfile(root: string): ProjectProfileSnapshot {
 		pushUnique(suggestedCheckCommands, "task test (if task exists)");
 	}
 
+	if (detectedStacks.length === 0 && hasAny(profileRoot, DOCS_ONLY_MARKERS)) {
+		detectedStacks.push("docs-only");
+		pushMarkersIfPresent(profileRoot, DOCS_ONLY_MARKERS, indicators);
+	}
+
 	const summary =
 		detectedStacks.length === 0
 			? "No supported project markers were found. Treat checks as task-specific and do not force npm/Java/Python defaults."
-			: `Detected ${detectedStacks.join(", ")} markers at ${profileRoot}`;
+			: detectedStacks.includes("docs-only")
+				? `Detected docs-only markers at ${profileRoot}. Treat checks as documentation-specific; do not force language build defaults.`
+				: `Detected ${detectedStacks.join(", ")} markers at ${profileRoot}`;
 
 	return {
 		root: profileRoot,
