@@ -672,7 +672,7 @@ export class TaskManager {
 				taskId,
 				cwd: effectiveCwd,
 				agentModel: options.agent_model ?? this.config.defaults.agentModel ?? undefined,
-				roleModels: options.role_models,
+				roleModels: options.role_models ?? this.config.defaults.roleModels,
 				concurrency: options.concurrency ?? this.config.defaults.concurrency,
 				tokenBudget: options.token_budget ?? this.config.defaults.tokenBudget,
 				costBudget: options.cost_budget ?? this.config.defaults.costBudget,

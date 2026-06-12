@@ -17,12 +17,17 @@ export interface Args {
 	evidenceFile?: string;
 }
 
-export function parseArgs(argv: string[]): Args {
+export function parseArgs(
+	argv: string[],
+	defaults: Partial<Pick<Args, "baseUrl" | "cwd" | "timeoutMs" | "pollMs" | "authorModel" | "agentModel">> = {},
+): Args {
 	const args: Args = {
-		baseUrl: process.env.KANADE_URL ?? "http://127.0.0.1:7777",
-		cwd: process.cwd(),
-		timeoutMs: 30 * 60 * 1000,
-		pollMs: 10_000,
+		baseUrl: defaults.baseUrl ?? process.env.KANADE_URL ?? "http://127.0.0.1:7777",
+		cwd: defaults.cwd ?? process.cwd(),
+		timeoutMs: defaults.timeoutMs ?? 30 * 60 * 1000,
+		pollMs: defaults.pollMs ?? 10_000,
+		...(defaults.authorModel ? { authorModel: defaults.authorModel } : {}),
+		...(defaults.agentModel ? { agentModel: defaults.agentModel } : {}),
 		checks: [],
 		prepare: [],
 		prepareCommands: [],
@@ -62,7 +67,10 @@ export function parseArgs(argv: string[]): Args {
 
 export function usageAndExit(code: number): never {
 	console.log(`Usage:
-  npm run live:accept -- --prompt "..." --author-model gpt-5.4 --agent-model gpt-5.3-codex-spark --role-model reviewer=gpt-5.4 --base-url http://127.0.0.1:7781 --prepare-command "npm install" --check "npm run typecheck" --check "npm run lint"
+  npm run live:accept -- --prompt-file /tmp/task.txt
+  npm run live:accept -- --prompt "..." --check "npm test"
+
+Defaults are read from ~/.kanade/config.yml: defaults author/agent/role models, isolation.prepareCommands, and liveAcceptance prepare/checks/timeouts. CLI flags override config for one run.
 
 Options:
   --prompt TEXT              Generated task prompt

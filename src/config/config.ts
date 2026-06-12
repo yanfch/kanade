@@ -83,6 +83,8 @@ export interface DefaultsConfig {
 	authorModel: string | null;
 	/** Default model for workflow subagents. */
 	agentModel: string | null;
+	/** Per-role default subagent model overrides. */
+	roleModels: Record<string, string>;
 	tokenBudget: number;
 	/** Per-task cost limit in USD. Task pauses when exceeded. */
 	costBudget: number;
@@ -146,6 +148,15 @@ export interface CleanupConfig {
 	traceRetentionDays: number;
 }
 
+export interface LiveAcceptanceConfig {
+	/** Worktree-local pre-check commands run by scripts/live-acceptance.ts before checks. */
+	prepare: string[];
+	/** Worktree-local acceptance checks run by scripts/live-acceptance.ts after task completion. */
+	checks: string[];
+	timeoutMs: number;
+	pollMs: number;
+}
+
 export interface KanadeConfig {
 	paths: KanadePaths;
 	server: ServerConfig;
@@ -156,6 +167,7 @@ export interface KanadeConfig {
 	models: ModelsConfig;
 	debug: DebugConfig;
 	cleanup: CleanupConfig;
+	liveAcceptance: LiveAcceptanceConfig;
 	announcers: AnnouncerConfig[];
 }
 
@@ -243,6 +255,7 @@ function defaultConfig(paths: KanadePaths): KanadeConfig {
 		defaults: {
 			authorModel: null,
 			agentModel: null,
+			roleModels: {},
 			tokenBudget: 2_000_000,
 			costBudget: 5.0,
 			dailyCostBudget: 100.0,
@@ -269,6 +282,12 @@ function defaultConfig(paths: KanadePaths): KanadeConfig {
 			schedule: "0 * * * *",
 			journalRetentionDays: 30,
 			traceRetentionDays: 90,
+		},
+		liveAcceptance: {
+			prepare: [],
+			checks: [],
+			timeoutMs: 30 * 60 * 1000,
+			pollMs: 10_000,
 		},
 		announcers: [],
 	};

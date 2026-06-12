@@ -73,7 +73,7 @@ npx vitest run eval/scorer*     # Eval scorer
 
 Use the harness against a running Kanade server to submit a generated task and collect acceptance evidence before deciding whether to merge.
 
-`--prepare-command` (`options.prepare_commands` over the task API) and `--check` are user/project-chosen shell commands. They are not global defaults; each repository should pass commands relevant to its own stack.
+`--prepare-command` (`options.prepare_commands` over the task API) and `--check` are user/project-chosen shell commands. Each repository should use commands relevant to its own stack. The harness reads defaults from `~/.kanade/config.yml` (`defaults`, `isolation.prepareCommands`, and `liveAcceptance`), and CLI flags override those defaults for one run.
 
 ### Project-agnostic examples (non-exhaustive)
 
@@ -130,13 +130,28 @@ npm run live:accept -- \
   --check "make docs-check"
 ```
 
-Kanade (Node/TypeScript) repository-specific `isolation.prepareCommands` defaults can also be set globally as:
+Kanade (Node/TypeScript) repository-specific defaults can also be set in `~/.kanade/config.yml` so routine runs only need `npm run live:accept -- --prompt-file /tmp/task.txt`:
 
 ```yaml
+defaults:
+  authorModel: openai-codex:gpt-5.4
+  agentModel: xiaomi/mimo-v2.5-pro
+  roleModels:
+    developer: xiaomi/mimo-v2.5-pro
+    tester: xiaomi/mimo-v2.5-pro
+    reviewer: openai-codex:gpt-5.4
+
 isolation:
   prepareCommands:
     - "npm install"
-    - "npm run test"
+
+liveAcceptance:
+  prepare:
+    - "npm install"
+  checks:
+    - "npm run typecheck"
+    - "npm run lint"
+    - "npm test -- --exclude '.tmp/**'"
 ```
 
 ### Kanade self-development examples (Node/TypeScript, not universal defaults)
@@ -156,11 +171,12 @@ npm run live:accept -- \
 
 The report checks task status, semantic workflow validation, result status, worktree commit/dirty state, main workspace dirty state, usage, optional task-level worktree preparation commands, and optional local checks. A `finished` task is still only a candidate; inspect the generated workflow and worktree diff before merging.
 
-Each run writes a machine-readable evidence report to `<run_dir>/acceptance-evidence.json` by default, or to `--evidence-file PATH` when specified. The evidence report includes `schemaVersion`, `generatedAt`, the submitted prompt, task launch options, task response, generated workflow script, worktree diff stats/patches, usage, checks, and the final recommendation.
+Each run writes a machine-readable evidence report to `<run_dir>/acceptance-evidence.json` by default, or to `--evidence-file PATH` when specified. The evidence report includes `schemaVersion`, `generatedAt`, the submitted prompt, task launch options, task response, generated workflow script, worktree diff stats/patches, recent task events, usage, checks, and the final recommendation.
 
 Live acceptance now emits v2 evidence sections for review:
 - `workflowSummary`: regex-extracted ordered phases and helper call counts (`analyze`, `implement`, `reviewChange`, `continueImplementation`, `testChange`, `request_human`, `parallel`) plus `hasImplementation/hasReview/hasValidation/hasFixLoop`.
 - `worktreeDiffs`: per-worktree short `HEAD`, changed file list, diff stat, and diff patch from the worktree path. Each patch is deterministically truncated to `DIFF_PATCH_TRUNCATE_LIMIT` characters (default 4000) so the evidence file stays bounded. The `truncated` and `originalPatchLength` fields on each entry record whether truncation occurred and the full patch size before clipping, enabling audit.
+- `events`: recent task event stream entries captured from `/tasks/:id/events`, including workflow phase/log/agent events and terminal task events.
 - `evidence.usage`, `evidence.result`, and `evidence.worktrees`: includes zero-usage and at-least-one-worktree-commit flags.
 - recommendation logic: only `accept` when finished + semantic-ok + no failed validation + at least one clean worktree commit + clean main/worktrees + pass prepare/checks; `reject` for failed/aborted/needs_human, semantic invalid, dirty worktrees, or failed prepare/checks; otherwise `inspect`.
 

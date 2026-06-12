@@ -3,6 +3,7 @@ import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { loadConfig } from "../src/config/config.ts";
 import { validateSemanticWorkflowScript } from "../src/workflow-engine/runtime.ts";
 import { parseArgs, usageAndExit } from "./live-acceptance-args.ts";
 
@@ -103,6 +104,14 @@ interface TaskLaunchOptions {
 	prepare_commands?: string[];
 }
 
+interface TaskEvent {
+	id: number;
+	type: string;
+	taskId?: string;
+	data: unknown;
+	ts: number;
+}
+
 interface AcceptanceReport {
 	schemaVersion: 1;
 	generatedAt: string;
@@ -122,6 +131,7 @@ interface AcceptanceReport {
 	worktrees: WorktreeRow[];
 	workflowSummary: WorkflowSummary;
 	worktreeDiffs: WorktreeDiffEvidence[];
+	events: TaskEvent[];
 	evidence: AcceptanceEvidence;
 	git: {
 		mainDirty: boolean;
@@ -161,6 +171,85 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
 	const text = await response.text();
 	if (!response.ok) throw new Error(`${init?.method ?? "GET"} ${url} failed ${response.status}: ${text}`);
 	return JSON.parse(text) as T;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+	return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function formatEventTime(ts: number): string {
+	const d = new Date(ts);
+	const pad = (n: number, width = 2) => String(n).padStart(width, "0");
+	return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+}
+
+function compactJson(value: unknown, limit = 240): string {
+	const text = typeof value === "string" ? value : JSON.stringify(value);
+	if (!text) return "";
+	return text.length > limit ? `${text.slice(0, limit)}…` : text;
+}
+
+export function formatTaskEvent(event: TaskEvent): string {
+	const data = asRecord(event.data);
+	let detail = "";
+	if (event.type === "workflow.phase") detail = compactJson(data.phase ?? data.name ?? data);
+	else if (event.type === "workflow.log") detail = compactJson(data.message ?? data);
+	else if (event.type === "workflow.agent_started") detail = compactJson(data.label ?? data);
+	else if (event.type === "workflow.agent_completed") {
+		const label = compactJson(data.label ?? "agent");
+		detail = `${label} result=${data.result === null ? "null" : "ok"}`;
+	} else if (event.type.startsWith("task.")) detail = compactJson(data.error ?? data.status ?? data.result ?? data);
+	else detail = compactJson(data);
+	return `${formatEventTime(event.ts)}  ${event.type}${detail ? `  ${detail}` : ""}`;
+}
+
+function handleSseBlock(block: string, onEvent: (event: TaskEvent) => void): void {
+	const dataLines = block
+		.split(/\r?\n/)
+		.filter((line) => line.startsWith("data:"))
+		.map((line) => line.slice(5).trimStart());
+	if (dataLines.length === 0) return;
+	const raw = dataLines.join("\n");
+	if (!raw || raw === "{}") return;
+	try {
+		onEvent(JSON.parse(raw) as TaskEvent);
+	} catch {
+		// Ignore malformed keepalive/partial SSE frames.
+	}
+}
+
+function startEventMonitor(baseUrl: string, taskId: string, json: boolean): { events: TaskEvent[]; stop: () => void } {
+	const events: TaskEvent[] = [];
+	const controller = new AbortController();
+	void (async () => {
+		try {
+			const response = await fetch(`${baseUrl}/tasks/${taskId}/events`, { signal: controller.signal });
+			if (!response.ok || !response.body) throw new Error(`events stream failed ${response.status}`);
+			const reader = response.body.getReader();
+			const decoder = new TextDecoder();
+			let buffer = "";
+			while (!controller.signal.aborted) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				buffer += decoder.decode(value, { stream: true });
+				let split = buffer.search(/\r?\n\r?\n/);
+				while (split >= 0) {
+					const block = buffer.slice(0, split);
+					buffer = buffer.slice(buffer[split] === "\r" ? split + 4 : split + 2);
+					handleSseBlock(block, (event) => {
+						events.push(event);
+						if (!json) console.error(formatTaskEvent(event));
+					});
+					split = buffer.search(/\r?\n\r?\n/);
+				}
+			}
+		} catch (error) {
+			if (!controller.signal.aborted && !json) {
+				console.error(`events stream unavailable: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
+	})();
+	return { events, stop: () => controller.abort() };
 }
 
 function git(cwd: string, command: string): string {
@@ -631,6 +720,14 @@ function printNonJsonReport(report: AcceptanceReport): void {
 		}
 	}
 
+	console.log("\nRecent events:");
+	const recentEvents = report.events.slice(-12);
+	if (recentEvents.length === 0) {
+		console.log("  (none captured)");
+	} else {
+		for (const event of recentEvents) console.log(`  ${formatTaskEvent(event)}`);
+	}
+
 	console.log(`\nchecks cwd: ${report.checksCwd}`);
 	for (const step of report.prepare) console.log(`  prepare ${step.ok ? "ok" : "failed"}: ${step.command}`);
 	for (const check of report.checks) console.log(`  check ${check.ok ? "ok" : "failed"}: ${check.command}`);
@@ -646,16 +743,28 @@ function printNonJsonReport(report: AcceptanceReport): void {
 }
 
 async function main() {
-	const args = parseArgs(process.argv.slice(2));
+	const config = loadConfig();
+	const args = parseArgs(process.argv.slice(2), {
+		authorModel: config.defaults.authorModel ?? undefined,
+		agentModel: config.defaults.agentModel ?? undefined,
+		timeoutMs: config.liveAcceptance.timeoutMs,
+		pollMs: config.liveAcceptance.pollMs,
+	});
 	const prompt = args.promptFile ? readFileSync(args.promptFile, "utf8") : args.prompt;
 	if (!prompt?.trim()) usageAndExit(1);
+
+	const roleModels = Object.keys(args.roleModels).length ? args.roleModels : config.defaults.roleModels;
+	const prepareCommands = args.prepareCommands.length ? args.prepareCommands : (config.isolation.prepareCommands ?? []);
+	const prepareCommandsOption = prepareCommands.length ? { prepare_commands: prepareCommands } : {};
+	const localPrepare = args.prepare.length ? args.prepare : config.liveAcceptance.prepare;
+	const checksToRun = args.checks.length ? args.checks : config.liveAcceptance.checks;
 
 	const taskOptions: TaskLaunchOptions = {
 		cwd: args.cwd,
 		...(args.authorModel ? { author_model: args.authorModel } : {}),
 		...(args.agentModel ? { agent_model: args.agentModel } : {}),
-		...(Object.keys(args.roleModels).length ? { role_models: args.roleModels } : {}),
-		...(args.prepareCommands.length ? { prepare_commands: args.prepareCommands } : {}),
+		...(Object.keys(roleModels).length ? { role_models: roleModels } : {}),
+		...prepareCommandsOption,
 	};
 
 	const task = await requestJson<TaskResponse>(`${args.baseUrl}/tasks`, {
@@ -668,15 +777,23 @@ async function main() {
 		}),
 	});
 	if (!args.json) console.error(`created ${task.task_id}`);
+	const eventMonitor = startEventMonitor(args.baseUrl, task.task_id, args.json);
 
 	const deadline = Date.now() + args.timeoutMs;
 	let detail: TaskDetail | undefined;
-	while (Date.now() < deadline) {
-		detail = await requestJson<TaskDetail>(`${args.baseUrl}/tasks/${task.task_id}`);
-		if (!args.json) console.error(`status=${detail.task.status}`);
-		if (["finished", "failed", "aborted", "needs_human"].includes(detail.task.status)) break;
-		await new Promise((resolvePoll) => setTimeout(resolvePoll, args.pollMs));
+	try {
+		while (Date.now() < deadline) {
+			detail = await requestJson<TaskDetail>(`${args.baseUrl}/tasks/${task.task_id}`);
+			if (!args.json) console.error(`status=${detail.task.status}`);
+			if (["finished", "failed", "aborted", "needs_human"].includes(detail.task.status)) break;
+			await new Promise((resolvePoll) => setTimeout(resolvePoll, args.pollMs));
+		}
+		if (!detail) throw new Error("task was never fetched");
+		await new Promise((resolveFlush) => setTimeout(resolveFlush, 250));
+	} finally {
+		eventMonitor.stop();
 	}
+
 	if (!detail) throw new Error("task was never fetched");
 
 	const worktreesResponse = await requestJson<{ worktrees: WorktreeRow[] }>(
@@ -696,9 +813,9 @@ async function main() {
 
 	const parsedResult = parseResult(detail.task.result);
 	const checksCwd = worktreesResponse.worktrees[0]?.worktree_path ?? args.cwd;
-	const prepare = args.prepare.map((command) => runCheck(checksCwd, command));
+	const prepare = localPrepare.map((command) => runCheck(checksCwd, command));
 	const prepareOk = prepare.every((step) => step.ok);
-	const checks = prepareOk ? args.checks.map((check) => runCheck(checksCwd, check)) : [];
+	const checks = prepareOk ? checksToRun.map((check) => runCheck(checksCwd, check)) : [];
 	const checksOk = checks.every((step) => step.ok);
 	const worktreeDirty = worktreesResponse.worktrees.map((worktree) => {
 		const status = safeGit(worktree.worktree_path, "status --short");
@@ -748,6 +865,7 @@ async function main() {
 		worktrees: worktreesResponse.worktrees,
 		workflowSummary,
 		worktreeDiffs,
+		events: eventMonitor.events,
 		evidence: {
 			usage: {
 				hasUsageRecord: detail.usage !== undefined,

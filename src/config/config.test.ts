@@ -44,7 +44,38 @@ describe("loadConfig", () => {
 		expect(config.paths.worktreesDir).toBe(join(root, "worktrees"));
 		expect(config.isolation.worktreeBaseDir).toBe(config.paths.worktreesDir);
 		expect(config.isolation.prepareCommands).toEqual([]);
+		expect(config.defaults.roleModels).toEqual({});
+		expect(config.liveAcceptance).toEqual({ prepare: [], checks: [], timeoutMs: 30 * 60 * 1000, pollMs: 10_000 });
 		expect(existsSync(config.paths.worktreesDir)).toBe(true);
+	});
+
+	it("loads role and live acceptance defaults from yaml", () => {
+		const root = tempKanadeDir();
+		writeFileSync(
+			join(root, "config.yml"),
+			[
+				"defaults:",
+				"  roleModels:",
+				"    reviewer: openai-codex:gpt-5.4",
+				"liveAcceptance:",
+				"  prepare:",
+				"    - npm install",
+				"  checks:",
+				"    - npm run typecheck",
+				"  timeoutMs: 1234",
+				"  pollMs: 250",
+			].join("\n"),
+		);
+
+		const config = loadConfig();
+
+		expect(config.defaults.roleModels).toEqual({ reviewer: "openai-codex:gpt-5.4" });
+		expect(config.liveAcceptance).toEqual({
+			prepare: ["npm install"],
+			checks: ["npm run typecheck"],
+			timeoutMs: 1234,
+			pollMs: 250,
+		});
 	});
 
 	it("loads isolation.prepareCommands from yaml", () => {

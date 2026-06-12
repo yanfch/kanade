@@ -10,6 +10,7 @@ import {
 	classifyAcceptance,
 	collectWorktreeDiffEvidence,
 	extractWorkflowSummary,
+	formatTaskEvent,
 	isUsageZero,
 	parseNameStatusChangedFiles,
 	truncateDiffPatch,
@@ -38,6 +39,21 @@ describe("live-acceptance argument parsing", () => {
 		expect(args.evidenceFile).toBe(resolve("./tmp/evidence.json"));
 	});
 
+	it("uses scalar defaults while keeping repeatable args explicit", () => {
+		const args = parseArgs(["--prompt", "run this", "--check", "npm test"], {
+			authorModel: "openai-codex:gpt-5.4",
+			agentModel: "xiaomi/mimo-v2.5-pro",
+			timeoutMs: 1234,
+			pollMs: 250,
+		});
+
+		expect(args.authorModel).toBe("openai-codex:gpt-5.4");
+		expect(args.agentModel).toBe("xiaomi/mimo-v2.5-pro");
+		expect(args.timeoutMs).toBe(1234);
+		expect(args.pollMs).toBe(250);
+		expect(args.checks).toEqual(["npm test"]);
+	});
+
 	it("accepts repeatable role-model and run-level model flags", () => {
 		const args = parseArgs([
 			"--prompt",
@@ -49,6 +65,28 @@ describe("live-acceptance argument parsing", () => {
 		]);
 
 		expect(args.roleModels).toEqual({ reviewer: "gpt-5.4", dev: "gpt-5.3-codex-spark" });
+	});
+});
+
+describe("live-acceptance event formatting", () => {
+	it("formats terminal task and workflow events with a compact detail", () => {
+		expect(
+			formatTaskEvent({
+				id: 1,
+				type: "task.failed",
+				taskId: "T-1",
+				data: { error: "validation failed" },
+				ts: new Date("2026-06-12T07:21:22.467Z").getTime(),
+			}),
+		).toContain("task.failed  validation failed");
+		expect(
+			formatTaskEvent({
+				id: 2,
+				type: "workflow.agent_completed",
+				data: { label: "Validate", result: null },
+				ts: new Date("2026-06-12T07:21:18.376Z").getTime(),
+			}),
+		).toContain("workflow.agent_completed  Validate result=null");
 	});
 });
 

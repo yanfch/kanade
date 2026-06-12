@@ -70,8 +70,12 @@ models:
   inheritPiSettings: true
 
 defaults:
-  authorModel: gpt-5.4
-  agentModel: gpt-5.3-codex-spark
+  authorModel: openai-codex:gpt-5.4
+  agentModel: xiaomi/mimo-v2.5-pro
+  roleModels:
+    developer: xiaomi/mimo-v2.5-pro
+    tester: xiaomi/mimo-v2.5-pro
+    reviewer: openai-codex:gpt-5.4
   tokenBudget: 2000000
   concurrency: 16
   maxConcurrentTasks: 0        # 0 = unlimited
@@ -92,13 +96,23 @@ cleanup:
   schedule: "0 * * * *"
   journalRetentionDays: 30
 
+liveAcceptance:
+  prepare:
+    - "npm install"
+  checks:
+    - "npm run typecheck"
+    - "npm run lint"
+    - "npm test -- --exclude '.tmp/**'"
+  timeoutMs: 1800000
+  pollMs: 10000
+
 announcers: []                 # Event notifications (http_post, macos_notification, tts_local)
 ```
 
 ## Run command note
 
 Use `--prepare-command` on `kanade run` to pass task-level worktree preparation commands (repeatable), which are sent to `/tasks` as `options.prepare_commands`.
-In the live acceptance script, `--prepare` still means local pre-check commands (harness-only).
+In the live acceptance script, `--prepare` still means local pre-check commands (harness-only). `npm run live:accept -- --prompt-file /tmp/task.txt` uses `defaults`, `isolation.prepareCommands`, and `liveAcceptance` from config; CLI flags override config defaults.
 
 ## Tests
 
