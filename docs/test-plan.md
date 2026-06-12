@@ -14,7 +14,7 @@
 | workflow-agent persistence | 7 | 持久化、filter、sanitize |
 | workflow-agent retry | 4 | 重试、abort、exhausted |
 | cleanup-scheduler | 13 | worktree/journal/trace 清理 |
-| announcer | 15 | dispatch、fallback、probe |
+| announcer | 16 | dispatch、fallback、probe、Tsutae TTS payload |
 | eval/scorer | 17 | completion/correctness/efficiency |
 
 ### 集成测试 (204)

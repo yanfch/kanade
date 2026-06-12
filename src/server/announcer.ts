@@ -45,6 +45,8 @@ export function renderTemplate(template: string, event: ServerEvent): string {
 }
 
 /** Built-in handlers for each announcer type */
+const DEFAULT_TSUTAE_SPEAK_URL = "http://127.0.0.1:1338/v1/speak";
+
 const builtinHandlers: Record<string, AnnounceHandler> = {
 	http_post: async (ctx) => {
 		if (!ctx.config.url) return false;
@@ -85,13 +87,33 @@ const builtinHandlers: Record<string, AnnounceHandler> = {
 			return false;
 		}
 	},
+
+	tsutae_tts: async (ctx) => {
+		const url = ctx.config.url ?? DEFAULT_TSUTAE_SPEAK_URL;
+		const res = await fetch(url, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				text: ctx.renderedBody,
+				source: ctx.config.source ?? "kanade",
+				interrupt: ctx.config.interrupt ?? true,
+				...(ctx.config.voice ? { voice: ctx.config.voice } : {}),
+				...(ctx.config.rate !== undefined ? { rate: ctx.config.rate } : {}),
+				...(ctx.config.presentationStyle ? { presentationStyle: ctx.config.presentationStyle } : {}),
+			}),
+			signal: AbortSignal.timeout(ctx.config.timeout_ms ?? 5000),
+		});
+		return res.ok;
+	},
 };
 
-/** Built-in probe for http_post health check */
+/** Built-in probe for http_post and tsutae_tts health checks. */
 const builtinProbe: ProbeHandler = async (config) => {
-	if (!config.url) return false;
+	const url =
+		config.type === "tsutae_tts" ? new URL("/health", config.url ?? DEFAULT_TSUTAE_SPEAK_URL).toString() : config.url;
+	if (!url) return false;
 	try {
-		const res = await fetch(config.url, { signal: AbortSignal.timeout(3000) });
+		const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
 		return res.ok;
 	} catch {
 		return false;
@@ -136,10 +158,10 @@ export class AnnouncerRegistry {
 		this.probeHandler = handler;
 	}
 
-	/** Probe auto-enabled http_post announcers. Call once on startup. */
+	/** Probe auto-enabled http_post/tsutae_tts announcers. Call once on startup. */
 	async probe(): Promise<void> {
 		for (const [name, config] of this.announcers) {
-			if (config.enabled !== "auto" || config.type !== "http_post") continue;
+			if (config.enabled !== "auto" || !["http_post", "tsutae_tts"].includes(config.type)) continue;
 			try {
 				const ok = await this.probeHandler(config);
 				if (!ok) {

@@ -124,8 +124,8 @@ export interface PersistFilter {
 
 export interface AnnouncerConfig {
 	name: string;
-	type: "http_post" | "macos_notification" | "tts_local";
-	/** URL for http_post type */
+	type: "http_post" | "macos_notification" | "tts_local" | "tsutae_tts";
+	/** URL for http_post, or Tsutae /v1/speak URL for tsutae_tts. */
 	url?: string;
 	/** Events to listen for (e.g. task.finished, task.needs_human) */
 	events: string[];
@@ -137,8 +137,18 @@ export interface AnnouncerConfig {
 	enabled: boolean | "auto";
 	/** Name of fallback announcer if this one fails */
 	fallback?: string;
-	/** Timeout for http_post requests (ms). Default: 5000 */
+	/** Timeout for http_post/tsutae_tts requests (ms). Default: 5000 */
 	timeout_ms?: number;
+	/** Tsutae TTS source label. Default: "kanade". */
+	source?: string;
+	/** Tsutae TTS voice override. */
+	voice?: string;
+	/** Tsutae TTS rate override. */
+	rate?: number;
+	/** Interrupt current Tsutae playback. Default: true. */
+	interrupt?: boolean;
+	/** Tsutae speaking UI style. */
+	presentationStyle?: "standard" | "minimal";
 }
 
 export interface CleanupConfig {

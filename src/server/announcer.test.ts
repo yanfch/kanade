@@ -167,16 +167,55 @@ describe("AnnouncerRegistry", () => {
 		expect(handler).not.toHaveBeenCalled();
 	});
 
-	it("probe() checks http_post announcers with auto enabled", async () => {
+	it("posts rendered speech text to Tsutae", async () => {
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true } as Response);
+		try {
+			const registry = new AnnouncerRegistry([
+				{
+					name: "voice",
+					type: "tsutae_tts",
+					url: "http://127.0.0.1:1338/v1/speak",
+					events: ["task.finished"],
+					body_template: "任务 {{task.id}} 完成",
+					source: "kanade-test",
+					interrupt: false,
+					presentationStyle: "minimal",
+					enabled: true,
+				},
+			]);
+
+			const result = await registry.dispatch(fakeEvent());
+
+			expect(result).toEqual({ dispatched: true, announcer: "voice" });
+			expect(fetchMock).toHaveBeenCalledWith(
+				"http://127.0.0.1:1338/v1/speak",
+				expect.objectContaining({
+					method: "POST",
+					body: JSON.stringify({
+						text: "任务 T-0001 完成",
+						source: "kanade-test",
+						interrupt: false,
+						presentationStyle: "minimal",
+					}),
+				}),
+			);
+		} finally {
+			fetchMock.mockRestore();
+		}
+	});
+
+	it("probe() checks http_post and tsutae_tts announcers with auto enabled", async () => {
 		const probe = vi.fn().mockResolvedValue(true);
 		const registry = new AnnouncerRegistry([
 			{ name: "auto", type: "http_post", url: "http://localhost/health", events: ["task.finished"], enabled: "auto" },
+			{ name: "voice", type: "tsutae_tts", events: ["task.finished"], enabled: "auto" },
 			{ name: "manual", type: "http_post", url: "http://localhost/other", events: ["task.finished"], enabled: true },
 		]);
 		registry.registerProbe(probe);
 
 		await registry.probe();
 		expect(probe).toHaveBeenCalledWith(expect.objectContaining({ name: "auto" }));
+		expect(probe).toHaveBeenCalledWith(expect.objectContaining({ name: "voice" }));
 		expect(probe).not.toHaveBeenCalledWith(expect.objectContaining({ name: "manual" }));
 	});
 

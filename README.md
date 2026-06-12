@@ -106,7 +106,19 @@ liveAcceptance:
   timeoutMs: 1800000
   pollMs: 10000
 
-announcers: []                 # Event notifications (http_post, macos_notification, tts_local)
+announcers: []                 # Event notifications (http_post, macos_notification, tts_local, tsutae_tts)
+```
+
+Example Tsutae task-complete TTS announcer:
+
+```yaml
+announcers:
+  - name: tsutae
+    type: tsutae_tts
+    url: http://127.0.0.1:1338/v1/speak
+    events: [task.finished]
+    body_template: "Kanade task {{task.id}} finished."
+    enabled: true
 ```
 
 ## Run command note
