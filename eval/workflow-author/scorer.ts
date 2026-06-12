@@ -30,7 +30,8 @@ const KNOWN_KINDS = [
 	"request_human",
 ] as const;
 
-const WORKFLOW_CALL_NAMES = new Set<string>([...KNOWN_KINDS, "agent"]);
+const RAW_API_CALL_NAMES = ["agent", "pipeline"] as const;
+const WORKFLOW_CALL_NAMES = new Set<string>([...KNOWN_KINDS, ...RAW_API_CALL_NAMES]);
 const LOW_LEVEL_OPTION_KEYS = new Set(["isolation", "reuseBranch", "agentType", "branch", "command", "testCommand"]);
 const ITERATE_ARG_KEYS = new Set(["instructions", "previousResult", "previousTaskId", "reuseBranch"]);
 
@@ -90,6 +91,27 @@ const STACK_VALIDATION_POLICIES: Record<string, ValidationPolicy> = {
 			/inspect(ed|ing) (?:Cargo\.toml|README|docs?)/i,
 		],
 	},
+	"docs-only": {
+		allowedCommandHints: [/\bmarkdownlint\b/i, /\bvale\b/i, /\bmake\s+docs?-?check\b/i],
+		disallowNodeDefaults: [
+			/\bnpm\b/i,
+			/\bnpx\b/i,
+			/\byarn\b/i,
+			/\bpnpm\b/i,
+			/\btypecheck\b/i,
+			/\b(?:\.\/)?mvnw?\b/i,
+			/\bgradle(?:w)?\b/i,
+			/\bpytest\b/i,
+			/\bcargo\s+test\b/i,
+			/\bgo\s+test\b/i,
+		],
+		requiredFallbackTerms: [
+			/docs?-only/i,
+			/markdown/i,
+			/links?\/?formatting/i,
+			/no (?:automated|reliable|clear) (?:command|checks?)/i,
+		],
+	},
 };
 
 type AnyNode = Node & {
@@ -101,7 +123,7 @@ interface ScriptSignals {
 	callCounts: Map<string, number>;
 	lowLevelControlCount: number;
 	iterateArgAccessCount: number;
-	validationGuidance: string[];
+	workflowGuidance: string[];
 }
 
 export function scoreAuthorOutput(input: {
@@ -161,9 +183,24 @@ export function scoreAuthorOutput(input: {
 		);
 	}
 
-	const validationSignal = scoreValidationGuidance(input.evalCase.projectStack, signals.validationGuidance);
+	const guidanceText = signals.workflowGuidance.join("\n");
+	const validationSignal = scoreValidationGuidance(input.evalCase.projectStack, signals.workflowGuidance);
 	score += validationSignal.delta;
 	notes.push(...validationSignal.notes);
+
+	for (const requiredPattern of input.evalCase.expectations.requiredGuidancePatterns ?? []) {
+		if (!requiredPattern.test(guidanceText)) {
+			score -= 0.18;
+			notes.push(`missing required guidance pattern: ${requiredPattern}`);
+		}
+	}
+
+	for (const forbiddenPattern of input.evalCase.expectations.forbiddenGuidancePatterns ?? []) {
+		if (forbiddenPattern.test(guidanceText)) {
+			score -= 0.2;
+			notes.push(`uses forbidden guidance pattern: ${forbiddenPattern}`);
+		}
+	}
 
 	const hasHumanGate = (signals.callCounts.get("request_human") ?? 0) > 0;
 	if (input.evalCase.expectations.requiresHumanGate && !hasHumanGate) {
@@ -176,9 +213,11 @@ export function scoreAuthorOutput(input: {
 			score -= 0.25;
 			notes.push("semantic prompt did not use semantic step helpers");
 		}
-		if ((signals.callCounts.get("agent") ?? 0) > 0) {
-			score -= 0.15;
-			notes.push("semantic prompt fell back to raw agent() API");
+		for (const rawCallName of RAW_API_CALL_NAMES) {
+			if ((signals.callCounts.get(rawCallName) ?? 0) > 0) {
+				score -= 0.15;
+				notes.push(`semantic prompt fell back to raw ${rawCallName}() API`);
+			}
 		}
 		if (signals.iterateArgAccessCount > 0) {
 			score -= 0.12;
@@ -214,7 +253,7 @@ function analyzeScriptStructure(script: string): ScriptSignals {
 		callCounts: new Map<string, number>(),
 		lowLevelControlCount: 0,
 		iterateArgAccessCount: 0,
-		validationGuidance: [],
+		workflowGuidance: [],
 	};
 
 	try {
@@ -226,11 +265,10 @@ function analyzeScriptStructure(script: string): ScriptSignals {
 				const callName = getCalleeName(node.callee);
 				if (callName && WORKFLOW_CALL_NAMES.has(callName)) {
 					signals.callCounts.set(callName, (signals.callCounts.get(callName) ?? 0) + 1);
-					const optionsArg = Array.isArray(node.arguments) ? node.arguments[1] : undefined;
+					const args = Array.isArray(node.arguments) ? node.arguments : [];
+					const optionsArg = args[1];
 					signals.lowLevelControlCount += countLowLevelOptionKeys(optionsArg);
-					if (callName === "testChange") {
-						signals.validationGuidance.push(...extractGuidanceTexts(optionsArg));
-					}
+					signals.workflowGuidance.push(...extractTextValues(args[0]), ...extractGuidanceTexts(optionsArg));
 				}
 			}
 

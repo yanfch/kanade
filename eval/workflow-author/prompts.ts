@@ -19,5 +19,8 @@ export function buildEvalPrompt(input: { evalCase: AuthorEvalCase; variant: Prom
 		return buildLegacyWorkflowAuthorPrompt(taskBlock);
 	}
 
-	return buildWorkflowAuthorPrompt(taskBlock, { complexityHint: input.evalCase.complexity });
+	return buildWorkflowAuthorPrompt(taskBlock, {
+		complexityHint: input.evalCase.complexity,
+		projectProfile: input.evalCase.projectProfile,
+	});
 }

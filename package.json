@@ -18,6 +18,7 @@
 		"test:watch": "vitest",
 		"eval": "tsx eval/run.ts --mock",
 		"eval:author": "tsx eval/workflow-author/run.ts",
+		"eval:workflow-author": "tsx eval/workflow-author/run.ts",
 		"live:accept": "tsx scripts/live-acceptance.ts",
 		"lint": "biome check src/ scripts/",
 		"lint:fix": "biome check --write src/",
@@ -56,8 +57,6 @@
 		"vitest": "^2.1.0"
 	},
 	"lint-staged": {
-		"*.ts": [
-			"biome check --write --no-errors-on-unmatched"
-		]
+		"*.ts": ["biome check --write --no-errors-on-unmatched"]
 	}
 }

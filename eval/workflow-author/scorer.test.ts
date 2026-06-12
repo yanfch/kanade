@@ -48,6 +48,24 @@ describe("workflow author scorer", () => {
 		expect(result.notes.join(" | ")).toContain("validation guidance used Node defaults for non-java-maven case");
 	});
 
+	it("penalizes non-Node npm defaults even when they are placed in implement prompts", () => {
+		const result = scoreAuthorOutput({
+			evalCase: getCase("J1"),
+			variant: "semantic-no-read",
+			script: [
+				"export const meta = { name: 'java_npm_implement', description: 'Bad java implement guidance' };",
+				"phase('Implement');",
+				"const implementation = await implement('Refactor Java error handling, add tests, and run npm test.', { role: 'developer' });",
+				"phase('Validate');",
+				"const validation = await testChange(implementation, { role: 'tester', guidance: 'Report whether validation passed.' });",
+				"return { implementation, validation };",
+			].join("\n"),
+		});
+
+		expect(result.passed).toBe(false);
+		expect(result.notes.join(" | ")).toContain("validation guidance used Node defaults for non-java-maven case");
+	});
+
 	it("rewards Java workflows that use project-appropriate Maven commands", () => {
 		const result = scoreAuthorOutput({
 			evalCase: getCase("J1"),
@@ -95,6 +113,39 @@ describe("workflow author scorer", () => {
 		expect(result.notes.join(" | ")).toContain("validation guidance uses project-appropriate command for python");
 	});
 
+	it("rewards Gradle, Rust, and Go project command guidance", () => {
+		const cases = [
+			{
+				id: "G1",
+				command: "./gradlew test",
+				note: "validation guidance uses project-appropriate command for java-gradle",
+			},
+			{ id: "R1", command: "cargo test", note: "validation guidance uses project-appropriate command for rust" },
+			{ id: "GO1", command: "go test ./...", note: "validation guidance uses project-appropriate command for go" },
+		];
+
+		for (const item of cases) {
+			const result = scoreAuthorOutput({
+				evalCase: getCase(item.id),
+				variant: "semantic-no-read",
+				script: [
+					`export const meta = { name: '${item.id.toLowerCase()}_commands', description: 'Stack guidance' };`,
+					"phase('Implement');",
+					"const implementation = await implement('Make the focused code change and update regression tests.', { role: 'developer' });",
+					"phase('Validate');",
+					"const validation = await testChange(implementation, {",
+					"  role: 'tester',",
+					`  guidance: 'Run ${item.command} and report pass/fail clearly.',`,
+					"});",
+					"return { implementation, validation };",
+				].join("\n"),
+			});
+
+			expect(result.score).toBeGreaterThan(0.85);
+			expect(result.notes.join(" | ")).toContain(item.note);
+		}
+	});
+
 	it("accepts fallback Python guidance when command is not discoverable", () => {
 		const result = scoreAuthorOutput({
 			evalCase: getCase("P1"),
@@ -115,6 +166,53 @@ describe("workflow author scorer", () => {
 
 		expect(result.score).toBeGreaterThan(0.7);
 		expect(result.notes.join(" | ")).not.toContain("validation guidance used Node defaults for non-python case");
+	});
+
+	it("penalizes docs-only workflows that assume language build commands", () => {
+		const result = scoreAuthorOutput({
+			evalCase: getCase("D1"),
+			variant: "semantic-no-read",
+			script: [
+				"export const meta = { name: 'docs_npm', description: 'Bad docs guidance' };",
+				"phase('Implement');",
+				"const implementation = await implement('Clarify Markdown docs and then run npm test.', { role: 'developer' });",
+				"return { implementation };",
+			].join("\n"),
+		});
+
+		expect(result.passed).toBe(false);
+		expect(result.notes.join(" | ")).toContain("uses forbidden guidance pattern: /\\bnpm\\b/i");
+	});
+
+	it("enforces explicit validation instructions over advisory profile suggestions", () => {
+		const result = scoreAuthorOutput({
+			evalCase: getCase("X1"),
+			variant: "semantic-no-read",
+			script: [
+				"export const meta = { name: 'docs_make', description: 'Explicit docs validation' };",
+				"phase('Implement');",
+				"const implementation = await implement('Update README wording only and validate with make docs-check; do not run npm.', { role: 'developer' });",
+				"return { implementation };",
+			].join("\n"),
+		});
+
+		expect(result.passed).toBe(true);
+		expect(result.notes.join(" | ")).not.toContain("missing required guidance pattern");
+		expect(result.notes.join(" | ")).not.toContain("uses forbidden guidance pattern");
+	});
+
+	it("penalizes raw pipeline() usage in semantic workflows", () => {
+		const result = scoreAuthorOutput({
+			evalCase: getCase("M3"),
+			variant: "semantic-no-read",
+			script: [
+				"export const meta = { name: 'bad_pipeline', description: 'Bad raw pipeline usage' };",
+				"return await pipeline(['prompt cleanup'], async (item) => implement(item, { role: 'developer' }));",
+			].join("\n"),
+		});
+
+		expect(result.passed).toBe(false);
+		expect(result.notes.join(" | ")).toContain("semantic prompt fell back to raw pipeline() API");
 	});
 
 	it("penalizes authored iterate branches in semantic workflows", () => {
