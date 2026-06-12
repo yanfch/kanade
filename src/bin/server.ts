@@ -4,9 +4,8 @@ import { configureHttpDispatcher } from "../net/http-dispatcher.ts";
 import { startServer } from "../server/index.ts";
 import { createMockSessionFactory } from "../server/test-session-mock.ts";
 
-configureHttpDispatcher();
-
 const config = loadConfig();
+configureHttpDispatcher(config.network);
 const mockSessionText = process.env.KANADE_MOCK_SESSION_TEXT?.trim();
 const sessionFactory = mockSessionText ? createMockSessionFactory({ text: mockSessionText }).createSession : undefined;
 const server = startServer(config, sessionFactory);

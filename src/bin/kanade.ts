@@ -747,13 +747,15 @@ async function cmdHealth() {
 async function cmdStart(args: ReturnType<typeof parseArgs>["values"]) {
 	const dir = (args.dir as string | undefined) ?? "~/.kanade";
 	const port = args.port as string | undefined;
+	const daemon = Boolean(args.daemon);
 
-	const { mkdirSync, writeFileSync, existsSync } = await import("node:fs");
+	const { mkdirSync, writeFileSync, existsSync, openSync, closeSync } = await import("node:fs");
 	const { join: pathJoin } = await import("node:path");
 
 	const resolvedDir = dir.replace(/^~/, process.env.HOME ?? "");
 	if (!existsSync(resolvedDir)) mkdirSync(resolvedDir, { recursive: true });
 	mkdirSync(pathJoin(resolvedDir, "db"), { recursive: true });
+	mkdirSync(pathJoin(resolvedDir, "logs"), { recursive: true });
 
 	const portNum = port ?? "7777";
 	const configPath = pathJoin(resolvedDir, "config.yml");
@@ -778,6 +780,23 @@ async function cmdStart(args: ReturnType<typeof parseArgs>["values"]) {
 		projectRoot = pathJoin(projectRoot, "..");
 	}
 	const tsxPath = pathJoin(projectRoot, "node_modules", ".bin", "tsx");
+	if (daemon) {
+		const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+		const logPath = pathJoin(resolvedDir, "logs", `server-${stamp}.log`);
+		const fd = openSync(logPath, "a");
+		const child = spawn(tsxPath, ["src/bin/server.ts"], {
+			cwd: projectRoot,
+			env: { ...process.env, KANADE_DIR: resolvedDir },
+			detached: true,
+			stdio: ["ignore", fd, fd],
+		});
+		child.unref();
+		closeSync(fd);
+		console.log(pc.green(`✔ Server started in background: ${pc.bold(String(child.pid))}`));
+		console.log(pc.dim(`  Log: ${logPath}`));
+		return;
+	}
+
 	const child = spawn(tsxPath, ["src/bin/server.ts"], {
 		cwd: projectRoot,
 		env: { ...process.env, KANADE_DIR: resolvedDir },
@@ -809,6 +828,7 @@ async function main() {
 			"role-model": { type: "string", multiple: true },
 			"prepare-command": { type: "string", multiple: true },
 			prompt: { type: "string", short: "p" },
+			daemon: { type: "boolean" },
 		},
 		strict: false,
 		allowPositionals: true,
@@ -872,7 +892,7 @@ ${pc.bold("kanade")} — ${pc.dim("Multi-agent workflow runtime CLI")}
 ${pc.bold("Usage:")}  kanade <command> [options]
 
 ${pc.bold("Commands:")}
-  ${pc.cyan("start")}         ${pc.dim("--dir <path> [--port <num>]")}     Start isolated server
+  ${pc.cyan("start")}         ${pc.dim("[--dir <path>] [--port <num>] [--daemon]")} Start server
   ${pc.cyan("health")}        ${pc.dim("")}                              Check server status
   ${pc.cyan("ls")}            ${pc.dim("[--status <state>] [--json]")}     List tasks
   ${pc.cyan("show")}          ${pc.dim("<task-id> [--json]")}             Task details
@@ -898,6 +918,7 @@ ${pc.bold("Options:")}
   ${pc.dim("--follow, -f")}     Follow events after run
 
 ${pc.bold("Isolation:")}
+  ${pc.dim("kanade start --daemon")}
   ${pc.dim("kanade start --dir /tmp/proj-a --port 7778")}
   ${pc.dim("kanade --url http://127.0.0.1:7778 ls")}
 `);

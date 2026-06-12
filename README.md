@@ -8,8 +8,9 @@ JavaScript scripts orchestrating multiple AI agents. Three sources (saved / inli
 
 ```bash
 npm install
-npm run dev           # Server on http://127.0.0.1:7777
-npm test              # 294 tests
+kanade start --daemon # Server on http://127.0.0.1:7777, logs under ~/.kanade/logs
+kanade health
+npm test              # Unit/integration tests
 npm run eval          # Eval framework (mock mode)
 ```
 
@@ -68,6 +69,13 @@ models:
   authPath: null
   modelsPath: null
   inheritPiSettings: true
+
+network:
+  httpProxy: null      # e.g. http://127.0.0.1:1087
+  httpsProxy: null
+  allProxy: null       # e.g. socks5://127.0.0.1:1080
+  noProxy: null
+  httpIdleTimeoutMs: 300000
 
 defaults:
   authorModel: openai-codex:gpt-5.4

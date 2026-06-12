@@ -110,6 +110,19 @@ export interface ModelsConfig {
 	disableSubagentCompaction: boolean;
 }
 
+export interface NetworkConfig {
+	/** HTTP proxy used by server-side fetch/LLM SDK requests when env vars are not set. */
+	httpProxy: string | null;
+	/** HTTPS proxy used by server-side fetch/LLM SDK requests when env vars are not set. */
+	httpsProxy: string | null;
+	/** Fallback proxy used by server-side fetch/LLM SDK requests when env vars are not set. */
+	allProxy: string | null;
+	/** Comma-separated hosts that should bypass proxy. */
+	noProxy: string | null;
+	/** Undici body/header idle timeout in milliseconds. */
+	httpIdleTimeoutMs: number;
+}
+
 export interface DebugConfig {
 	persistSubagents: boolean;
 	persistFilter: PersistFilter | null;
@@ -175,6 +188,7 @@ export interface KanadeConfig {
 	tracing: TracingConfig;
 	defaults: DefaultsConfig;
 	models: ModelsConfig;
+	network: NetworkConfig;
 	debug: DebugConfig;
 	cleanup: CleanupConfig;
 	liveAcceptance: LiveAcceptanceConfig;
@@ -281,6 +295,13 @@ function defaultConfig(paths: KanadePaths): KanadeConfig {
 			modelsPath: null,
 			inheritPiSettings: true,
 			disableSubagentCompaction: true,
+		},
+		network: {
+			httpProxy: null,
+			httpsProxy: null,
+			allProxy: null,
+			noProxy: null,
+			httpIdleTimeoutMs: 300_000,
 		},
 		debug: {
 			persistSubagents: false,

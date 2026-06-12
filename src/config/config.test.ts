@@ -45,8 +45,40 @@ describe("loadConfig", () => {
 		expect(config.isolation.worktreeBaseDir).toBe(config.paths.worktreesDir);
 		expect(config.isolation.prepareCommands).toEqual([]);
 		expect(config.defaults.roleModels).toEqual({});
+		expect(config.network).toEqual({
+			httpProxy: null,
+			httpsProxy: null,
+			allProxy: null,
+			noProxy: null,
+			httpIdleTimeoutMs: 300_000,
+		});
 		expect(config.liveAcceptance).toEqual({ prepare: [], checks: [], timeoutMs: 30 * 60 * 1000, pollMs: 10_000 });
 		expect(existsSync(config.paths.worktreesDir)).toBe(true);
+	});
+
+	it("loads network proxy defaults from yaml", () => {
+		const root = tempKanadeDir();
+		writeFileSync(
+			join(root, "config.yml"),
+			[
+				"network:",
+				"  httpProxy: http://127.0.0.1:1087",
+				"  httpsProxy: http://127.0.0.1:1087",
+				"  allProxy: socks5://127.0.0.1:1080",
+				"  noProxy: localhost,127.0.0.1",
+				"  httpIdleTimeoutMs: 12345",
+			].join("\n"),
+		);
+
+		const config = loadConfig();
+
+		expect(config.network).toEqual({
+			httpProxy: "http://127.0.0.1:1087",
+			httpsProxy: "http://127.0.0.1:1087",
+			allProxy: "socks5://127.0.0.1:1080",
+			noProxy: "localhost,127.0.0.1",
+			httpIdleTimeoutMs: 12345,
+		});
 	});
 
 	it("loads role and live acceptance defaults from yaml", () => {
