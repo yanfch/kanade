@@ -75,6 +75,7 @@ export class TaskManager {
 	private readonly controllers = new Map<string, AbortController>();
 	private readonly workflowStore: WorkflowStore;
 	private readonly author: WorkflowAuthor;
+	private readonly usingImplicitStubAuthor: boolean;
 	private readonly isolation: IsolationManager;
 	/** Exposed for CleanupScheduler access. */
 	readonly isolationManager: IsolationManager;
@@ -100,6 +101,7 @@ export class TaskManager {
 		this.createSession = sessionFactory;
 		this.workflowStore = new WorkflowStore(config.paths.workflowsDir);
 		this.author = author ?? this.resolveAuthor();
+		this.usingImplicitStubAuthor = !author && this.author instanceof StubWorkflowAuthor;
 		this.isolation = new IsolationManager(
 			store,
 			{
@@ -121,6 +123,7 @@ export class TaskManager {
 
 	async generateWorkflow(prompt: string, options?: TaskOptions): Promise<GenerateWorkflowResult> {
 		if (!prompt?.trim()) throw new AppError("prompt is required", 400);
+		this.assertGeneratedAuthorAvailable(options);
 		const workspaceRoot = this.resolveProfileRoot(options?.cwd);
 		const script = await this.author.generate(prompt, { model: options?.author_model, workspaceRoot });
 		validateSemanticWorkflowScript(script);
@@ -143,6 +146,7 @@ export class TaskManager {
 	}
 
 	private createGenerated(prompt: string, args: unknown, options: TaskOptions | undefined): CreateTaskResult {
+		this.assertGeneratedAuthorAvailable(options);
 		const taskId = this.allocateTaskId();
 		const runDir = join(this.config.paths.runsDir, taskId);
 		mkdirSync(runDir, { recursive: true });
@@ -892,25 +896,42 @@ export class TaskManager {
 		};
 	}
 
+	private realAuthorRequired(options?: TaskOptions): boolean {
+		return Boolean(
+			options?.author_model ||
+				this.config.defaults.authorModel ||
+				this.config.models.mode === "inherit-pi" ||
+				this.config.models.mode === "pi" ||
+				this.config.models.agentDir ||
+				this.config.models.piAgentDir ||
+				this.config.models.authPath ||
+				this.config.models.modelsPath,
+		);
+	}
+
+	private assertGeneratedAuthorAvailable(options?: TaskOptions): void {
+		if (!this.usingImplicitStubAuthor || !this.realAuthorRequired(options)) return;
+		throw new AppError(
+			"Workflow author is not configured; refusing to generate workflow with StubWorkflowAuthor.",
+			500,
+		);
+	}
+
 	private resolveAuthor(): WorkflowAuthor {
-		// Use stub when no auth is configured (tests, offline mode).
-		// Real LLM author is used when pi auth is available.
+		// Use stub only for tests/offline mode where no real author configuration is requested.
+		// Generated tasks that request/configure a real author are rejected before generation if this stub is selected.
 		const agentDir = this.resolveAgentDir();
 		if (!agentDir) return new StubWorkflowAuthor();
-		try {
-			const persistDir = this.config.debug.persistSubagents
-				? join(this.config.paths.runsDir, "debug", "workflow-author")
-				: undefined;
-			return new LlmWorkflowAuthor({
-				agentDir,
-				authPath: this.config.models.authPath ?? undefined,
-				modelsPath: this.config.models.modelsPath ?? undefined,
-				model: this.config.defaults.authorModel ?? undefined,
-				persistDir,
-			});
-		} catch {
-			return new StubWorkflowAuthor();
-		}
+		const persistDir = this.config.debug.persistSubagents
+			? join(this.config.paths.runsDir, "debug", "workflow-author")
+			: undefined;
+		return new LlmWorkflowAuthor({
+			agentDir,
+			authPath: this.config.models.authPath ?? undefined,
+			modelsPath: this.config.models.modelsPath ?? undefined,
+			model: this.config.defaults.authorModel ?? undefined,
+			persistDir,
+		});
 	}
 }
 

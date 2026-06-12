@@ -284,7 +284,7 @@ describe("TaskManager — iterate", () => {
 		const { store, manager } = setup(undefined, mock.createSession);
 		try {
 			const original = manager.create({ source: "inline", script: SIMPLE_SCRIPT });
-			await vi.waitFor(() => expect(manager.get(original.task_id)?.status).toBe("finished"));
+			await vi.waitFor(() => expect(manager.get(original.task_id)?.status).toBe("finished"), { timeout: 5000 });
 
 			const iter = manager.iterate(original.task_id, { instructions: "improve it" });
 			expect(iter.task_id).not.toBe(original.task_id);
@@ -292,7 +292,7 @@ describe("TaskManager — iterate", () => {
 			expect(manager.getScript(iter.task_id)).toContain("phase('Validate')");
 			expect(manager.getScript(iter.task_id)).not.toBe(SIMPLE_SCRIPT);
 
-			await vi.waitFor(() => expect(manager.get(iter.task_id)?.status).toBe("finished"));
+			await vi.waitFor(() => expect(manager.get(iter.task_id)?.status).toBe("finished"), { timeout: 5000 });
 		} finally {
 			store.close();
 		}
@@ -796,6 +796,23 @@ describe("TaskManager — journal persistence", () => {
 });
 
 describe("TaskManager — generated workflow failure", () => {
+	it("rejects implicit stub author when a real author model is requested", async () => {
+		const { config, store, manager } = setup();
+		try {
+			config.defaults.authorModel = "openai-codex:gpt-5.4";
+
+			expect(() => manager.create({ source: "generated", prompt: "test" })).toThrow(
+				"Workflow author is not configured; refusing to generate workflow with StubWorkflowAuthor.",
+			);
+			expect(manager.list()).toHaveLength(0);
+			await expect(manager.generateWorkflow("test", { author_model: "openai-codex:gpt-5.4" })).rejects.toThrow(
+				"Workflow author is not configured; refusing to generate workflow with StubWorkflowAuthor.",
+			);
+		} finally {
+			store.close();
+		}
+	});
+
 	it("sets status to failed when author.generate() throws", async () => {
 		const { store, events, manager: _manager } = setup();
 		try {

@@ -211,16 +211,16 @@ describe("CLI — run", () => {
 		expect(out).toContain(projectRoot);
 	});
 
-	it("passes split model routing options and task-level prepare commands for generated runs", async () => {
+	it("passes subagent routing options and task-level prepare commands for generated runs", async () => {
 		const created = cliJson(
-			"run --prompt 'return {}' --author-model gpt-5.4 --agent-model gpt-5.3-codex-spark --role-model reviewer=gpt-5.4 --role-model developer=gpt-5.3-codex-spark --prepare-command 'echo prepare-one' --prepare-command 'echo prepare-two'",
+			"run --prompt 'return {}' --agent-model gpt-5.3-codex-spark --role-model reviewer=gpt-5.4 --role-model developer=gpt-5.3-codex-spark --prepare-command 'echo prepare-one' --prepare-command 'echo prepare-two'",
 		) as { task_id: string };
 		expect(created.task_id).toBeTruthy();
 		await waitForTask(created.task_id);
 
 		const body = cliJson(`show ${created.task_id}`) as { task: { options: string } };
 		const options = JSON.parse(body.task.options);
-		expect(options.author_model).toBe("gpt-5.4");
+		expect(options.author_model).toBeUndefined();
 		expect(options.agent_model).toBe("gpt-5.3-codex-spark");
 		expect(options.role_models).toEqual({ reviewer: "gpt-5.4", developer: "gpt-5.3-codex-spark" });
 		expect(options.prepare_commands).toEqual(["echo prepare-one", "echo prepare-two"]);
