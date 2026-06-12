@@ -1,4 +1,4 @@
-# AGENT.md
+# AGENTS.md
 
 > Guide for AI agents working on kanade.
 
