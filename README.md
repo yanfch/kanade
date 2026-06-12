@@ -117,7 +117,7 @@ announcers:
     type: tsutae_tts
     url: http://127.0.0.1:1338/v1/speak
     events: [task.finished]
-    body_template: "Kanade task {{task.id}} finished."
+    body_template: "Task {{task.id}} finished."
     enabled: true
 ```
 
