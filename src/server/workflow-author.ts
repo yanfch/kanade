@@ -9,6 +9,7 @@ import {
 	createAgentSession,
 	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
+import { type Node, parse } from "acorn";
 import type { TSchema } from "typebox";
 import {
 	createStructuredOutputTool,
@@ -138,17 +139,92 @@ export function validateWorkflowScript(script: string | undefined): string | und
 	}
 }
 
+export function validateGeneratedWorkflowScript(script: string | undefined): string | undefined {
+	if (!script?.trim()) return "Workflow script is empty.";
+	try {
+		const { body } = parseWorkflowScript(script);
+		validateSemanticWorkflowScript(script);
+		if (!body.trim()) return "Generated workflow script has no executable body.";
+		if (!containsSemanticHelperCall(body)) {
+			return "Generated workflow must call at least one semantic helper: analyze(), implement(), reviewChange(), continueImplementation(), testChange(), request_human(), or parallel().";
+		}
+		return undefined;
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
+	}
+}
+
+const SEMANTIC_HELPER_NAMES = new Set([
+	"analyze",
+	"implement",
+	"reviewChange",
+	"continueImplementation",
+	"testChange",
+	"request_human",
+	"parallel",
+]);
+
+type AnyNode = Node & {
+	body?: AnyNode[];
+	callee?: AnyNode & { name?: string };
+	arguments?: AnyNode[];
+	property?: AnyNode;
+	object?: AnyNode;
+	expression?: AnyNode;
+	[key: string]: unknown;
+};
+
+function containsSemanticHelperCall(body: string): boolean {
+	try {
+		const ast = parse(body, {
+			ecmaVersion: "latest",
+			sourceType: "module",
+			allowAwaitOutsideFunction: true,
+			allowReturnOutsideFunction: true,
+		}) as unknown as AnyNode;
+
+		let found = false;
+		const visit = (node: AnyNode) => {
+			if (found) return;
+			if (node.type === "CallExpression" && node.callee?.type === "Identifier") {
+				if (node.callee.name && SEMANTIC_HELPER_NAMES.has(node.callee.name)) {
+					found = true;
+					return;
+				}
+			}
+			for (const key of Object.keys(node)) {
+				const value = node[key];
+				if (value && typeof value === "object") {
+					if (Array.isArray(value)) {
+						for (const child of value) {
+							if (child && typeof child === "object" && "type" in child) {
+								visit(child as AnyNode);
+							}
+						}
+					} else if ("type" in value) {
+						visit(value as AnyNode);
+					}
+				}
+			}
+		};
+		visit(ast);
+		return found;
+	} catch {
+		return false;
+	}
+}
+
 export function selectWorkflowScript(
 	capturedScript: string | undefined,
 	messages: unknown[],
 ): { script?: string; validationError?: string } {
 	const captured = capturedScript?.trim();
 	if (captured) {
-		const capturedError = validateWorkflowScript(captured);
+		const capturedError = validateGeneratedWorkflowScript(captured);
 		if (!capturedError) return { script: captured };
 		const extractedScript = extractScript(messages);
 		if (extractedScript) {
-			const extractedError = validateWorkflowScript(extractedScript);
+			const extractedError = validateGeneratedWorkflowScript(extractedScript);
 			if (!extractedError) return { script: extractedScript };
 			return { validationError: extractedError };
 		}
@@ -156,7 +232,7 @@ export function selectWorkflowScript(
 	}
 	const extractedScript = extractScript(messages);
 	if (!extractedScript) return { validationError: "No valid workflow script candidate found." };
-	const extractedError = validateWorkflowScript(extractedScript);
+	const extractedError = validateGeneratedWorkflowScript(extractedScript);
 	if (!extractedError) return { script: extractedScript };
 	return { validationError: extractedError };
 }

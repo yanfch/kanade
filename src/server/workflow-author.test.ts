@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildWorkflowAuthorFailureMessage, selectWorkflowScript, validateWorkflowScript } from "./workflow-author.ts";
+import {
+	buildWorkflowAuthorFailureMessage,
+	selectWorkflowScript,
+	validateGeneratedWorkflowScript,
+	validateWorkflowScript,
+} from "./workflow-author.ts";
 
 const VALID_SEMANTIC_SCRIPT =
 	"export const meta = { name: 'valid_workflow', description: 'A valid semantic workflow' }\n" +
@@ -71,5 +76,115 @@ describe("workflow author helpers", () => {
 		expect(failureMessage).toContain("3 attempts");
 		expect(failureMessage).toContain("raw agent() is not allowed");
 		expect(failureMessage).toContain("msgs=");
+	});
+});
+
+describe("validateGeneratedWorkflowScript", () => {
+	it("accepts a script with implement() call", () => {
+		const script =
+			"export const meta = { name: 'valid', description: 'Valid' }\n" +
+			"return await implement('Do the change', { role: 'developer' })";
+		expect(validateGeneratedWorkflowScript(script)).toBeUndefined();
+	});
+
+	it("accepts a script with analyze() call", () => {
+		const script =
+			"export const meta = { name: 'valid', description: 'Valid' }\n" + "return await analyze('Plan the change')";
+		expect(validateGeneratedWorkflowScript(script)).toBeUndefined();
+	});
+
+	it("accepts a script with reviewChange() call", () => {
+		const script =
+			"export const meta = { name: 'valid', description: 'Valid' }\n" +
+			"return await reviewChange({}, { role: 'reviewer' })";
+		expect(validateGeneratedWorkflowScript(script)).toBeUndefined();
+	});
+
+	it("accepts a script with continueImplementation() call", () => {
+		const script =
+			"export const meta = { name: 'valid', description: 'Valid' }\n" +
+			"return await continueImplementation({}, { role: 'developer', feedback: {} })";
+		expect(validateGeneratedWorkflowScript(script)).toBeUndefined();
+	});
+
+	it("accepts a script with testChange() call", () => {
+		const script =
+			"export const meta = { name: 'valid', description: 'Valid' }\n" +
+			"return await testChange({}, { role: 'tester' })";
+		expect(validateGeneratedWorkflowScript(script)).toBeUndefined();
+	});
+
+	it("accepts a script with request_human() call", () => {
+		const script =
+			"export const meta = { name: 'valid', description: 'Valid' }\n" +
+			"return await request_human({ title: 'Approve?' })";
+		expect(validateGeneratedWorkflowScript(script)).toBeUndefined();
+	});
+
+	it("accepts a script with parallel() call", () => {
+		const script =
+			"export const meta = { name: 'valid', description: 'Valid' }\n" +
+			"return await parallel([() => implement('a'), () => implement('b')])";
+		expect(validateGeneratedWorkflowScript(script)).toBeUndefined();
+	});
+
+	it("rejects empty script", () => {
+		expect(validateGeneratedWorkflowScript(undefined)).toContain("empty");
+		expect(validateGeneratedWorkflowScript("")).toContain("empty");
+		expect(validateGeneratedWorkflowScript("   ")).toContain("empty");
+	});
+
+	it("rejects script with no executable body", () => {
+		const script = "export const meta = { name: 'empty', description: 'Empty' }";
+		expect(validateGeneratedWorkflowScript(script)).toContain("no executable body");
+	});
+
+	it("rejects stub workflow with only return {}", () => {
+		const script = "export const meta = { name: 'generated', description: 'Generated workflow' }\n" + "return {}";
+		expect(validateGeneratedWorkflowScript(script)).toContain("must call at least one semantic helper");
+	});
+
+	it("rejects script with only return true", () => {
+		const script = "export const meta = { name: 'stub', description: 'Stub' }\n" + "return true";
+		expect(validateGeneratedWorkflowScript(script)).toContain("must call at least one semantic helper");
+	});
+
+	it("rejects script with only variable declarations", () => {
+		const script = "export const meta = { name: 'stub', description: 'Stub' }\n" + "const x = 1";
+		expect(validateGeneratedWorkflowScript(script)).toContain("must call at least one semantic helper");
+	});
+
+	it("rejects script with raw agent() call (semantic validation still applies)", () => {
+		const script =
+			"export const meta = { name: 'bad', description: 'Bad' }\n" + "return await agent('do work', { label: 'test' })";
+		expect(validateGeneratedWorkflowScript(script)).toContain("raw agent() is not allowed");
+	});
+
+	it("rejects script with missing metadata (parse validation still applies)", () => {
+		const script = "export const meta = { name: 'invalid' }";
+		expect(validateGeneratedWorkflowScript(script)).toContain("meta.description");
+	});
+
+	it("rejects script where helper name appears in string literal", () => {
+		const script = "export const meta = { name: 'stub', description: 'Stub' }\n" + "return 'implement('";
+		expect(validateGeneratedWorkflowScript(script)).toContain("must call at least one semantic helper");
+	});
+
+	it("rejects script where helper name appears in comment", () => {
+		const script = "export const meta = { name: 'stub', description: 'Stub' }\n" + "// implement()\n" + "return {}";
+		expect(validateGeneratedWorkflowScript(script)).toContain("must call at least one semantic helper");
+	});
+
+	it("rejects script where helper name appears as property access", () => {
+		const script =
+			"export const meta = { name: 'stub', description: 'Stub' }\n" +
+			"const obj = { implement: () => {} };\n" +
+			"return obj.implement()";
+		expect(validateGeneratedWorkflowScript(script)).toContain("must call at least one semantic helper");
+	});
+
+	it("rejects script where helper name appears in template literal", () => {
+		const script = "export const meta = { name: 'stub', description: 'Stub' }\n" + "return `implement()`";
+		expect(validateGeneratedWorkflowScript(script)).toContain("must call at least one semantic helper");
 	});
 });
