@@ -774,26 +774,48 @@ function assert(label: string, condition: boolean, detail?: string) {
 	);
 }
 
-// ---------- Test 13: Settings action opens config ----------
+// ---------- Test 13: Settings is global, not task action ----------
 {
-	console.log("\nTest 13: Settings action opens config overlay");
+	console.log("\nTest 13: Settings opens globally and is not in task actions");
 	customCalls.length = 0;
 	const panel = await createPanel();
 	panel.handleInput("/");
 	for (const ch of "T-0001") panel.handleInput(ch);
 	panel.handleInput("\r");
 	await delay(150);
-	// Find and select Settings in the action menu
 	const actionCall = customCalls.at(-1);
 	if (!actionCall) {
 		assert("action menu opened for settings test", false);
 	} else {
 		const overlayComp = actionCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
 		const menuText = strip(overlayComp.render(80).join("\n"));
-		assert("Settings in action menu", menuText.includes("Settings"), `menu: ${menuText.slice(0, 300)}`);
-		// Navigate down to Settings (it's after agent detail and refresh)
+		assert("Settings not in task action menu", !menuText.includes("Settings"), `menu: ${menuText.slice(0, 300)}`);
 		overlayComp.handleInput?.("\x1b");
 		actionCall.resolve(null);
+		await delay(100);
+	}
+
+	customCalls.length = 0;
+	panel.handleInput("s");
+	await delay(150);
+	const settingsCall = customCalls.at(-1);
+	if (!settingsCall) {
+		assert("global settings overlay opened", false);
+	} else {
+		const settingsComp = settingsCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
+		const settingsText = strip(settingsComp.render(90).join("\n"));
+		assert(
+			"global settings overlay opened",
+			settingsText.includes("Global Kanade Settings"),
+			`settings: ${settingsText.slice(0, 300)}`,
+		);
+		assert(
+			"settings overlay shows config",
+			settingsText.includes("Config:"),
+			`settings: ${settingsText.slice(0, 300)}`,
+		);
+		settingsComp.handleInput?.("\x1b");
+		settingsCall.resolve(null);
 	}
 }
 

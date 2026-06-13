@@ -237,7 +237,7 @@ type TaskListView = {
 	query: string;
 };
 
-type Tab = "Map" | "Agent" | "Events" | "Worktree" | "Usage" | "Result" | "Review" | "Settings";
+type Tab = "Map" | "Agent" | "Events" | "Worktree" | "Usage" | "Result" | "Review";
 
 type Counts = { running: number; needsHuman: number; failed: number; finished: number };
 
@@ -257,16 +257,14 @@ type ConfirmDialog = {
 	onConfirm: () => Promise<void>;
 };
 
-const KANADE_SPINNER: readonly string[] = [];
 const DEFAULT_BASE_URL = "http://127.0.0.1:7777";
-const TABS: readonly Tab[] = ["Map", "Agent", "Events", "Worktree", "Usage", "Result", "Review", "Settings"];
+const TABS: readonly Tab[] = ["Map", "Agent", "Events", "Worktree", "Usage", "Result", "Review"];
 const PANEL_BODY_ROWS = 32;
 const MAX_VISIBLE_TASKS = 10;
 const MAX_VISIBLE_NARROW_TASKS = 5;
 const MAX_VISIBLE_AGENT_EVENTS = 3;
 const ESC = String.fromCharCode(27);
 const CLEAR_CELL = "\u00A0";
-const BRaille_PATTERN = /[⣾⣽⣻⢿⡿⣟⣯⣷]/;
 const ANSI_SGR_PREFIX = new RegExp(`^${ESC}\\[[0-9;]*m`);
 const ANSI_SGR_GLOBAL = new RegExp(`${ESC}\\[[0-9;]*m`, "g");
 
@@ -400,7 +398,7 @@ async function fetchTaskEvents(taskId: string, timeoutMs = 4000): Promise<TaskEv
 	try {
 		const res = await fetch(`${kanadeBaseUrl()}/tasks/${encodeURIComponent(taskId)}/events`, {
 			signal: controller.signal,
-		headers: { Accept: "text/event-stream" },
+			headers: { Accept: "text/event-stream" },
 		});
 		if (!res.ok || !res.body) return [];
 		return await collectSSEEvents(res.body, timer);
@@ -479,7 +477,9 @@ function summarizeTaskEvent(type: string, data: unknown): string {
 		case "task.aborted":
 			return "aborted";
 		case "task.needs_human":
-			return sanitizeText(`needs human${d.request ? ` · ${String((d.request as Record<string, unknown>)?.title ?? "").slice(0, 60)}` : ""}`);
+			return sanitizeText(
+				`needs human${d.request ? ` · ${String((d.request as Record<string, unknown>)?.title ?? "").slice(0, 60)}` : ""}`,
+			);
 		case "task.human_resolved":
 			return "human resolved";
 		case "task.merged":
@@ -506,7 +506,8 @@ function computeAgentTiming(detail: TaskDetail): AgentTiming {
 	const sessionEvents = detail.sessionEvents ?? [];
 	const taskEvents = detail.taskEvents ?? [];
 	const startedAt = task?.started_at ?? task?.created_at;
-	const elapsedMs = task?.finished_at && startedAt ? task.finished_at - startedAt : startedAt ? Date.now() - startedAt : undefined;
+	const elapsedMs =
+		task?.finished_at && startedAt ? task.finished_at - startedAt : startedAt ? Date.now() - startedAt : undefined;
 	const lastActivityTs = findLastActivityTs(sessionEvents, taskEvents);
 	const lastActivityAt = lastActivityTs ?? startedAt;
 	const idleMs = lastActivityAt ? Date.now() - lastActivityAt : undefined;
@@ -576,7 +577,12 @@ function summarizeSessionEntries(entries: SessionEntry[]): SessionEvent[] {
 		const time = formatTime(entry.timestamp);
 		const rawTs = typeof entry.timestamp === "number" ? entry.timestamp : undefined;
 		if (entry.type === "model_change") {
-			events.push({ time, rawTs, label: "model", summary: `${entry.provider ?? "provider"}/${entry.modelId ?? "model"}` });
+			events.push({
+				time,
+				rawTs,
+				label: "model",
+				summary: `${entry.provider ?? "provider"}/${entry.modelId ?? "model"}`,
+			});
 			continue;
 		}
 		if (entry.type !== "message") continue;
@@ -795,7 +801,8 @@ class AgentDetailOverlay implements Component {
 			if (timing.startedAt) parts.push(`started ${relativeTime(timing.startedAt)}`);
 			if (typeof timing.elapsedMs === "number") parts.push(`elapsed ${formatDuration(timing.elapsedMs)}`);
 			if (timing.lastActivityAt) parts.push(`last activity ${relativeTime(timing.lastActivityAt)}`);
-			if (typeof timing.idleMs === "number" && timing.idleMs > 5000) parts.push(`idle ${formatDuration(timing.idleMs)}`);
+			if (typeof timing.idleMs === "number" && timing.idleMs > 5000)
+				parts.push(`idle ${formatDuration(timing.idleMs)}`);
 			if (parts.length > 0) body.push(this.theme.fg("dim", parts.join(" · ")));
 		}
 		const sessions = this.detail?.sessions ?? [];
@@ -876,7 +883,6 @@ class KanadePanel implements Component {
 	private details = new Map<string, TaskDetail>();
 	private cachedWidth?: number;
 	private cachedLines?: string[];
-	private spinnerIndex = 0;
 	private closed = false;
 	private actionInProgress = false;
 	private detailLoadSeq = 0;
@@ -1025,6 +1031,10 @@ class KanadePanel implements Component {
 			void this.openAgentDetail();
 			return;
 		}
+		if (data === "s" || data === "S") {
+			void this.openSettings();
+			return;
+		}
 		if (data === "e" || data === "E") {
 			const task = this.selectedTask();
 			if (task?.status === "failed" || task?.status === "aborted") this.activeTab = "Worktree";
@@ -1119,7 +1129,6 @@ class KanadePanel implements Component {
 		if (task.status !== "running" && task.status !== "created")
 			items.push({ key: "iterate", label: "Iterate with instructions" });
 		items.push({ key: "agent", label: "Open agent detail" });
-		items.push({ key: "settings", label: "Settings" });
 		items.push({ key: "refresh", label: "Refresh" });
 		return dedupeActions(items);
 	}
@@ -1222,10 +1231,6 @@ class KanadePanel implements Component {
 		}
 		if (item.key === "agent") {
 			await this.openAgentDetail();
-			return;
-		}
-		if (item.key === "settings") {
-			await this.openSettings();
 			return;
 		}
 		await this.runPanelAction(async () => {
@@ -1441,7 +1446,6 @@ class KanadePanel implements Component {
 		else if (this.activeTab === "Usage") lines.push(...this.usageLines(detail, width));
 		else if (this.activeTab === "Result") lines.push(...this.resultLines(task, width));
 		else if (this.activeTab === "Review") lines.push(...this.reviewLines(task, detail, width));
-		else if (this.activeTab === "Settings") lines.push(...this.settingsLines(width));
 		return lines;
 	}
 
@@ -1561,7 +1565,11 @@ class KanadePanel implements Component {
 			);
 			const isCurrent = snapshot.currentPhase === phase || phaseAgents.some((agent) => agent.status === "running");
 			const hasError = phaseAgents.some((agent) => agent.status === "error");
-			const icon = hasError ? this.color("error", "✖") : isCurrent ? this.color("accent", "current") : this.color("success", "✓");
+			const icon = hasError
+				? this.color("error", "✖")
+				: isCurrent
+					? this.color("accent", "current")
+					: this.color("success", "✓");
 			const title = isCurrent ? this.color("accent", phase) : phase;
 			lines.push(`${icon} ${index + 1} ${truncatePlain(title, width - 6)}`);
 			const summary = summarizePhase(phaseAgents);
@@ -1681,13 +1689,14 @@ class KanadePanel implements Component {
 		}
 		if (taskEvents.length > 0) {
 			for (const event of taskEvents.slice(-14)) {
-				const icon = event.type.includes("failed") || event.type.includes("error")
-					? this.color("error", "!")
-					: event.type.includes("finished") || event.type.includes("merged")
-					? this.color("success", "✓")
-					: event.type.includes("running") || event.type.includes("started")
-					? this.color("accent", "active")
-					: this.color("dim", "·");
+				const icon =
+					event.type.includes("failed") || event.type.includes("error")
+						? this.color("error", "!")
+						: event.type.includes("finished") || event.type.includes("merged")
+							? this.color("success", "✓")
+							: event.type.includes("running") || event.type.includes("started")
+								? this.color("accent", "active")
+								: this.color("dim", "·");
 				lines.push(truncateAnsi(`${event.time} ${icon} ${event.type} ${event.summary}`, width));
 			}
 		} else {
@@ -1828,40 +1837,22 @@ class KanadePanel implements Component {
 		return lines;
 	}
 
-	private settingsLines(_width: number): string[] {
-		return [this.color("muted", "Settings"), this.color("dim", "Loading config...")];
-	}
-
 	private async openSettings(): Promise<void> {
 		this.lastNotice = undefined;
 		this.actionInProgress = true;
 		this.invalidateAndRender();
 		try {
 			const config = await getJson<Record<string, unknown>>("/config");
-			const lines: string[] = [this.color("muted", "Kanade Settings"), ""];
-			lines.push(
-				this.color("dim", `Config: ${String((config.paths as Record<string, unknown>)?.configFile ?? "unknown")}`),
-			);
-			lines.push(rule(60, this.theme));
-
-			// Show important sections
-			const sections = ["defaults", "isolation", "merge", "debug", "cleanup"];
-			for (const section of sections) {
-				const sectionData = config[section] as Record<string, unknown> | undefined;
-				if (!sectionData) continue;
-				lines.push("");
-				lines.push(this.color("accent", section.toUpperCase()));
-				for (const [key, value] of Object.entries(sectionData)) {
-					const display = typeof value === "object" ? JSON.stringify(value) : String(value);
-					lines.push(truncateAnsi(`  ${this.color("dim", key)}: ${display}`, width - 2));
-				}
-			}
-
 			await this.ui.custom<void>(
 				(_tui, theme, _keybindings, done) => ({
-					render: () => box(lines, Math.min(width, 80), "Kanade Settings", theme),
+					render: (renderWidth: number) => {
+						const boxWidth = Math.min(Math.max(72, renderWidth), 100);
+						const contentWidth = Math.max(40, boxWidth - 4);
+						const lines = this.settingsOverlayLines(config, contentWidth);
+						return box(fitBodyRows(lines, 18, 24), boxWidth, "Kanade Settings", theme);
+					},
 					handleInput: (data: string) => {
-						if (isKey(data, "escape", "\x1b") || isKey(data, "ctrl+c") || data === "q") done();
+						if (isKey(data, "escape", "\x1b") || isKey(data, "ctrl+c") || data === "q" || data === "Q") done();
 					},
 				}),
 				{
@@ -1876,6 +1867,29 @@ class KanadePanel implements Component {
 			this.actionInProgress = false;
 			this.invalidateAndRender();
 		}
+	}
+
+	private settingsOverlayLines(config: Record<string, unknown>, width: number): string[] {
+		const lines: string[] = [this.color("muted", "Global Kanade Settings"), ""];
+		lines.push(
+			this.color("dim", `Config: ${String((config.paths as Record<string, unknown>)?.configFile ?? "unknown")}`),
+		);
+		lines.push(rule(Math.min(60, width), this.theme));
+
+		const sections = ["defaults", "isolation", "merge", "debug", "cleanup"];
+		for (const section of sections) {
+			const sectionData = config[section] as Record<string, unknown> | undefined;
+			if (!sectionData) continue;
+			lines.push("");
+			lines.push(this.color("accent", section.toUpperCase()));
+			for (const [key, value] of Object.entries(sectionData)) {
+				const display = typeof value === "object" ? JSON.stringify(value) : String(value);
+				lines.push(truncateAnsi(`  ${this.color("dim", key)}: ${display}`, width));
+			}
+		}
+		lines.push("");
+		lines.push(this.color("dim", "Esc/q close · editing will be added after validation flow"));
+		return lines;
 	}
 
 	private headerLine(width: number): string {
@@ -1906,7 +1920,10 @@ class KanadePanel implements Component {
 				: "/ search";
 		const closeHint = this.searchQuery.length > 0 && !this.searchMode ? "q close" : "Esc close";
 		return truncateAnsi(
-			this.color("dim", `↑↓ select   ${action}   Tab preview   f agent   ${searchHint}   r refresh   ${closeHint}`),
+			this.color(
+				"dim",
+				`↑↓ select   ${action}   Tab preview   f agent   s settings   ${searchHint}   r refresh   ${closeHint}`,
+			),
 			width,
 		);
 	}
@@ -1972,17 +1989,7 @@ class KanadePanel implements Component {
 		return `${this.color("accent", "running")} `;
 	}
 
-	private tickSpinner(): void {
-		this.spinnerIndex++;
-	}
-
-	private spin(): string {
-		return this.color("accent", this.spinnerFrame());
-	}
-
-	private spinnerFrame(): string {
-		return "running";
-	}
+	private tickSpinner(): void {}
 
 	private color(kind: "accent" | "success" | "warning" | "error" | "muted" | "dim", text: string): string {
 		return this.theme.fg(kind, text);
