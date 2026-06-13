@@ -349,28 +349,39 @@ async function patchJson<T>(path: string, body: Record<string, unknown>, timeout
 	}
 }
 
-async function fetchOverview(): Promise<KanadeOverview> {
+async function fetchTasksOverview(previousInbox: InboxRequest[] = []): Promise<KanadeOverview> {
 	try {
-		await getJson<{ ok: true }>("/health", 2000);
-		const [tasksBody, inboxBody] = await Promise.all([
-			getJson<{ tasks: KanadeTask[] }>("/tasks"),
-			getJson<{ requests: InboxRequest[] }>("/inbox"),
-		]);
+		const tasksBody = await getJson<{ tasks: KanadeTask[] }>("/tasks");
 		return {
 			connected: true,
 			baseUrl: kanadeBaseUrl(),
 			tasks: sortTasks(tasksBody.tasks ?? []),
-			inbox: inboxBody.requests ?? [],
+			inbox: previousInbox,
 		};
 	} catch (error) {
 		return {
 			connected: false,
 			baseUrl: kanadeBaseUrl(),
 			tasks: [],
-			inbox: [],
+			inbox: previousInbox,
 			error: error instanceof Error ? error.message : String(error),
 		};
 	}
+}
+
+async function fetchInbox(): Promise<InboxRequest[]> {
+	try {
+		const inboxBody = await getJson<{ requests: InboxRequest[] }>("/inbox", 2000);
+		return inboxBody.requests ?? [];
+	} catch {
+		return [];
+	}
+}
+
+async function fetchOverview(): Promise<KanadeOverview> {
+	const overview = await fetchTasksOverview();
+	if (!overview.connected) return overview;
+	return { ...overview, inbox: await fetchInbox() };
 }
 
 async function fetchTaskDetail(taskId: string, includeSession = false, includeEvents = false): Promise<TaskDetail> {
@@ -1220,11 +1231,20 @@ class KanadePanel implements Component {
 		this.tickSpinner();
 		this.loading = true;
 		this.invalidateAndRender();
-		this.overview = await fetchOverview();
+		this.overview = await fetchTasksOverview(this.overview.inbox);
 		this.selected = Math.min(this.selected, Math.max(0, this.filteredTasks().tasks.length - 1));
 		this.loading = false;
 		this.invalidateAndRender();
-		this.scheduleSelectedDetailLoad(120);
+		this.scheduleSelectedDetailLoad(180);
+		void this.refreshInbox();
+	}
+
+	private async refreshInbox(): Promise<void> {
+		if (!this.overview.connected || this.closed) return;
+		const inbox = await fetchInbox();
+		if (this.closed) return;
+		this.overview = { ...this.overview, inbox };
+		this.invalidateAndRender();
 	}
 
 	render(width: number): string[] {
