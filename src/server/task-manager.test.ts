@@ -905,6 +905,160 @@ describe("TaskManager — startup recovery", () => {
 			store.close();
 		}
 	});
+
+	it("recovers all stale tasks beyond the default 100-row limit", () => {
+		const { store, manager } = setup();
+		try {
+			const total = 120;
+			for (let i = 0; i < total; i++) {
+				const id = `RB-${String(i).padStart(4, "0")}`;
+				store.insertTask({
+					id,
+					workflow_source: "inline",
+					workflow_name: null,
+					workflow_path: `/tmp/${id}/workflow.js`,
+					status: i % 2 === 0 ? "created" : "running",
+					base_repo: null,
+					base_branch: "main",
+					cwd: "/tmp",
+					created_at: Date.now() - i,
+					started_at: i % 2 === 0 ? null : Date.now(),
+					finished_at: null,
+					error: null,
+					options: "{}",
+					result: null,
+				});
+			}
+
+			const count = manager.recoverStaleTasks();
+			expect(count).toBe(total);
+		} finally {
+			store.close();
+		}
+	});
+
+	it("reports recovered task worktrees as preserved via list()", () => {
+		const { store, manager } = setup();
+		try {
+			store.insertTask({
+				id: "RP-0001",
+				workflow_source: "inline",
+				workflow_name: null,
+				workflow_path: "/tmp/RP-0001/workflow.js",
+				status: "running",
+				base_repo: null,
+				base_branch: "main",
+				cwd: "/tmp",
+				created_at: Date.now(),
+				started_at: Date.now(),
+				finished_at: null,
+				error: null,
+				options: "{}",
+				result: null,
+			});
+			store.insertWorktree({
+				id: "wt-RP-0001",
+				task_id: "RP-0001",
+				label: "implement",
+				branch: "kanade/RP-0001",
+				base_branch: "main",
+				worktree_path: "/tmp/RP-0001-wt",
+				status: "active",
+				base_repo: "/tmp/repo",
+				created_at: Date.now(),
+				last_used_at: Date.now(),
+				finished_at: null,
+				merge_commit: null,
+			});
+
+			manager.recoverStaleTasks();
+
+			const list = manager.list();
+			const entry = list.find((r) => r.id === "RP-0001");
+			expect(entry).toBeTruthy();
+			expect(entry!.worktree_summary.status).toBe("preserved");
+		} finally {
+			store.close();
+		}
+	});
+});
+
+describe("TaskManager — respond guard", () => {
+	it("rejects respond for a failed task", () => {
+		const { store, manager } = setup();
+		try {
+			store.insertTask({
+				id: "RG-0001",
+				workflow_source: "inline",
+				workflow_name: null,
+				workflow_path: "/tmp/RG-0001/workflow.js",
+				status: "failed",
+				base_repo: null,
+				base_branch: "main",
+				cwd: "/tmp",
+				created_at: Date.now(),
+				started_at: Date.now(),
+				finished_at: Date.now(),
+				error: "recovered",
+				options: "{}",
+				result: null,
+			});
+			store.insertNeedsHuman({
+				request_id: "req-RG-0001",
+				task_id: "RG-0001",
+				cache_key: "",
+				payload: JSON.stringify({ prompt: "approve?" }),
+				status: "pending",
+				created_at: Date.now(),
+				resolved_at: null,
+				response: null,
+			});
+
+			expect(() => manager.respond("RG-0001", "req-RG-0001", { decision: "approve" })).toThrow(
+				/Cannot respond to human request for task in failed state/,
+			);
+		} finally {
+			store.close();
+		}
+	});
+
+	it("rejects respond for an aborted task", () => {
+		const { store, manager } = setup();
+		try {
+			store.insertTask({
+				id: "RG-0002",
+				workflow_source: "inline",
+				workflow_name: null,
+				workflow_path: "/tmp/RG-0002/workflow.js",
+				status: "aborted",
+				base_repo: null,
+				base_branch: "main",
+				cwd: "/tmp",
+				created_at: Date.now(),
+				started_at: Date.now(),
+				finished_at: Date.now(),
+				error: null,
+				options: "{}",
+				result: null,
+			});
+			store.insertNeedsHuman({
+				request_id: "req-RG-0002",
+				task_id: "RG-0002",
+				cache_key: "",
+				payload: JSON.stringify({ prompt: "approve?" }),
+				status: "pending",
+				created_at: Date.now(),
+				resolved_at: null,
+				response: null,
+			});
+
+			expect(() => manager.respond("RG-0002", "req-RG-0002", { decision: "approve" })).toThrow(
+				/Cannot respond to human request for task in aborted state/,
+			);
+		} finally {
+			store.close();
+		}
+	});
 });
 
 describe("TaskManager — lifecycle events", () => {
