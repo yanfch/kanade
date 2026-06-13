@@ -1182,6 +1182,7 @@ class KanadePanel implements Component {
 			lines.push(`${prefix} ${icon} ${task.id} ${title}`);
 			const metaParts = [
 				String(task.status),
+				task.status === "finished" ? "review/merge" : "",
 				relativeTime(task.finished_at ?? task.started_at ?? task.created_at),
 			].filter(Boolean);
 			lines.push(this.color("dim", truncatePlain(`    ${metaParts.join(" · ")}`, width)));
