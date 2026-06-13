@@ -1076,6 +1076,7 @@ class KanadePanel implements Component {
 
 	private async mergeTask(task: KanadeTask): Promise<void> {
 		await postJson(`/tasks/${encodeURIComponent(task.id)}/merge`, {});
+		this.lastNotice = { kind: "info", text: `Merged ${task.id} into base branch.` };
 		this.ui.notify(`Merged ${task.id}`, "info");
 		await this.refresh();
 	}
@@ -1299,11 +1300,9 @@ class KanadePanel implements Component {
 					: isDone || task.status === "finished"
 						? this.color("success", "✓")
 						: this.color("dim", "○");
-			if (conditional) lines.push(this.color("dim", `├─ ${phaseConditionLabel(group.phase)} →`));
+			if (conditional) lines.push(this.color("dim", `condition: ${phaseConditionLabel(group.phase)}`));
 			const phaseLabel = isCurrent ? this.color("accent", group.phase) : group.phase;
-			lines.push(
-				`${conditional ? this.color("dim", "│  ") : ""}${icon} Phase: ${truncatePlain(phaseLabel, width - 14)}`,
-			);
+			lines.push(`${conditional ? "  " : ""}${icon} Phase: ${truncatePlain(phaseLabel, width - 14)}`);
 			for (const step of group.steps) {
 				const agent = phaseAgents.find((candidate) => helperMatchesAgent(step, candidate)) ?? phaseAgents.at(0);
 				const agentStatus = agent?.status ?? (isDone ? "done" : isCurrent ? "running" : "planned");
@@ -1317,7 +1316,7 @@ class KanadePanel implements Component {
 								: this.color("dim", "○");
 				const agentLabel = agent?.label ?? step.label;
 				lines.push(
-					`${conditional ? this.color("dim", "│  ") : ""}${this.color("dim", "└─")} ${agentIcon} Agent: ${truncatePlain(agentLabel, width - 24)}${this.color("dim", ` · ${agentStatus}`)}`,
+					`${conditional ? "  " : ""}${this.color("dim", "└─")} ${agentIcon} Agent: ${truncatePlain(agentLabel, width - 24)}${this.color("dim", ` · ${agentStatus}`)}`,
 				);
 			}
 			if (phaseIndex < phases.length - 1) lines.push(this.color("dim", "│"));
