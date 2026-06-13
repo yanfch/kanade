@@ -174,8 +174,12 @@ export class SnapshotBuilder {
 			case "task.failed":
 			case "task.aborted": {
 				const data = event.data as { error?: string };
-				const node = snap.graph.cursorNodeId ? findGraphNode(snap, snap.graph.cursorNodeId) : undefined;
-				updateGraphNode(node, "error", data.error ?? event.type, event.ts);
+				// Only mark the cursor node as error if it is still running.
+				// A completed agent should not be retroactively changed to error.
+				const cursorNode = snap.graph.cursorNodeId ? findGraphNode(snap, snap.graph.cursorNodeId) : undefined;
+				if (cursorNode && cursorNode.status === "running") {
+					updateGraphNode(cursorNode, "error", data.error ?? event.type, event.ts);
+				}
 				// Finalize any phase nodes still marked as running.
 				for (const n of snap.graph.nodes) {
 					if (n.kind === "phase" && n.status === "running") {
