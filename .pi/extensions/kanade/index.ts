@@ -268,6 +268,28 @@ const CLEAR_CELL = "\u00A0";
 const ANSI_SGR_PREFIX = new RegExp(`^${ESC}\\[[0-9;]*m`);
 const ANSI_SGR_GLOBAL = new RegExp(`${ESC}\\[[0-9;]*m`, "g");
 
+type SettingsFieldType = "boolean" | "number" | "string";
+
+type SettingsFieldDef = {
+	key: string;
+	section: string;
+	label: string;
+	type: SettingsFieldType;
+	dangerous?: boolean;
+};
+
+const SETTINGS_FIELDS: readonly SettingsFieldDef[] = [
+	{ key: "defaults.maxConcurrentTasks", section: "defaults", label: "Max Concurrent Tasks", type: "number" },
+	{ key: "defaults.concurrency", section: "defaults", label: "Concurrency", type: "number" },
+	{ key: "defaults.agentTimeoutMs", section: "defaults", label: "Agent Timeout Ms", type: "number" },
+	{ key: "isolation.defaultMode", section: "isolation", label: "Isolation Mode", type: "string" },
+	{ key: "merge.targetBranch", section: "merge", label: "Target Branch", type: "string" },
+	{ key: "debug.persistSubagents", section: "debug", label: "Persist Subagents", type: "boolean" },
+	{ key: "debug.dumpArtifacts", section: "debug", label: "Dump Artifacts", type: "boolean" },
+	{ key: "cleanup.enabled", section: "cleanup", label: "Cleanup Enabled", type: "boolean", dangerous: true },
+	{ key: "cleanup.schedule", section: "cleanup", label: "Cleanup Schedule", type: "string", dangerous: true },
+];
+
 function kanadeBaseUrl(): string {
 	return (process.env.KANADE_URL || DEFAULT_BASE_URL).replace(/\/$/, "");
 }
@@ -295,6 +317,26 @@ async function postJson<T>(path: string, body?: unknown, timeoutMs = 10_000): Pr
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: body === undefined ? undefined : JSON.stringify(body),
+			signal: controller.signal,
+		});
+		if (!res.ok) {
+			const text = await res.text().catch(() => "");
+			throw new Error(`${res.status} ${res.statusText}${text ? ` · ${truncatePlain(text, 180)}` : ""}`);
+		}
+		return (await res.json()) as T;
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+async function patchJson<T>(path: string, body: Record<string, unknown>, timeoutMs = 10_000): Promise<T> {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), timeoutMs);
+	try {
+		const res = await fetch(`${kanadeBaseUrl()}${path}`, {
+			method: "PATCH",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(body),
 			signal: controller.signal,
 		});
 		if (!res.ok) {
@@ -744,6 +786,278 @@ class ConfirmOverlay implements Component {
 		if (data === "y" || data === "Y" || isKey(data, "return", "\r", "\n") || isKey(data, "enter", "\r", "\n")) {
 			this.done(true);
 		}
+	}
+}
+
+class SettingsOverlay implements Component {
+	private selected = 0;
+	private saving = false;
+	private notice?: { kind: "info" | "warning" | "error"; text: string };
+	private savedField?: string;
+	private editBuffer?: string;
+
+	constructor(
+		private readonly tui: TuiHandle,
+		private readonly theme: Theme,
+		private readonly ui: Ui,
+		private readonly config: Record<string, unknown>,
+		private readonly done: () => void,
+	) {}
+
+	invalidate(): void {}
+
+	render(width: number): string[] {
+		const boxWidth = Math.min(Math.max(72, width), 100);
+		const contentWidth = Math.max(40, boxWidth - 4);
+		const lines: string[] = [this.theme.fg("muted", "Global Kanade Settings"), ""];
+		lines.push(
+			this.theme.fg(
+				"dim",
+				`Config: ${String((this.config.paths as Record<string, unknown>)?.configFile ?? "unknown")}`,
+			),
+		);
+		lines.push(rule(Math.min(60, contentWidth), this.theme));
+
+		for (let i = 0; i < SETTINGS_FIELDS.length; i++) {
+			const field = SETTINGS_FIELDS[i];
+			const value = this.getFieldValue(field.key);
+			const selected = i === this.selected && !this.editBuffer;
+			const prefix = selected ? this.theme.fg("accent", "▸") : " ";
+			const label = this.theme.fg("dim", field.label);
+			const display = this.displayValue(field, value);
+			const dangerTag = field.dangerous ? this.theme.fg("warning", " ⚠") : "";
+			lines.push(`${prefix} ${label}: ${display}${dangerTag}`);
+		}
+
+		// Edit mode indicator
+		if (this.editBuffer !== undefined) {
+			lines.push("");
+			const field = SETTINGS_FIELDS[this.selected];
+			lines.push(this.theme.fg("accent", `Editing ${field.label}: ${this.editBuffer}▏`));
+			lines.push(this.theme.fg("dim", "Type to edit · Enter save · Esc cancel"));
+		}
+
+		// Notice
+		if (this.notice) {
+			lines.push("");
+			const color = this.notice.kind === "info" ? "success" : this.notice.kind;
+			lines.push(this.theme.fg(color, this.notice.text));
+		}
+
+		// Saved flash
+		if (this.savedField && !this.notice) {
+			lines.push("");
+			lines.push(this.theme.fg("success", `✓ Saved ${this.savedField}`));
+		}
+
+		lines.push("");
+		if (!this.editBuffer) {
+			lines.push(this.theme.fg("dim", "↑↓ select · Enter edit/toggle · Esc close"));
+		}
+
+		const fitLines = fitBodyRows(lines, 18, 24);
+		return box(fitLines, boxWidth, "Kanade Settings", this.theme);
+	}
+
+	handleInput(data: string): void {
+		// Edit mode
+		if (this.editBuffer !== undefined) {
+			handleEditModeInput(
+				data,
+				this.editBuffer,
+				SETTINGS_FIELDS[this.selected],
+				(buffer) => {
+					this.editBuffer = buffer;
+				},
+				() => {
+					this.editBuffer = undefined;
+				},
+				() => void this.saveCurrentField(),
+			);
+			return;
+		}
+
+		if (isKey(data, "escape", "\x1b") || isKey(data, "ctrl+c") || data === "q" || data === "Q") {
+			this.done();
+			return;
+		}
+		if (isKey(data, "up", "\x1b[A", "\x1bOA")) {
+			this.selected = Math.max(0, this.selected - 1);
+			this.notice = undefined;
+			this.savedField = undefined;
+			return;
+		}
+		if (isKey(data, "down", "\x1b[B", "\x1bOB")) {
+			this.selected = Math.min(SETTINGS_FIELDS.length - 1, this.selected + 1);
+			this.notice = undefined;
+			this.savedField = undefined;
+			return;
+		}
+		if (isKey(data, "return", "\r", "\n") || isKey(data, "enter", "\r", "\n")) {
+			void this.activateField();
+		}
+	}
+
+	private getFieldValue(key: string): unknown {
+		const parts = key.split(".");
+		let current: unknown = this.config;
+		for (const part of parts) {
+			if (typeof current !== "object" || current === null) return undefined;
+			current = (current as Record<string, unknown>)[part];
+		}
+		return current;
+	}
+
+	private displayValue(field: SettingsFieldDef, value: unknown): string {
+		if (field.type === "boolean") return value ? "true" : "false";
+		return String(value ?? "");
+	}
+
+	private async activateField(): Promise<void> {
+		const field = SETTINGS_FIELDS[this.selected];
+		if (field.type === "boolean") {
+			await this.toggleBoolean(field);
+		} else {
+			// Enter edit mode for string/number
+			const current = this.getFieldValue(field.key);
+			this.editBuffer = String(current ?? "");
+			this.notice = undefined;
+			this.savedField = undefined;
+		}
+	}
+
+	private async toggleBoolean(field: SettingsFieldDef): Promise<void> {
+		const current = this.getFieldValue(field.key);
+		const next = !current;
+
+		if (field.dangerous) {
+			const confirmed = await this.ui.confirm(
+				`${field.label}: ${current ? "true" : "false"} → ${next ? "true" : "false"}. Confirm change?`,
+			);
+			if (!confirmed) {
+				this.notice = { kind: "warning", text: "Cancelled." };
+				return;
+			}
+		}
+
+		await this.patchField(field.key, next);
+	}
+
+	private async saveCurrentField(): Promise<void> {
+		const field = SETTINGS_FIELDS[this.selected];
+		const buffer = this.editBuffer ?? "";
+		let value: unknown;
+
+		if (field.type === "number") {
+			const parsed = Number(buffer);
+			if (Number.isNaN(parsed)) {
+				this.notice = { kind: "error", text: "Invalid number." };
+				this.editBuffer = undefined;
+				return;
+			}
+			value = parsed;
+		} else {
+			value = buffer;
+		}
+
+		this.editBuffer = undefined;
+
+		if (field.dangerous) {
+			const confirmed = await this.ui.confirm(`Set ${field.label} to ${JSON.stringify(value)}. Confirm?`);
+			if (!confirmed) {
+				this.notice = { kind: "warning", text: "Cancelled." };
+				return;
+			}
+		}
+
+		await this.patchField(field.key, value);
+	}
+
+	private async patchField(key: string, value: unknown): Promise<void> {
+		if (this.saving) return;
+		this.saving = true;
+		this.notice = undefined;
+		this.savedField = undefined;
+		this.tui.requestRender();
+		try {
+			await patchJson("/config", buildConfigPatch(key, value));
+			this.notice = { kind: "info", text: `✓ Saved ${key}` };
+			this.savedField = key;
+			// Update local config cache
+			this.setFieldValue(key, value);
+		} catch (error) {
+			this.notice = { kind: "error", text: error instanceof Error ? error.message : String(error) };
+		} finally {
+			this.saving = false;
+			this.tui.requestRender();
+		}
+	}
+
+	private setFieldValue(key: string, value: unknown): void {
+		const parts = key.split(".");
+		let current: Record<string, unknown> = this.config;
+		for (let i = 0; i < parts.length - 1; i++) {
+			const part = parts[i];
+			const next = current[part];
+			if (typeof next !== "object" || next === null) {
+				current[part] = {};
+			}
+			current = current[part] as Record<string, unknown>;
+		}
+		current[parts[parts.length - 1]!] = value;
+	}
+}
+
+function buildConfigPatch(key: string, value: unknown): Record<string, unknown> {
+	const parts = key.split(".");
+	if (parts.length < 2) return { [key]: value };
+	const root: Record<string, unknown> = {};
+	let current = root;
+	for (let i = 0; i < parts.length - 1; i++) {
+		const part = parts[i]!;
+		const next: Record<string, unknown> = {};
+		current[part] = next;
+		current = next;
+	}
+	current[parts[parts.length - 1]!] = value;
+	return root;
+}
+
+function handleEditModeInput(
+	data: string,
+	buffer: string,
+	field: SettingsFieldDef,
+	setBuffer: (b: string) => void,
+	cancel: () => void,
+	save: () => void,
+): void {
+	if (isKey(data, "escape", "\x1b") || isKey(data, "ctrl+c")) {
+		cancel();
+		return;
+	}
+	if (isKey(data, "return", "\r", "\n") || isKey(data, "enter", "\r", "\n")) {
+		save();
+		return;
+	}
+	if (isKey(data, "backspace")) {
+		setBuffer(buffer.slice(0, -1));
+		return;
+	}
+	if (field.type === "number") {
+		if (data === "+") {
+			const n = Number(buffer);
+			setBuffer(String(Number.isNaN(n) ? 1 : n + 1));
+			return;
+		}
+		if (data === "-") {
+			const n = Number(buffer);
+			setBuffer(String(Number.isNaN(n) ? 0 : n - 1));
+			return;
+		}
+	}
+	// Allow typing printable characters
+	if (data.length === 1 && data >= " " && data <= "~") {
+		setBuffer(buffer + data);
 	}
 }
 
@@ -1844,17 +2158,7 @@ class KanadePanel implements Component {
 		try {
 			const config = await getJson<Record<string, unknown>>("/config");
 			await this.ui.custom<void>(
-				(_tui, theme, _keybindings, done) => ({
-					render: (renderWidth: number) => {
-						const boxWidth = Math.min(Math.max(72, renderWidth), 100);
-						const contentWidth = Math.max(40, boxWidth - 4);
-						const lines = this.settingsOverlayLines(config, contentWidth);
-						return box(fitBodyRows(lines, 18, 24), boxWidth, "Kanade Settings", theme);
-					},
-					handleInput: (data: string) => {
-						if (isKey(data, "escape", "\x1b") || isKey(data, "ctrl+c") || data === "q" || data === "Q") done();
-					},
-				}),
+				(tui, theme, _keybindings, done) => new SettingsOverlay(tui, theme, this.ui, config, done),
 				{
 					overlay: true,
 					overlayOptions: { anchor: "top-center", offsetY: 3, width: "80%", minWidth: 80, maxHeight: "80%" },
@@ -1867,29 +2171,6 @@ class KanadePanel implements Component {
 			this.actionInProgress = false;
 			this.invalidateAndRender();
 		}
-	}
-
-	private settingsOverlayLines(config: Record<string, unknown>, width: number): string[] {
-		const lines: string[] = [this.color("muted", "Global Kanade Settings"), ""];
-		lines.push(
-			this.color("dim", `Config: ${String((config.paths as Record<string, unknown>)?.configFile ?? "unknown")}`),
-		);
-		lines.push(rule(Math.min(60, width), this.theme));
-
-		const sections = ["defaults", "isolation", "merge", "debug", "cleanup"];
-		for (const section of sections) {
-			const sectionData = config[section] as Record<string, unknown> | undefined;
-			if (!sectionData) continue;
-			lines.push("");
-			lines.push(this.color("accent", section.toUpperCase()));
-			for (const [key, value] of Object.entries(sectionData)) {
-				const display = typeof value === "object" ? JSON.stringify(value) : String(value);
-				lines.push(truncateAnsi(`  ${this.color("dim", key)}: ${display}`, width));
-			}
-		}
-		lines.push("");
-		lines.push(this.color("dim", "Esc/q close · editing will be added after validation flow"));
-		return lines;
 	}
 
 	private headerLine(width: number): string {
