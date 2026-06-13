@@ -1333,7 +1333,7 @@ function summarizeTaskWorktreesLight(task: TaskRow, worktrees: WorktreeRow[]): T
 	}
 	const rejected = worktrees.find((row) => row.status === "rejected");
 	if (rejected && worktrees.every((row) => row.status === "rejected")) {
-		if (task.status === "failed" || task.status === "aborted") {
+		if ((task.status === "failed" || task.status === "aborted") && existsSync(rejected.worktree_path)) {
 			return {
 				status: "preserved",
 				count: worktrees.length,
