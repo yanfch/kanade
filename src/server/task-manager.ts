@@ -62,6 +62,10 @@ export interface TaskWorktreeSummary {
 	branch?: string;
 	path?: string;
 	merge_commit?: string;
+	has_changes?: boolean;
+	changed_files_count?: number;
+	commit_count?: number;
+	diff_stat?: string;
 }
 
 export type TaskListRow = TaskRow & { worktree_summary: TaskWorktreeSummary };
@@ -1010,23 +1014,87 @@ function summarizeTaskWorktrees(task: TaskRow, worktrees: WorktreeRow[]): TaskWo
 			branch: merged.branch,
 			path: merged.worktree_path,
 			merge_commit: merged.merge_commit ?? undefined,
+			...mergedDiffSummary(merged),
 		};
 	}
 	const rejected = worktrees.find((row) => row.status === "rejected");
 	if (rejected && worktrees.every((row) => row.status === "rejected")) {
-		return { status: "rejected", count: worktrees.length, branch: rejected.branch, path: rejected.worktree_path };
+		return {
+			status: "rejected",
+			count: worktrees.length,
+			branch: rejected.branch,
+			path: rejected.worktree_path,
+			...branchDiffSummary(rejected),
+		};
 	}
 	const active = worktrees.find((row) => row.status === "active");
-	if (active) return { status: "active", count: worktrees.length, branch: active.branch, path: active.worktree_path };
+	if (active) {
+		return {
+			status: "active",
+			count: worktrees.length,
+			branch: active.branch,
+			path: active.worktree_path,
+			...branchDiffSummary(active),
+		};
+	}
 	if (task.status === "failed" || task.status === "aborted") {
 		return {
 			status: "preserved",
 			count: worktrees.length,
 			branch: preferred.branch,
 			path: preferred.worktree_path,
+			...branchDiffSummary(preferred),
 		};
 	}
-	return { status: "inactive", count: worktrees.length, branch: preferred.branch, path: preferred.worktree_path };
+	return {
+		status: "inactive",
+		count: worktrees.length,
+		branch: preferred.branch,
+		path: preferred.worktree_path,
+		...branchDiffSummary(preferred),
+	};
+}
+
+function branchDiffSummary(row: WorktreeRow): Partial<TaskWorktreeSummary> {
+	const summary: Partial<TaskWorktreeSummary> = {};
+	const range = `${row.base_branch}...${row.branch}`;
+	const diffStat = gitOutput(row.base_repo, ["diff", "--shortstat", range]);
+	const commitCount = gitOutput(row.base_repo, ["rev-list", "--count", `${row.base_branch}..${row.branch}`]);
+	const changedFiles = gitOutput(row.base_repo, ["diff", "--name-only", range]);
+	const dirtyFiles = existsSync(row.worktree_path) ? gitOutput(row.worktree_path, ["status", "--porcelain"]) : "";
+	const changedCount = countNonEmptyLines(changedFiles) + countNonEmptyLines(dirtyFiles);
+	if (diffStat) summary.diff_stat = diffStat;
+	if (commitCount && /^\d+$/.test(commitCount)) summary.commit_count = Number(commitCount);
+	if (changedCount > 0) summary.changed_files_count = changedCount;
+	summary.has_changes = Boolean((summary.commit_count ?? 0) > 0 || changedCount > 0 || diffStat);
+	return summary;
+}
+
+function mergedDiffSummary(row: WorktreeRow): Partial<TaskWorktreeSummary> {
+	if (!row.merge_commit) return branchDiffSummary(row);
+	const summary: Partial<TaskWorktreeSummary> = {};
+	const diffStat = gitOutput(row.base_repo, ["show", "--shortstat", "--format=", row.merge_commit]);
+	const commitCount = gitOutput(row.base_repo, ["rev-list", "--count", `${row.merge_commit}^1..${row.merge_commit}^2`]);
+	const changedFiles = gitOutput(row.base_repo, ["show", "--name-only", "--format=", row.merge_commit]);
+	const changedCount = countNonEmptyLines(changedFiles);
+	if (diffStat) summary.diff_stat = diffStat;
+	if (commitCount && /^\d+$/.test(commitCount)) summary.commit_count = Number(commitCount);
+	else summary.commit_count = 1;
+	if (changedCount > 0) summary.changed_files_count = changedCount;
+	summary.has_changes = Boolean((summary.commit_count ?? 0) > 0 || changedCount > 0 || diffStat);
+	return summary;
+}
+
+function gitOutput(cwd: string, args: string[]): string {
+	try {
+		return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+	} catch {
+		return "";
+	}
+}
+
+function countNonEmptyLines(text: string): number {
+	return text.split("\n").filter((line) => line.trim()).length;
 }
 
 const noopSpan = {

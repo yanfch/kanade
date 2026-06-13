@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -248,29 +248,77 @@ export function createApp(ctx: AppContext): Hono {
 		if (!ctx.taskManager.get(taskId)) return c.json({ error: "Task not found" }, 404);
 		const config = ctx.config;
 		if (!config) return c.json({ error: "Config not available" }, 500);
-		const safeLabel = label.replace(/[^a-zA-Z0-9_-]/g, "_");
-		const labelDir = join(config.paths.runsDir, taskId, "debug", "subagents", safeLabel);
-		if (!existsSync(labelDir)) return c.json({ error: "Session not found" }, 404);
-		const files = readdirSync(labelDir).filter((f) => f.endsWith(".jsonl"));
-		if (!files.length) return c.json({ error: "Session not found" }, 404);
-		// Return the most recent session file
-		const sessionFile = join(labelDir, files[files.length - 1]);
-		const content = readFileSync(sessionFile, "utf8");
-		const entries = content
-			.trim()
-			.split("\n")
-			.map((line) => {
-				try {
-					return JSON.parse(line);
-				} catch {
-					return null;
+		const session = resolveSessionFile(config, taskId, label);
+		if (!session) return c.json({ error: "Session not found" }, 404);
+		const content = readFileSync(session.path, "utf8");
+		const entries = parseSessionLines(content);
+		return c.json({ label, entries, file: session.file, path: session.path });
+	});
+
+	app.get("/tasks/:id/sessions/:label/stream", (c) => {
+		const taskId = c.req.param("id");
+		const label = c.req.param("label");
+		if (!ctx.taskManager.get(taskId)) return c.json({ error: "Task not found" }, 404);
+		const config = ctx.config;
+		if (!config) return c.json({ error: "Config not available" }, 500);
+		const session = resolveSessionFile(config, taskId, label);
+		if (!session) return c.json({ error: "Session not found" }, 404);
+		return streamSSE(c, async (stream) => {
+			let offset = 0;
+			let eventId = 0;
+			let carry = "";
+			const writeNewEntries = async () => {
+				const stat = statSync(session.path);
+				if (stat.size <= offset) return;
+				const chunk = carry + readFileSync(session.path).subarray(offset, stat.size).toString("utf8");
+				offset = stat.size;
+				const lines = chunk.split("\n");
+				carry = lines.pop() ?? "";
+				for (const entry of parseSessionLines(lines.join("\n"))) {
+					eventId++;
+					await stream.writeSSE({
+						event: "session.entry",
+						id: String(eventId),
+						data: JSON.stringify({ taskId, label, path: session.path, entry }),
+					});
 				}
-			})
-			.filter(Boolean);
-		return c.json({ label, entries, file: files[files.length - 1], path: sessionFile });
+			};
+			await writeNewEntries();
+			const timer = setInterval(() => void writeNewEntries().catch(() => {}), 1000);
+			await waitForClose(c.req.raw.signal, () => clearInterval(timer), stream);
+		});
 	});
 
 	return app;
+}
+
+function resolveSessionFile(
+	config: KanadeConfig,
+	taskId: string,
+	label: string,
+): { file: string; path: string } | null {
+	const safeLabel = label.replace(/[^a-zA-Z0-9_-]/g, "_");
+	const labelDir = join(config.paths.runsDir, taskId, "debug", "subagents", safeLabel);
+	if (!existsSync(labelDir)) return null;
+	const files = readdirSync(labelDir).filter((f) => f.endsWith(".jsonl"));
+	if (!files.length) return null;
+	const file = files[files.length - 1];
+	return { file, path: join(labelDir, file) };
+}
+
+function parseSessionLines(content: string): unknown[] {
+	return content
+		.trim()
+		.split("\n")
+		.filter(Boolean)
+		.map((line) => {
+			try {
+				return JSON.parse(line) as unknown;
+			} catch {
+				return null;
+			}
+		})
+		.filter(Boolean);
 }
 
 function formatInboxRow(row: ReturnType<TaskManager["inbox"]>[number]) {

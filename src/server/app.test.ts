@@ -26,7 +26,7 @@ function setup(
 	const events = new EventBus();
 	const humanGate = new HumanGate(store, { initialPollMs: 5 });
 	const taskManager = new TaskManager(config, store, events, humanGate, author, undefined, sessionFactory);
-	const app = createApp({ taskManager, events });
+	const app = createApp({ taskManager, events, config });
 	return { config, store, taskManager, events, app };
 }
 
@@ -136,6 +136,36 @@ describe("GET /tasks", () => {
 			expect(byId.get("TL-merged")?.worktree_summary).toMatchObject({ status: "merged", merge_commit: "abc123" });
 			expect(byId.get("TL-review")?.worktree_summary).toMatchObject({ status: "inactive" });
 			expect(byId.get("TL-none")?.worktree_summary).toMatchObject({ status: "none" });
+		} finally {
+			store.close();
+		}
+	});
+});
+
+describe("GET /tasks/:id/sessions/:label/stream", () => {
+	it("returns 404 when the persisted session stream is missing", async () => {
+		const { store, app } = setup();
+		try {
+			const now = Date.now();
+			store.insertTask({
+				id: "TS-stream",
+				workflow_source: "inline",
+				workflow_name: null,
+				workflow_path: "/tmp/stream.js",
+				status: "finished",
+				base_repo: null,
+				base_branch: "main",
+				cwd: process.cwd(),
+				created_at: now,
+				started_at: now,
+				finished_at: now,
+				error: null,
+				options: "{}",
+				result: null,
+			});
+
+			const res = await app.request("/tasks/TS-stream/sessions/missing/stream");
+			expect(res.status).toBe(404);
 		} finally {
 			store.close();
 		}

@@ -19,6 +19,10 @@ type WorktreeSummary = {
 	branch?: string;
 	path?: string;
 	merge_commit?: string;
+	has_changes?: boolean;
+	changed_files_count?: number;
+	commit_count?: number;
+	diff_stat?: string;
 };
 
 type KanadeTask = {
@@ -899,7 +903,7 @@ class KanadePanel implements Component {
 	private actionItems(task: KanadeTask): ActionItem[] {
 		const items: ActionItem[] = [];
 		if (task.status === "needs_human") items.push({ key: "respond", label: "Respond to human request" });
-		if (task.status === "finished") items.push({ key: "merge", label: "Merge task", danger: true });
+		if (isTaskMergeable(task)) items.push({ key: "merge", label: "Merge task", danger: true });
 		if (task.status === "failed" || task.status === "aborted") {
 			items.push({ key: "recovery", label: "Open recovery view" });
 			items.push({ key: "iterate", label: "Iterate with instructions" });
@@ -1473,8 +1477,11 @@ class KanadePanel implements Component {
 		];
 		const worktrees = detail?.worktrees ?? [];
 		if (task.status === "failed" || task.status === "aborted") {
+			const summary = task.worktree_summary;
 			lines.push(`${this.color("error", "✖")} ${task.id} ${taskTitle(task, width - 10)}`);
 			lines.push(this.color("dim", `Failure: ${truncatePlain(task.error ?? "unknown", width - 9)}`));
+			if (summary?.diff_stat) lines.push(this.color("dim", `Changes: ${truncatePlain(summary.diff_stat, width - 9)}`));
+			else if (summary?.has_changes) lines.push(this.color("dim", `Changes: ${worktreeChangeLabel(summary)}`));
 			lines.push("");
 			lines.push(this.color("muted", "Preserved Assets"));
 		}
@@ -1492,12 +1499,10 @@ class KanadePanel implements Component {
 		}
 		if (task.status === "failed" || task.status === "aborted") {
 			lines.push(this.color("muted", "Recommended Actions"));
-			lines.push("  Resume from preserved worktree");
-			lines.push("  Inspect failed step");
-			lines.push("  View agent history");
-			lines.push("  Iterate with instructions");
-			lines.push("  Keep preserved worktree");
-			lines.push(this.color("error", "  Delete preserved worktree"));
+			lines.push("  1. Open agent detail and inspect the failed step");
+			lines.push("  2. Iterate with focused recovery instructions");
+			lines.push("  3. Keep preserved worktree if partial work may help");
+			lines.push(this.color("error", "  4. Reject cleanup only after review"));
 		}
 		return lines;
 	}
@@ -1699,17 +1704,40 @@ function taskTitle(task: KanadeTask, max = 80): string {
 function taskWorktreeHint(task: KanadeTask): string {
 	const summary = task.worktree_summary;
 	if (!summary) return task.status === "finished" ? "review/merge" : "";
-	if (summary.status === "merged") return "merged";
-	if (summary.status === "preserved") return "preserved";
+	const details = worktreeChangeLabel(summary);
+	if (summary.status === "merged") return joinMeta("merged", details);
+	if (summary.status === "preserved") return joinMeta("preserved", details);
 	if (summary.status === "rejected") return "cleaned";
 	if (task.status === "finished") {
-		if (summary.status === "active" || summary.status === "inactive") return "review/merge";
+		if (summary.status === "active" || summary.status === "inactive") return joinMeta("review/merge", details);
 		return "no changes";
 	}
 	if ((task.status === "failed" || task.status === "aborted") && summary.status && summary.status !== "none") {
-		return "preserved";
+		return joinMeta("preserved", details);
 	}
 	return "";
+}
+
+function isTaskMergeable(task: KanadeTask): boolean {
+	if (task.status !== "finished") return false;
+	const summary = task.worktree_summary;
+	if (!summary) return true;
+	return summary.status === "active" || summary.status === "inactive";
+}
+
+function worktreeChangeLabel(summary: WorktreeSummary): string {
+	const parts: string[] = [];
+	if (typeof summary.changed_files_count === "number" && summary.changed_files_count > 0) {
+		parts.push(`${summary.changed_files_count} file${summary.changed_files_count === 1 ? "" : "s"}`);
+	}
+	if (typeof summary.commit_count === "number" && summary.commit_count > 0) {
+		parts.push(`${summary.commit_count} commit${summary.commit_count === 1 ? "" : "s"}`);
+	}
+	return parts.join(" · ");
+}
+
+function joinMeta(...parts: Array<string | undefined>): string {
+	return parts.filter(Boolean).join(" · ");
 }
 
 function relativeTime(ts?: number | null): string {
