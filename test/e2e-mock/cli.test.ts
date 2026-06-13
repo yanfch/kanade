@@ -85,7 +85,19 @@ beforeAll(async () => {
 
 	serverProcess = spawn("npx", ["tsx", "src/bin/server.ts"], {
 		cwd: join(import.meta.dirname, "../.."),
-		env: { ...process.env, KANADE_DIR: kanadeDir, KANADE_MOCK_SESSION_TEXT: "ok" },
+		env: {
+			...process.env,
+			KANADE_DIR: kanadeDir,
+			KANADE_MOCK_SESSION_TEXT: "ok",
+			KANADE_MOCK_SESSION_USAGE: JSON.stringify({
+				input: 100,
+				output: 50,
+				cacheRead: 20,
+				cacheWrite: 10,
+				totalTokens: 180,
+				cost: { input: 0.001, output: 0.002, cacheRead: 0.0001, cacheWrite: 0.0001, total: 0.0032 },
+			}),
+		},
 		stdio: "pipe",
 	});
 	serverProcess.stderr?.on("data", (d) => console.error("[server]", d.toString()));
@@ -388,5 +400,93 @@ describe("CLI — show usage", () => {
 		expect(body.usage).toHaveProperty("totalTokens");
 		expect(body.usage).toHaveProperty("cost");
 		expect(body.usage?.cost).toMatchObject({ total: 0 });
+	});
+
+	it("includes usage.agents in --json output via real write/read path", async () => {
+		// Exercise real write/read path: create a task with agents that emit usage
+		const taskId = await createTask(
+			`export const meta = { name: 'cli-agents-json', description: 'Test' }\nawait agent('task a', { label: 'dev' })\nawait agent('task b', { label: 'reviewer' })\nreturn 'done'`,
+		);
+
+		const body = cliJson(`show ${taskId}`) as { usage: { agents?: unknown[] } };
+		expect(body.usage.agents).toBeDefined();
+		expect(Array.isArray(body.usage.agents)).toBe(true);
+		// Mock emits the same usage for each agent call
+		const agents = body.usage.agents as Array<Record<string, unknown>>;
+		expect(agents.length).toBeGreaterThanOrEqual(2);
+		expect(agents[0]).toHaveProperty("label");
+		expect(agents[0]).toHaveProperty("totalTokens");
+		expect(agents[0]).toHaveProperty("cost");
+	});
+
+	it("renders Per-Agent Usage section via real write/read path", async () => {
+		const taskId = await createTask(
+			`export const meta = { name: 'cli-agents-section', description: 'Test' }\nawait agent('task a', { label: 'dev' })\nawait agent('task b', { label: 'reviewer' })\nreturn 'done'`,
+		);
+
+		const out = cli(`show ${taskId}`);
+		expect(out).toContain("Per-Agent Usage");
+		expect(out).toContain("dev");
+		expect(out).toContain("reviewer");
+	});
+
+	it("renders pending label for running agents in Per-Agent Usage", async () => {
+		// Inject a running agent with pending flag to test display logic
+		const taskId = await createTask(
+			`export const meta = { name: 'cli-pending-agents', description: 'Test' }\nreturn 'done'`,
+		);
+		const agentsArray = [
+			{ label: "dev", phase: "Implement", model: "m1", input: 100, output: 50, totalTokens: 150, cost: { total: 0.01 } },
+			{ label: "reviewer", phase: "Review", model: "m2", input: 0, output: 0, totalTokens: 0, cost: { total: 0 }, pending: true },
+		];
+		const db = new Database(join(kanadeDir, "db", "state.db"));
+		try {
+			const row = db.prepare("SELECT usage FROM tasks WHERE id = ?").get(taskId) as { usage: string | null };
+			const usage = row?.usage ? JSON.parse(row.usage) : {};
+			usage.agents = agentsArray;
+			db.prepare("UPDATE tasks SET usage = ? WHERE id = ?").run(JSON.stringify(usage), taskId);
+		} finally {
+			db.close();
+		}
+
+		const out = cli(`show ${taskId}`);
+		expect(out).toContain("Per-Agent Usage");
+		expect(out).toContain("dev");
+		expect(out).toContain("pending");
+	});
+
+	it("preserves existing structured usage when agents is present", async () => {
+		// Test back-compat: author/runtime/total usage survives alongside agents
+		const taskId = await createTask(
+			`export const meta = { name: 'cli-backcompat', description: 'Test' }\nawait agent('task a', { label: 'dev' })\nreturn 'done'`,
+		);
+		const authorUsage = { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15, cost: { input: 0.0001, output: 0.0002, cacheRead: 0, cacheWrite: 0, total: 0.0003 } };
+		const runtimeUsage = { input: 100, output: 50, cacheRead: 20, cacheWrite: 10, totalTokens: 180, cost: { input: 0.001, output: 0.002, cacheRead: 0.0001, cacheWrite: 0.0001, total: 0.0032 } };
+		const totalUsage = { input: 110, output: 55, cacheRead: 20, cacheWrite: 10, totalTokens: 195, cost: { input: 0.0011, output: 0.0022, cacheRead: 0.0001, cacheWrite: 0.0001, total: 0.0035 } };
+		const db = new Database(join(kanadeDir, "db", "state.db"));
+		try {
+			const row = db.prepare("SELECT usage FROM tasks WHERE id = ?").get(taskId) as { usage: string | null };
+			const usage = row?.usage ? JSON.parse(row.usage) : {};
+			usage.author = authorUsage;
+			usage.runtime = runtimeUsage;
+			usage.total = totalUsage;
+			db.prepare("UPDATE tasks SET usage = ? WHERE id = ?").run(JSON.stringify(usage), taskId);
+		} finally {
+			db.close();
+		}
+
+		const body = cliJson(`show ${taskId}`) as { usage: Record<string, unknown> };
+		expect(body.usage.author).toEqual(authorUsage);
+		expect(body.usage.runtime).toEqual(runtimeUsage);
+		expect(body.usage.total).toEqual(totalUsage);
+		expect(Array.isArray(body.usage.agents)).toBe(true);
+	});
+
+	it("does not render Per-Agent Usage section when no agents exist", async () => {
+		const taskId = await createTask(
+			`export const meta = { name: 'cli-no-agents', description: 'Test' }\nreturn 'done'`,
+		);
+		const out = cli(`show ${taskId}`);
+		expect(out).not.toContain("Per-Agent Usage");
 	});
 });

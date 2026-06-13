@@ -14,7 +14,12 @@ import { Journal, type JournalAllEntries } from "../journal/index.ts";
 import type { NeedsHumanRow, StateStore, TaskRow, TaskStatus, WorkflowSource, WorktreeRow } from "../store/index.ts";
 import * as Attrs from "../tracing/attributes.ts";
 import type { TracingHandle, Logger as TracingLogger } from "../tracing/index.ts";
-import { type WorkflowUsage, runWorkflow, validateSemanticWorkflowScript } from "../workflow-engine/index.ts";
+import {
+	type AgentUsageEntry,
+	type WorkflowUsage,
+	runWorkflow,
+	validateSemanticWorkflowScript,
+} from "../workflow-engine/index.ts";
 import { SnapshotBuilder } from "../workflow-engine/snapshot-builder.ts";
 import type { WorkflowSnapshot } from "../workflow-engine/snapshot.ts";
 import { AppError } from "./errors.ts";
@@ -960,6 +965,14 @@ export class TaskManager {
 				onUsage: (usage) => {
 					this.addDailyCost(usage.cost.total);
 				},
+				onAgentUsage: (agentUsages) => {
+					// Incrementally persist agent usage so running/pending tasks show progress
+					const existing = this.store.getTaskUsage(taskId);
+					const base = existing ?? {};
+					this.store.updateTask(taskId, {
+						usage: JSON.stringify({ ...base, agents: agentUsages }),
+					});
+				},
 			});
 
 			this.store.endCurrentPhase(taskId, Date.now());
@@ -972,11 +985,13 @@ export class TaskManager {
 				});
 			}
 			const persistedUsage = authorUsage ? composeGeneratedUsage(authorUsage, result.usage) : result.usage;
+			const usageWithAgents =
+				result.agentUsages.length > 0 ? { ...persistedUsage, agents: result.agentUsages } : persistedUsage;
 			this.store.updateTask(taskId, {
 				status: "finished",
 				finished_at: Date.now(),
 				result: JSON.stringify(result.result),
-				usage: JSON.stringify(persistedUsage),
+				usage: JSON.stringify(usageWithAgents),
 			});
 			this.events.emit("task.finished", { taskId, result: result.result }, taskId);
 			span.setStatus({ code: SpanStatusCode.OK });
@@ -1103,7 +1118,38 @@ export class TaskManager {
 
 	/** Get persisted task-level usage data from tasks.usage. Returns null if task has no usage data. */
 	getUsage(taskId: string): Record<string, unknown> | null {
-		return this.store.getTaskUsage(taskId);
+		const usage = this.store.getTaskUsage(taskId);
+		if (!usage) return null;
+
+		// For running/pending tasks, merge snapshot data to mark running agents as pending
+		const task = this.store.getTask(taskId);
+		if (task && (task.status === "running" || task.status === "needs_human")) {
+			const snap = this.snapshotBuilder.get(taskId);
+			if (snap && snap.agents.length > 0) {
+				const agents = Array.isArray(usage.agents) ? [...(usage.agents as AgentUsageEntry[])] : [];
+				const agentLabels = new Set(agents.map((a) => a.label));
+				// Add snapshot agents that are running but have no usage yet
+				for (const snapAgent of snap.agents) {
+					if (snapAgent.status === "running" && !agentLabels.has(snapAgent.label)) {
+						agents.push({
+							label: snapAgent.label,
+							...(snapAgent.phase ? { phase: snapAgent.phase } : {}),
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: { total: 0 },
+							pending: true,
+						} as AgentUsageEntry & { pending: boolean });
+					}
+				}
+				if (agents.length > 0) {
+					return { ...usage, agents };
+				}
+			}
+		}
+		return usage;
 	}
 
 	private parseScriptMeta(script: string): { name: string; description: string } | null {

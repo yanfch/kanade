@@ -63,6 +63,8 @@ export interface WorkflowRunOptions extends Omit<WorkflowAgentOptions, "journal"
 	onHumanRequest?: (event: { requestId: string; cacheKey: string; request: HumanRequest }) => void;
 	onAgentStart?: (event: { label: string; phase?: string; prompt: string }) => void;
 	onAgentEnd?: (event: { label: string; phase?: string; result: unknown }) => void;
+	/** Called whenever per-agent usage is updated. Receives the full accumulated array. */
+	onAgentUsage?: (agentUsages: AgentUsageEntry[]) => void;
 }
 
 export interface WorkflowJournal {
@@ -90,6 +92,19 @@ export interface WorkflowUsage {
 	};
 }
 
+export interface AgentUsageEntry {
+	label: string;
+	phase?: string;
+	model?: string;
+	role?: string;
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	totalTokens: number;
+	cost: { total: number };
+}
+
 export interface WorkflowRunResult<T = unknown> {
 	meta: WorkflowMeta;
 	result: T;
@@ -98,6 +113,7 @@ export interface WorkflowRunResult<T = unknown> {
 	agentCount: number;
 	durationMs: number;
 	usage: WorkflowUsage;
+	agentUsages: AgentUsageEntry[];
 }
 
 export interface AgentOptions<TSchemaDef extends TSchema | undefined = TSchema | undefined> {
@@ -124,6 +140,7 @@ interface RuntimeState {
 	artifactSeq: number;
 	humanCount: number;
 	spent: number;
+	agentUsages: AgentUsageEntry[];
 }
 
 export type SemanticStepKind = "analyze" | "implement" | "reviewChange" | "continueImplementation" | "testChange";
@@ -190,6 +207,7 @@ export async function runWorkflow<T = unknown>(
 		artifactSeq: 0,
 		humanCount: 0,
 		spent: 0,
+		agentUsages: [],
 	};
 	const agentRunner =
 		options.agent ??
@@ -323,6 +341,23 @@ export async function runWorkflow<T = unknown>(
 						usageObserved = true;
 						usageTokens = Math.max(usageTokens, usage.totalTokens);
 						collectUsage(usage);
+						// Track per-agent usage (upsert: last emission per label wins)
+						const existingIdx = state.agentUsages.findIndex((e) => e.label === label);
+						const entry: AgentUsageEntry = {
+							label,
+							...(assignedPhase ? { phase: assignedPhase } : {}),
+							...(effectiveModel ? { model: effectiveModel } : {}),
+							...(normalizedOptions.role ? { role: normalizedOptions.role } : {}),
+							input: usage.input,
+							output: usage.output,
+							cacheRead: usage.cacheRead,
+							cacheWrite: usage.cacheWrite,
+							totalTokens: usage.totalTokens,
+							cost: { total: usage.cost.total },
+						};
+						if (existingIdx >= 0) state.agentUsages[existingIdx] = entry;
+						else state.agentUsages.push(entry);
+						options.onAgentUsage?.(state.agentUsages);
 						// Check per-task cost budget
 						if (options.costBudget != null && workflowUsage.cost.total > options.costBudget) {
 							throw new Error(
@@ -770,6 +805,7 @@ export async function runWorkflow<T = unknown>(
 		agentCount: state.agentCount,
 		durationMs: Date.now() - started,
 		usage: workflowUsage,
+		agentUsages: state.agentUsages,
 	};
 }
 

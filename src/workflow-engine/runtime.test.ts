@@ -1318,3 +1318,132 @@ return r`;
 		await expect(runWorkflow(script, { agent: stubAgent })).rejects.toThrow(/Unterminated string/i);
 	});
 });
+
+describe("runWorkflow — agentUsages", () => {
+	it("populates agentUsages with per-agent label/phase/model/usage for multi-agent workflow", async () => {
+		const usageA = {
+			input: 100,
+			output: 50,
+			cacheRead: 200,
+			cacheWrite: 0,
+			totalTokens: 350,
+			cost: { input: 0.001, output: 0.002, cacheRead: 0.0003, cacheWrite: 0, total: 0.0033 },
+		};
+		const usageB = {
+			input: 500,
+			output: 200,
+			cacheRead: 1000,
+			cacheWrite: 0,
+			totalTokens: 1700,
+			cost: { input: 0.005, output: 0.006, cacheRead: 0.002, cacheWrite: 0, total: 0.013 },
+		};
+		let callCount = 0;
+		const script = `export const meta = { name: 'usage_detail', description: 'Usage detail' }
+phase('Implement')
+await agent('a', { label: 'dev', role: 'developer', model: 'm1' })
+phase('Review')
+await agent('b', { label: 'reviewer', role: 'reviewer', model: 'm2' })
+return true`;
+
+		const result = await runWorkflow(script, {
+			agent: {
+				async run(_prompt: string, opts?: AgentRunOptions<TSchema | undefined>) {
+					const u = callCount++ === 0 ? usageA : usageB;
+					opts?.onUsage?.(u as never);
+					return "ok" as never;
+				},
+			},
+		});
+
+		expect(result.agentUsages).toHaveLength(2);
+		expect(result.agentUsages[0]).toMatchObject({
+			label: "dev",
+			phase: "Implement",
+			model: "m1",
+			role: "developer",
+			input: 100,
+			output: 50,
+			totalTokens: 350,
+			cost: { total: 0.0033 },
+		});
+		expect(result.agentUsages[1]).toMatchObject({
+			label: "reviewer",
+			phase: "Review",
+			model: "m2",
+			role: "reviewer",
+			input: 500,
+			output: 200,
+			totalTokens: 1700,
+			cost: { total: 0.013 },
+		});
+	});
+
+	it("agentUsages is empty for zero-agent workflow", async () => {
+		const script = `export const meta = { name: 'no_agents', description: 'No agents' }
+return { ok: true }`;
+
+		const result = await runWorkflow(script);
+		expect(result.agentUsages).toEqual([]);
+	});
+
+	it("upserts usage when same label is called multiple times (retry)", async () => {
+		let callCount = 0;
+		const script = `export const meta = { name: 'retry_usage', description: 'Retry usage' }
+await agent('task', { label: 'worker' })
+await agent('task', { label: 'worker' })
+return true`;
+
+		const result = await runWorkflow(script, {
+			agent: {
+				async run(_prompt: string, opts?: AgentRunOptions<TSchema | undefined>) {
+					callCount++;
+					opts?.onUsage?.({
+						input: callCount * 100,
+						output: callCount * 50,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: callCount * 150,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: callCount * 0.01 },
+					} as never);
+					return "ok" as never;
+				},
+			},
+		});
+
+		// Last emission wins for same label
+		expect(result.agentUsages).toHaveLength(1);
+		expect(result.agentUsages[0].label).toBe("worker");
+		expect(result.agentUsages[0].input).toBe(200);
+		expect(result.agentUsages[0].totalTokens).toBe(300);
+		expect(result.agentUsages[0].cost.total).toBeCloseTo(0.02);
+	});
+
+	it("omits phase/model/role when not provided", async () => {
+		const script = `export const meta = { name: 'minimal', description: 'Minimal' }
+await agent('task', { label: 'bare' })
+return true`;
+
+		const result = await runWorkflow(script, {
+			agent: {
+				async run(_prompt: string, opts?: AgentRunOptions<TSchema | undefined>) {
+					opts?.onUsage?.({
+						input: 10,
+						output: 5,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 15,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.001 },
+					} as never);
+					return "ok" as never;
+				},
+			},
+		});
+
+		expect(result.agentUsages).toHaveLength(1);
+		const entry = result.agentUsages[0];
+		expect(entry.label).toBe("bare");
+		expect(entry.phase).toBeUndefined();
+		expect(entry.model).toBeUndefined();
+		expect(entry.role).toBeUndefined();
+	});
+});

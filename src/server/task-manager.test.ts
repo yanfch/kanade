@@ -1465,4 +1465,125 @@ describe("TaskManager — getUsage", () => {
 			store.close();
 		}
 	});
+
+	it("includes agents array in usage when workflow has agent usages", async () => {
+		const mockUsage = {
+			input: 100,
+			output: 50,
+			cacheRead: 20,
+			cacheWrite: 10,
+			totalTokens: 180,
+			cost: { input: 0.001, output: 0.002, cacheRead: 0.0001, cacheWrite: 0.0001, total: 0.0032 },
+		};
+		const mock = createMockSessionFactory({ text: "ok", usage: mockUsage });
+		const { store, manager } = setup(undefined, mock.createSession);
+		try {
+			const task = manager.create({
+				source: "inline",
+				script: `export const meta = { name: 'agent_usage', description: 'Agent usage' }
+await agent('a', { label: 'dev' })
+await agent('b', { label: 'reviewer' })
+return true`,
+			});
+			await vi.waitFor(() => {
+				const t = manager.get(task.task_id);
+				if (t?.status === "failed") throw new Error(`Task failed: ${t.error}`);
+				expect(t?.status).toBe("finished");
+			});
+
+			const usage = manager.getUsage(task.task_id);
+			expect(usage).not.toBeNull();
+			expect(Array.isArray(usage?.agents)).toBe(true);
+			const agents = usage?.agents as Array<Record<string, unknown>>;
+			expect(agents).toHaveLength(2);
+			expect(agents[0]).toMatchObject({ label: "dev", totalTokens: 180 });
+			expect(agents[1]).toMatchObject({ label: "reviewer", totalTokens: 180 });
+			// Verify cost structure is preserved
+			expect(agents[0].cost).toEqual({ total: 0.0032 });
+		} finally {
+			store.close();
+		}
+	});
+
+	it("does not include agents array when no agent calls were made", async () => {
+		const { store, manager } = setup();
+		try {
+			const task = manager.create({ source: "inline", script: SIMPLE_SCRIPT });
+			await vi.waitFor(() => expect(manager.get(task.task_id)?.status).toBe("finished"));
+
+			const usage = manager.getUsage(task.task_id);
+			expect(usage).not.toBeNull();
+			expect(usage?.agents).toBeUndefined();
+		} finally {
+			store.close();
+		}
+	});
+
+	it("preserves existing author/runtime/total usage when agents is present", async () => {
+		const mockUsage = {
+			input: 100,
+			output: 50,
+			cacheRead: 20,
+			cacheWrite: 10,
+			totalTokens: 180,
+			cost: { input: 0.001, output: 0.002, cacheRead: 0.0001, cacheWrite: 0.0001, total: 0.0032 },
+		};
+		const mock = createMockSessionFactory({ text: "ok", usage: mockUsage });
+		const { store, manager } = setup(undefined, mock.createSession);
+		try {
+			const task = manager.create({
+				source: "inline",
+				script: `export const meta = { name: 'backcompat', description: 'Back compat' }
+await agent('a', { label: 'dev' })
+return true`,
+			});
+			await vi.waitFor(() => {
+				const t = manager.get(task.task_id);
+				if (t?.status === "failed") throw new Error(`Task failed: ${t.error}`);
+				expect(t?.status).toBe("finished");
+			});
+
+			// Simulate a generated workflow that had author/runtime/total in usage
+			const existingUsage = manager.getUsage(task.task_id)!;
+			const authorUsage = {
+				input: 10,
+				output: 5,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 15,
+				cost: { input: 0.0001, output: 0.0002, cacheRead: 0, cacheWrite: 0, total: 0.0003 },
+			};
+			const runtimeUsage = {
+				input: 100,
+				output: 50,
+				cacheRead: 20,
+				cacheWrite: 10,
+				totalTokens: 180,
+				cost: { input: 0.001, output: 0.002, cacheRead: 0.0001, cacheWrite: 0.0001, total: 0.0032 },
+			};
+			const totalUsage = {
+				input: 110,
+				output: 55,
+				cacheRead: 20,
+				cacheWrite: 10,
+				totalTokens: 195,
+				cost: { input: 0.0011, output: 0.0022, cacheRead: 0.0001, cacheWrite: 0.0001, total: 0.0035 },
+			};
+			store.updateTask(task.task_id, {
+				usage: JSON.stringify({ ...existingUsage, author: authorUsage, runtime: runtimeUsage, total: totalUsage }),
+			});
+
+			const usage = manager.getUsage(task.task_id);
+			expect(usage).not.toBeNull();
+			// Back-compat: author, runtime, total are preserved
+			expect(usage?.author).toEqual(authorUsage);
+			expect(usage?.runtime).toEqual(runtimeUsage);
+			expect(usage?.total).toEqual(totalUsage);
+			// Agents array is also present
+			expect(Array.isArray(usage?.agents)).toBe(true);
+			expect((usage?.agents as unknown[])?.length).toBeGreaterThan(0);
+		} finally {
+			store.close();
+		}
+	});
 });
