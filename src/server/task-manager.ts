@@ -131,12 +131,12 @@ function composeGeneratedUsage(
 export class TaskManager {
 	private nextTaskSeq = 1;
 	private readonly controllers = new Map<string, AbortController>();
-	private readonly workflowStore: WorkflowStore;
+	private workflowStore: WorkflowStore;
 	private readonly author: WorkflowAuthor;
 	private readonly usingImplicitStubAuthor: boolean;
-	private readonly isolation: IsolationManager;
+	private isolation: IsolationManager;
 	/** Exposed for CleanupScheduler access. */
-	readonly isolationManager: IsolationManager;
+	isolationManager: IsolationManager;
 
 	// Daily cost tracking
 	private dailyCostDate = new Date().toISOString().slice(0, 10);
@@ -148,7 +148,7 @@ export class TaskManager {
 	private readonly createSession?: (options: CreateAgentSessionOptions) => Promise<CreateAgentSessionResult>;
 
 	constructor(
-		private readonly config: KanadeConfig,
+		private config: KanadeConfig,
 		private readonly store: StateStore,
 		private readonly events: EventBus,
 		private readonly humanGate: HumanGate,
@@ -177,6 +177,26 @@ export class TaskManager {
 		this.tracer = tracing?.tracer ?? ({ startSpan: () => noopSpan } as unknown as Tracer);
 		this.isolationManager = this.isolation;
 		this.snapshotBuilder = new SnapshotBuilder(events);
+	}
+
+	/** Update the live config reference (used by PATCH/PUT /config). */
+	updateConfig(newConfig: KanadeConfig): void {
+		this.config = newConfig;
+		this.workflowStore = new WorkflowStore(newConfig.paths.workflowsDir);
+		this.isolation = new IsolationManager(
+			this.store,
+			{
+				defaultBaseBranch: newConfig.isolation.defaultBaseBranch,
+				defaultBaseRepo: newConfig.isolation.defaultBaseRepo,
+				worktreeBaseDir: newConfig.isolation.worktreeBaseDir,
+				branchPrefix: newConfig.isolation.branchPrefix,
+				autoCleanupOnReject: newConfig.isolation.autoCleanupOnReject,
+				autoCleanupOnApprove: newConfig.isolation.autoCleanupOnApprove,
+				autoCleanupOnAbort: newConfig.isolation.autoCleanupOnAbort,
+			},
+			newConfig.merge,
+		);
+		this.isolationManager = this.isolation;
 	}
 
 	async generateWorkflow(prompt: string, options?: TaskOptions): Promise<GenerateWorkflowResult> {
@@ -420,6 +440,127 @@ export class TaskManager {
 		return this.store.getTask(taskId);
 	}
 
+	/**
+	 * Build a merge-readiness review summary for a task.
+	 * Conservative: never fabricates passing checks.
+	 */
+	getReview(taskId: string): Record<string, unknown> | null {
+		const task = this.store.getTask(taskId);
+		if (!task) return null;
+
+		const worktrees = this.store.findWorktreesByTask(taskId);
+		const worktreeSummary = summarizeTaskWorktrees(task, worktrees);
+		const agents = this.store.listAgentCalls(taskId);
+		const phases = this.store.listPhases(taskId);
+		const humanRequests = this.store.listNeedsHumanByTask(taskId);
+		const usage = this.store.getTaskUsage(taskId);
+		const iterationChain = this.store.getIterationChain(taskId).map((r) => r.task_id);
+
+		// Agent stats
+		const agentTotal = agents.length;
+		const agentDone = agents.filter((a) => a.status === "completed" || a.status === "from_cache").length;
+		const agentFailed = agents.filter((a) => a.status === "failed").length;
+
+		// Phase stats
+		const phasesCompleted = phases.filter((p) => p.ended_at !== null).length;
+		const phasesInProgress = phases.filter((p) => p.ended_at === null).length;
+
+		// Human gate stats
+		const humanPending = humanRequests.filter((r) => r.status === "pending").length;
+		const humanResolved = humanRequests.filter((r) => r.status === "resolved").length;
+
+		// Conservative checks
+		const checks: Record<string, boolean> = {};
+		const blockers: string[] = [];
+
+		// State classification
+		let state: string;
+
+		if (worktreeSummary.status === "merged") {
+			state = "merged";
+		} else if (worktreeSummary.status === "preserved") {
+			state = "preserved";
+		} else if (task.status === "running" || task.status === "created") {
+			state = "running";
+		} else if (task.status === "needs_human") {
+			state = "blocked";
+			checks.task_finished = false;
+			blockers.push("Task is waiting for human input");
+		} else if (task.status === "failed" || task.status === "aborted") {
+			state = "blocked";
+			checks.task_finished = false;
+			blockers.push(`Task ${task.status}${task.error ? `: ${task.error}` : ""}`);
+		} else if (task.status === "finished") {
+			// Finished — check merge readiness
+			checks.task_finished = true;
+
+			// Worktree existence + changes (determines no_changes vs ready vs checks_failed)
+			const hasWorktree = worktreeSummary.status !== "none";
+			const hasChanges = worktreeSummary.has_changes === true;
+			checks.worktree_exists = hasWorktree;
+			checks.has_changes = hasChanges;
+
+			// No agent errors
+			const noErrors = agentFailed === 0;
+			checks.no_agent_errors = noErrors;
+			if (!noErrors) blockers.push(`${agentFailed} agent call(s) failed`);
+
+			// All phases done
+			const allPhasesDone = phasesInProgress === 0;
+			checks.all_phases_done = allPhasesDone;
+			if (!allPhasesDone) blockers.push(`${phasesInProgress} phase(s) still in progress`);
+
+			// Human gates resolved
+			const gatesResolved = humanPending === 0;
+			checks.human_gates_resolved = gatesResolved;
+			if (!gatesResolved) blockers.push(`${humanPending} human gate(s) unresolved`);
+
+			// Final state — no_changes is a distinct category (nothing to merge),
+			// not a "check failure". Only push blockers for actionable failures.
+			if (!hasWorktree || !hasChanges) {
+				state = "no_changes";
+				if (!hasWorktree) blockers.push("No worktree found");
+				if (!hasChanges) blockers.push("No changes detected in worktree");
+			} else if (blockers.length > 0) {
+				state = "checks_failed";
+			} else {
+				state = "ready";
+			}
+		} else {
+			state = "unknown";
+		}
+
+		return {
+			task_id: task.id,
+			status: task.status,
+			state,
+			mergeable: state === "ready",
+			recommendation:
+				state === "ready"
+					? "Task is ready for merge review"
+					: state === "merged"
+						? "Already merged"
+						: `Not ready: ${state}`,
+			blockers,
+			checks,
+			workflow: {
+				source: task.workflow_source,
+				name: task.workflow_name,
+			},
+			worktree: worktreeSummary,
+			review: {
+				agents: { total: agentTotal, done: agentDone, failed: agentFailed },
+				phases: { completed: phasesCompleted, in_progress: phasesInProgress },
+				human_gates: { pending: humanPending, resolved: humanResolved },
+			},
+			usage,
+			iteration_chain: iterationChain,
+			created_at: task.created_at,
+			started_at: task.started_at,
+			finished_at: task.finished_at,
+		};
+	}
+
 	private resolveTaskBase(cwd?: string): { baseRepo: string; baseBranch: string } {
 		const configuredBaseRepo = this.canonicalPath(this.config.isolation.defaultBaseRepo ?? process.cwd());
 		if (cwd) {
@@ -650,6 +791,26 @@ export class TaskManager {
 		if (!task) return { success: false, error: `Task not found: ${taskId}` };
 		if (task.status !== "finished")
 			return { success: false, error: `Task must be finished before merge (current: ${task.status})` };
+
+		// Enforce review gating unless explicitly allowed to skip
+		if (!this.config.merge.allowSkipReview) {
+			const review = this.getReview(taskId);
+			if (review) {
+				if (review.state === "merged") {
+					return { success: false, error: "Task is already merged" };
+				}
+				if (review.state === "no_changes") {
+					return { success: false, error: "No changes to merge" };
+				}
+				if (review.state !== "ready") {
+					const blockers = Array.isArray(review.blockers) ? review.blockers.join("; ") : "unknown";
+					return {
+						success: false,
+						error: `Review not ready (state: ${review.state}). Blockers: ${blockers}`,
+					};
+				}
+			}
+		}
 
 		const result = await this.isolation.merge(taskId);
 		if (result.success) {

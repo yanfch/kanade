@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -962,6 +961,426 @@ describe("GET /health", () => {
 			const res = await app.request("/health");
 			expect(res.status).toBe(200);
 			expect(await res.json()).toMatchObject({ ok: true });
+		} finally {
+			store.close();
+		}
+	});
+});
+
+describe("GET /tasks/:id/review", () => {
+	it("returns 404 for unknown task", async () => {
+		const { store, app } = setup();
+		try {
+			const res = await app.request("/tasks/T-9999/review");
+			expect(res.status).toBe(404);
+		} finally {
+			store.close();
+		}
+	});
+
+	it("returns mergeable:true for finished task with worktree and changes", async () => {
+		const { store, taskManager, app } = setup();
+		try {
+			const created = taskManager.create({ source: "inline", script: SIMPLE_SCRIPT });
+			await vi.waitFor(() => expect(taskManager.get(created.task_id)?.status).toBe("finished"));
+
+			// Create a real branch with a commit so branchDiffSummary finds changes
+			const branchName = `kanade/${created.task_id}`;
+			const tmpDir = `/tmp/wt-${created.task_id}`;
+			execFileSync("git", ["branch", branchName], { encoding: "utf8" });
+			execFileSync("git", ["worktree", "add", tmpDir, branchName], { encoding: "utf8" });
+			// Make a commit in the worktree
+			writeFileSync(join(tmpDir, "review-test.txt"), "review content");
+			execFileSync("git", ["add", "review-test.txt"], { cwd: tmpDir, encoding: "utf8" });
+			execFileSync("git", ["commit", "-m", "review test"], { cwd: tmpDir, encoding: "utf8" });
+
+			const now = Date.now();
+			store.insertWorktree({
+				id: `wt-${created.task_id}`,
+				task_id: created.task_id,
+				label: "dev",
+				branch: branchName,
+				base_branch: "main",
+				worktree_path: tmpDir,
+				status: "inactive",
+				base_repo: process.cwd(),
+				created_at: now,
+				last_used_at: now,
+				finished_at: now,
+				merge_commit: null,
+			});
+
+			const res = await app.request(`/tasks/${created.task_id}/review`);
+			const body = (await res.json()) as { state: string; mergeable: boolean; blockers: string[] };
+			expect(res.status).toBe(200);
+			expect(body.state).toBe("ready");
+			expect(body.mergeable).toBe(true);
+			expect(body.blockers).toEqual([]);
+
+			// Cleanup
+			execFileSync("git", ["worktree", "remove", tmpDir, "--force"], { encoding: "utf8" });
+			execFileSync("git", ["branch", "-D", branchName], { encoding: "utf8" });
+		} finally {
+			store.close();
+		}
+	});
+
+	it("returns blockers for running task", async () => {
+		const { store, taskManager, app } = setup();
+		try {
+			const created = taskManager.create({
+				source: "inline",
+				script:
+					"export const meta = { name: 'human', description: 'Human' }\nreturn await request_human({ title: 'Approve?' })",
+			});
+			await vi.waitFor(() => expect(taskManager.get(created.task_id)?.status).toBe("needs_human"));
+
+			const res = await app.request(`/tasks/${created.task_id}/review`);
+			const body = (await res.json()) as { state: string; mergeable: boolean; blockers: string[] };
+			expect(res.status).toBe(200);
+			expect(body.state).toBe("blocked");
+			expect(body.mergeable).toBe(false);
+			expect(body.blockers.length).toBeGreaterThan(0);
+		} finally {
+			store.close();
+		}
+	});
+
+	it("returns state:merged for task with merged worktree", async () => {
+		const { store, taskManager, app } = setup();
+		try {
+			const created = taskManager.create({ source: "inline", script: SIMPLE_SCRIPT });
+			await vi.waitFor(() => expect(taskManager.get(created.task_id)?.status).toBe("finished"));
+
+			const now = Date.now();
+			store.insertWorktree({
+				id: `wt-${created.task_id}`,
+				task_id: created.task_id,
+				label: "dev",
+				branch: `kanade/${created.task_id}`,
+				base_branch: "main",
+				worktree_path: `/tmp/${created.task_id}`,
+				status: "merged",
+				base_repo: process.cwd(),
+				created_at: now,
+				last_used_at: now,
+				finished_at: now,
+				merge_commit: "abc123",
+			});
+
+			const res = await app.request(`/tasks/${created.task_id}/review`);
+			const body = (await res.json()) as { state: string; mergeable: boolean };
+			expect(res.status).toBe(200);
+			expect(body.state).toBe("merged");
+			expect(body.mergeable).toBe(false);
+		} finally {
+			store.close();
+		}
+	});
+
+	it("includes agents, phases, and usage in review", async () => {
+		const { store, taskManager, app } = setup();
+		try {
+			const created = taskManager.create({ source: "inline", script: SIMPLE_SCRIPT });
+			await vi.waitFor(() => expect(taskManager.get(created.task_id)?.status).toBe("finished"));
+
+			store.insertWorktree({
+				id: `wt-${created.task_id}`,
+				task_id: created.task_id,
+				label: "dev",
+				branch: `kanade/${created.task_id}`,
+				base_branch: "main",
+				worktree_path: `/tmp/${created.task_id}`,
+				status: "inactive",
+				base_repo: process.cwd(),
+				created_at: Date.now(),
+				last_used_at: Date.now(),
+				finished_at: Date.now(),
+				merge_commit: null,
+			});
+
+			const res = await app.request(`/tasks/${created.task_id}/review`);
+			const body = (await res.json()) as {
+				task_id: string;
+				review: { agents: { total: number }; phases: { completed: number } };
+				iteration_chain: string[];
+			};
+			expect(res.status).toBe(200);
+			expect(body.task_id).toBe(created.task_id);
+			expect(body.review.agents).toBeDefined();
+			expect(body.review.phases).toBeDefined();
+			expect(body.iteration_chain).toContain(created.task_id);
+		} finally {
+			store.close();
+		}
+	});
+});
+
+describe("GET /config", () => {
+	it("returns merged config with masked sensitive fields", async () => {
+		const { store, app } = setup();
+		try {
+			const res = await app.request("/config");
+			const body = (await res.json()) as { paths: { root: string; configFile: string }; models: { authPath: string } };
+			expect(res.status).toBe(200);
+			expect(body.paths.root).toBeDefined();
+			expect(body.paths.configFile).toBeDefined();
+			expect(body.models.authPath).not.toBe("<configured>"); // null by default
+		} finally {
+			store.close();
+		}
+	});
+
+	it("masks authPath when configured", async () => {
+		const root = mkdtempSync(join(tmpdir(), "kanade-config-"));
+		process.env.KANADE_DIR = root;
+		const config = loadConfig();
+		config.models.authPath = "/tmp/secret-auth.json";
+		const store = new StateStore(config.paths.stateDb);
+		const events = new EventBus();
+		const humanGate = new HumanGate(store, { initialPollMs: 5 });
+		const taskManager = new TaskManager(config, store, events, humanGate);
+		const app = createApp({ taskManager, events, config });
+		try {
+			const res = await app.request("/config");
+			const body = (await res.json()) as { models: { authPath: string } };
+			expect(res.status).toBe(200);
+			expect(body.models.authPath).toBe("<configured>");
+		} finally {
+			store.close();
+		}
+	});
+});
+
+describe("PATCH /config", () => {
+	it("rejects blocked fields", async () => {
+		const { store, app } = setup();
+		try {
+			const res = await app.request("/config", {
+				method: "PATCH",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ paths: { root: "/bad" } }),
+			});
+			expect(res.status).toBe(400);
+			const body = (await res.json()) as { error: string; errors: string[] };
+			expect(body.error).toBe("Validation failed");
+			expect(body.errors.length).toBeGreaterThan(0);
+		} finally {
+			store.close();
+		}
+	});
+
+	it("rejects unknown top-level keys", async () => {
+		const { store, app } = setup();
+		try {
+			const res = await app.request("/config", {
+				method: "PATCH",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ unknownSection: { key: "value" } }),
+			});
+			expect(res.status).toBe(400);
+			const body = (await res.json()) as { errors: string[] };
+			expect(body.errors[0]).toContain("Unknown");
+		} finally {
+			store.close();
+		}
+	});
+
+	it("rejects models.mode as blocked field", async () => {
+		const { store, app } = setup();
+		try {
+			const res = await app.request("/config", {
+				method: "PATCH",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ models: { mode: "kanade" } }),
+			});
+			expect(res.status).toBe(400);
+		} finally {
+			store.close();
+		}
+	});
+
+	it("rejects null values for top-level sections", async () => {
+		const { store, app } = setup();
+		try {
+			const res = await app.request("/config", {
+				method: "PATCH",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ defaults: null }),
+			});
+			expect(res.status).toBe(400);
+			const body = (await res.json()) as { errors: string[] };
+			expect(body.errors[0]).toContain("null");
+		} finally {
+			store.close();
+		}
+	});
+
+	it("rejects unknown nested keys", async () => {
+		const { store, app } = setup();
+		try {
+			const res = await app.request("/config", {
+				method: "PATCH",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ defaults: { unknownField: "value" } }),
+			});
+			expect(res.status).toBe(400);
+			const body = (await res.json()) as { errors: string[] };
+			expect(body.errors[0]).toContain("Unknown nested");
+		} finally {
+			store.close();
+		}
+	});
+});
+
+describe("PATCH /config runtime effect", () => {
+	it("updates task manager config after patch", async () => {
+		const { config, store, app } = setup();
+		try {
+			const originalConcurrency = config.defaults.concurrency;
+			const res = await app.request("/config", {
+				method: "PATCH",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ defaults: { concurrency: originalConcurrency + 1 } }),
+			});
+			expect(res.status).toBe(200);
+			// Verify the live config was updated
+			const configRes = await app.request("/config");
+			const configBody = (await configRes.json()) as { defaults: { concurrency: number } };
+			expect(configBody.defaults.concurrency).toBe(originalConcurrency + 1);
+		} finally {
+			store.close();
+		}
+	});
+});
+
+describe("GET /tasks/:id/review — no_changes state", () => {
+	it("returns no_changes for finished task with worktree but no changes", async () => {
+		const { store, taskManager, app } = setup();
+		try {
+			const created = taskManager.create({ source: "inline", script: SIMPLE_SCRIPT });
+			await vi.waitFor(() => expect(taskManager.get(created.task_id)?.status).toBe("finished"));
+
+			const now = Date.now();
+			store.insertWorktree({
+				id: `wt-${created.task_id}`,
+				task_id: created.task_id,
+				label: "dev",
+				branch: `kanade/${created.task_id}`,
+				base_branch: "main",
+				worktree_path: `/tmp/${created.task_id}`,
+				status: "inactive",
+				base_repo: process.cwd(),
+				created_at: now,
+				last_used_at: now,
+				finished_at: now,
+				merge_commit: null,
+			});
+
+			const res = await app.request(`/tasks/${created.task_id}/review`);
+			const body = (await res.json()) as { state: string; mergeable: boolean };
+			expect(res.status).toBe(200);
+			// Worktree exists but branch has no real changes → no_changes
+			expect(body.state).toBe("no_changes");
+			expect(body.mergeable).toBe(false);
+		} finally {
+			store.close();
+		}
+	});
+});
+
+describe("POST /tasks/:id/merge — review gating", () => {
+	it("rejects merge when review state is no_changes", async () => {
+		const { store, taskManager, app } = setup();
+		try {
+			const created = taskManager.create({ source: "inline", script: SIMPLE_SCRIPT });
+			await vi.waitFor(() => expect(taskManager.get(created.task_id)?.status).toBe("finished"));
+
+			const now = Date.now();
+			store.insertWorktree({
+				id: `wt-${created.task_id}`,
+				task_id: created.task_id,
+				label: "dev",
+				branch: `kanade/${created.task_id}`,
+				base_branch: "main",
+				worktree_path: `/tmp/${created.task_id}`,
+				status: "inactive",
+				base_repo: process.cwd(),
+				created_at: now,
+				last_used_at: now,
+				finished_at: now,
+				merge_commit: null,
+			});
+
+			const res = await app.request(`/tasks/${created.task_id}/merge`, { method: "POST" });
+			const body = (await res.json()) as { error: string };
+			expect(res.status).toBe(400);
+			expect(body.error).toContain("No changes");
+		} finally {
+			store.close();
+		}
+	});
+
+	it("rejects merge when review state is checks_failed", async () => {
+		const { store, taskManager, app } = setup();
+		try {
+			const created = taskManager.create({ source: "inline", script: SIMPLE_SCRIPT });
+			await vi.waitFor(() => expect(taskManager.get(created.task_id)?.status).toBe("finished"));
+
+			// Create a real branch with changes
+			const branchName = `kanade/${created.task_id}`;
+			const tmpDir = `/tmp/wt-blocked-${created.task_id}`;
+			execFileSync("git", ["branch", branchName], { encoding: "utf8" });
+			execFileSync("git", ["worktree", "add", tmpDir, branchName], { encoding: "utf8" });
+			writeFileSync(join(tmpDir, "test.txt"), "content");
+			execFileSync("git", ["add", "test.txt"], { cwd: tmpDir, encoding: "utf8" });
+			execFileSync("git", ["commit", "-m", "test"], { cwd: tmpDir, encoding: "utf8" });
+
+			const now = Date.now();
+			store.insertWorktree({
+				id: `wt-${created.task_id}`,
+				task_id: created.task_id,
+				label: "dev",
+				branch: branchName,
+				base_branch: "main",
+				worktree_path: tmpDir,
+				status: "active",
+				base_repo: process.cwd(),
+				created_at: now,
+				last_used_at: now,
+				finished_at: now,
+				merge_commit: null,
+			});
+
+			// Insert a failed agent call to create a checks_failed state
+			store.insertAgentCall({
+				id: `agent-${created.task_id}`,
+				task_id: created.task_id,
+				label: "agent-1",
+				role: null,
+				phase: "implement",
+				isolation_mode: "worktree",
+				worktree_id: `wt-${created.task_id}`,
+				status: "failed",
+				started_at: now,
+				finished_at: now,
+				tokens_input: null,
+				tokens_output: null,
+				tokens_cache_read: null,
+				tokens_cache_creation: null,
+				cost_usd: null,
+				trace_id: null,
+				span_id: null,
+			});
+
+			const res = await app.request(`/tasks/${created.task_id}/merge`, { method: "POST" });
+			const body = (await res.json()) as { error: string };
+			expect(res.status).toBe(400);
+			expect(body.error).toContain("not ready");
+
+			// Cleanup
+			execFileSync("git", ["worktree", "remove", tmpDir, "--force"], { encoding: "utf8" });
+			execFileSync("git", ["branch", "-D", branchName], { encoding: "utf8" });
 		} finally {
 			store.close();
 		}

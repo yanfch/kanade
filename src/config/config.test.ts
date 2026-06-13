@@ -182,3 +182,84 @@ describe("loadConfig", () => {
 		expect(config.defaults.agentModel).toBe("openai-codex:gpt-5.3-codex-spark");
 	});
 });
+
+describe("validateConfigPatch", () => {
+	it("rejects unknown top-level keys", () => {
+		const { validateConfigPatch } = require("./config.ts");
+		const result = validateConfigPatch({ unknownKey: { a: 1 } });
+		expect(result.valid).toBe(false);
+		expect(result.errors[0]).toContain("Unknown");
+	});
+
+	it("rejects blocked nested fields", () => {
+		const { validateConfigPatch } = require("./config.ts");
+		const result = validateConfigPatch({ models: { mode: "kanade" } });
+		expect(result.valid).toBe(false);
+		expect(result.errors[0]).toContain("Blocked");
+	});
+
+	it("accepts valid editable fields", () => {
+		const { validateConfigPatch } = require("./config.ts");
+		const result = validateConfigPatch({ defaults: { concurrency: 4 }, debug: { persistSubagents: true } });
+		expect(result.valid).toBe(true);
+		expect(result.errors).toEqual([]);
+	});
+
+	it("rejects paths as top-level blocked key", () => {
+		const { validateConfigPatch } = require("./config.ts");
+		const result = validateConfigPatch({ paths: { root: "/bad" } });
+		expect(result.valid).toBe(false);
+	});
+
+	it("rejects server as top-level blocked key", () => {
+		const { validateConfigPatch } = require("./config.ts");
+		const result = validateConfigPatch({ server: { port: 9999 } });
+		expect(result.valid).toBe(false);
+	});
+});
+
+describe("maskConfig", () => {
+	it("masks authPath when non-null", () => {
+		const { maskConfig } = require("./config.ts");
+		const config = loadConfig();
+		config.models.authPath = "/tmp/secret.json";
+		const masked = maskConfig(config);
+		expect(masked.models.authPath).toBe("<configured>");
+	});
+
+	it("preserves null authPath", () => {
+		const { maskConfig } = require("./config.ts");
+		const config = loadConfig();
+		const masked = maskConfig(config);
+		expect(masked.models.authPath).toBeNull();
+	});
+
+	it("includes root and configFile in paths", () => {
+		const { maskConfig } = require("./config.ts");
+		const config = loadConfig();
+		const masked = maskConfig(config);
+		expect(masked.paths.root).toBe(config.paths.root);
+		expect(masked.paths.configFile).toBe(config.paths.configFile);
+	});
+
+	it("rejects null for top-level sections", () => {
+		const { validateConfigPatch } = require("./config.ts");
+		const result = validateConfigPatch({ defaults: null });
+		expect(result.valid).toBe(false);
+		expect(result.errors[0]).toContain("null");
+	});
+
+	it("rejects unknown nested keys in sections", () => {
+		const { validateConfigPatch } = require("./config.ts");
+		const result = validateConfigPatch({ defaults: { unknownKey: 42 } });
+		expect(result.valid).toBe(false);
+		expect(result.errors[0]).toContain("Unknown nested");
+	});
+
+	it("accepts known nested keys in sections", () => {
+		const { validateConfigPatch } = require("./config.ts");
+		const result = validateConfigPatch({ defaults: { concurrency: 4 }, merge: { allowSkipReview: true } });
+		expect(result.valid).toBe(true);
+		expect(result.errors).toEqual([]);
+	});
+});
