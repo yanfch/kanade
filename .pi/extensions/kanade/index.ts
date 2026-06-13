@@ -1833,7 +1833,8 @@ class KanadePanel implements Component {
 
 	private workflowPlanLines(task: KanadeTask, detail: TaskDetail, width: number): string[] {
 		const snapshot = detail.snapshot;
-		const currentPhase = snapshot?.currentPhase;
+		const isTerminalTask = task.status === "finished" || task.status === "failed" || task.status === "aborted";
+		const currentPhase = isTerminalTask ? undefined : snapshot?.currentPhase;
 		const runtimeAgents = snapshot?.agents ?? [];
 		const phases: Array<{ phase: string; steps: WorkflowPlanStep[] }> = [];
 		for (const step of detail.workflowPlan ?? []) {
@@ -1882,7 +1883,9 @@ class KanadePanel implements Component {
 			}
 			if (phaseIndex < phases.length - 1) lines.push(this.color("dim", "│"));
 		}
-		if (snapshot?.graph?.cursorNodeId) lines.push(this.color("dim", `Current: ${currentPhase ?? "runtime"}`));
+		if (!isTerminalTask && snapshot?.graph?.cursorNodeId) {
+			lines.push(this.color("dim", `Current: ${currentPhase ?? "runtime"}`));
+		}
 		return lines;
 	}
 
@@ -1916,13 +1919,16 @@ class KanadePanel implements Component {
 		return lines;
 	}
 
-	private graphMapLines(_task: KanadeTask, graph: WorkflowGraphSnapshot, width: number): string[] {
+	private graphMapLines(task: KanadeTask, graph: WorkflowGraphSnapshot, width: number): string[] {
 		const lines = [this.color("muted", "Workflow Runtime")];
+		const terminal = task.status === "finished" || task.status === "failed" || task.status === "aborted";
 		const nodes = graph.nodes.slice(-12);
 		for (let index = 0; index < nodes.length; index++) {
 			const node = nodes[index];
-			const isCursor = graph.cursorNodeId === node.id;
-			const icon = this.graphNodeIcon(node, isCursor);
+			const isCursor = !terminal && graph.cursorNodeId === node.id;
+			const normalizedNode =
+				terminal && node.kind === "phase" && node.status === "running" ? { ...node, status: "done" } : node;
+			const icon = this.graphNodeIcon(normalizedNode, isCursor);
 			const label = isCursor ? this.color("accent", node.label) : node.label;
 			const prefix =
 				node.kind === "agent"
@@ -1932,13 +1938,13 @@ class KanadePanel implements Component {
 						: node.kind === "human"
 							? "Human:"
 							: `${node.kind}:`;
-			const status = node.kind === "agent" ? this.color("dim", ` · ${node.status}`) : "";
+			const status = node.kind === "agent" ? this.color("dim", ` · ${normalizedNode.status}`) : "";
 			lines.push(`${icon} ${prefix} ${truncatePlain(label, width - visibleWidth(`${prefix} `) - 6)}${status}`);
 			const summary = node.error ?? node.summary;
 			if (summary) {
 				const indent = node.kind === "agent" ? "    " : "  ";
 				const styledSummary =
-					node.status === "error"
+					normalizedNode.status === "error"
 						? this.color("error", agentSummaryLine(summary, width - indent.length))
 						: this.color("dim", agentSummaryLine(summary, width - indent.length));
 				lines.push(`${indent}${styledSummary}`);
