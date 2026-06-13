@@ -53,8 +53,14 @@ journal.db
 journal.db-wal
 journal.db-shm
 
-# Pi sessions (if any accidentally land in repo)
-.pi/
+# Pi project resources: keep shareable extensions/skills, ignore private settings/sessions.
+.pi/*
+!.pi/extensions/
+!.pi/extensions/**
+!.pi/skills/
+!.pi/skills/**
+!.pi/themes/
+!.pi/themes/**
 sessions/
 
 # Vendored fork (in case we add a marker)
