@@ -18,6 +18,15 @@ export interface MockScenario {
 	error?: Error;
 	/** Custom handler: receives prompt, returns what to do */
 	handler?: (prompt: string, tools: CreateAgentSessionOptions["customTools"]) => MockAction;
+	/** Usage data to include in assistant messages (enables onUsage callback) */
+	usage?: {
+		input: number;
+		output: number;
+		cacheRead: number;
+		cacheWrite: number;
+		totalTokens: number;
+		cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+	};
 }
 
 export type MockAction =
@@ -59,6 +68,7 @@ export function createMockSessionFactory(scenario: MockScenario = {}) {
 				{
 					role: "assistant",
 					content: [{ type: "text", text: scenario.text ?? "mock result" }],
+					...(scenario.usage ? { usage: scenario.usage } : {}),
 				},
 			],
 			async prompt(text: string) {

@@ -364,13 +364,18 @@ async function cmdShow(taskId: string, args: ReturnType<typeof parseArgs>["value
 				key: "totalTokens",
 				label: "Tokens",
 				width: 10,
-				render: (v) => pc.white(String(v ?? 0)),
+				render: (v, row) => {
+					const r = row as Record<string, unknown>;
+					return r.pending ? pc.yellow("pending") : pc.white(String(v ?? 0));
+				},
 			},
 			{
 				key: "cost",
 				label: "Cost",
 				width: 12,
-				render: (v) => {
+				render: (v, row) => {
+					const r = row as Record<string, unknown>;
+					if (r.pending) return pc.yellow("pending");
 					const obj = v && typeof v === "object" ? (v as Record<string, unknown>) : {};
 					return pc.white(`$${Number(obj.total ?? 0).toFixed(4)}`);
 				},

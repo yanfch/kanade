@@ -63,6 +63,8 @@ export interface WorkflowRunOptions extends Omit<WorkflowAgentOptions, "journal"
 	onHumanRequest?: (event: { requestId: string; cacheKey: string; request: HumanRequest }) => void;
 	onAgentStart?: (event: { label: string; phase?: string; prompt: string }) => void;
 	onAgentEnd?: (event: { label: string; phase?: string; result: unknown }) => void;
+	/** Called whenever per-agent usage is updated. Receives the full accumulated array. */
+	onAgentUsage?: (agentUsages: AgentUsageEntry[]) => void;
 }
 
 export interface WorkflowJournal {
@@ -355,6 +357,7 @@ export async function runWorkflow<T = unknown>(
 						};
 						if (existingIdx >= 0) state.agentUsages[existingIdx] = entry;
 						else state.agentUsages.push(entry);
+						options.onAgentUsage?.(state.agentUsages);
 						// Check per-task cost budget
 						if (options.costBudget != null && workflowUsage.cost.total > options.costBudget) {
 							throw new Error(
