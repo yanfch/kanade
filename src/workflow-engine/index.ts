@@ -12,7 +12,7 @@ export type {
 	WorkflowRunResult,
 	WorkflowUsage,
 } from "./runtime.ts";
-export { parseWorkflowScript, runWorkflow, validateSemanticWorkflowScript } from "./runtime.ts";
+export { type AgentUsageEntry, parseWorkflowScript, runWorkflow, validateSemanticWorkflowScript } from "./runtime.ts";
 export type { WorkflowAgentSnapshot, WorkflowAgentStatus, WorkflowSnapshot } from "./snapshot.ts";
 export { createWorkflowSnapshot, preview, recomputeWorkflowSnapshot } from "./snapshot.ts";
 export {

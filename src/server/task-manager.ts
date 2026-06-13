@@ -972,11 +972,13 @@ export class TaskManager {
 				});
 			}
 			const persistedUsage = authorUsage ? composeGeneratedUsage(authorUsage, result.usage) : result.usage;
+			const usageWithAgents =
+				result.agentUsages.length > 0 ? { ...persistedUsage, agents: result.agentUsages } : persistedUsage;
 			this.store.updateTask(taskId, {
 				status: "finished",
 				finished_at: Date.now(),
 				result: JSON.stringify(result.result),
-				usage: JSON.stringify(persistedUsage),
+				usage: JSON.stringify(usageWithAgents),
 			});
 			this.events.emit("task.finished", { taskId, result: result.result }, taskId);
 			span.setStatus({ code: SpanStatusCode.OK });

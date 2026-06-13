@@ -1443,4 +1443,58 @@ describe("GET /tasks/:id with inline usage", () => {
 			store.close();
 		}
 	});
+
+	it("returns usage.agents in the response when agents array is present", async () => {
+		const { store, taskManager, app } = setup();
+		try {
+			const created = taskManager.create({ source: "inline", script: SIMPLE_SCRIPT });
+			await vi.waitFor(() => expect(taskManager.get(created.task_id)?.status).toBe("finished"));
+
+			const agentsArray = [
+				{
+					label: "dev",
+					phase: "Implement",
+					model: "m1",
+					role: "developer",
+					input: 100,
+					output: 50,
+					cacheRead: 200,
+					cacheWrite: 0,
+					totalTokens: 350,
+					cost: { total: 0.0033 },
+				},
+				{
+					label: "reviewer",
+					phase: "Review",
+					model: "m2",
+					role: "reviewer",
+					input: 500,
+					output: 200,
+					cacheRead: 1000,
+					cacheWrite: 0,
+					totalTokens: 1700,
+					cost: { total: 0.013 },
+				},
+			];
+			store.updateTask(created.task_id, {
+				usage: JSON.stringify({
+					input: 600,
+					output: 250,
+					cacheRead: 1200,
+					cacheWrite: 0,
+					totalTokens: 2050,
+					cost: { input: 0.006, output: 0.008, cacheRead: 0.0023, cacheWrite: 0, total: 0.0163 },
+					agents: agentsArray,
+				}),
+			});
+
+			const res = await app.request(`/tasks/${created.task_id}`);
+			const body = (await res.json()) as { usage: Record<string, unknown> | null };
+			expect(res.status).toBe(200);
+			expect(body.usage).not.toBeNull();
+			expect(body.usage?.agents).toEqual(agentsArray);
+		} finally {
+			store.close();
+		}
+	});
 });

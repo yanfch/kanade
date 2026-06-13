@@ -341,6 +341,43 @@ async function cmdShow(taskId: string, args: ReturnType<typeof parseArgs>["value
 		}
 	}
 
+	// Per-Agent Usage breakdown
+	const agents = usage?.agents;
+	if (Array.isArray(agents) && agents.length > 0) {
+		console.log();
+		header("Per-Agent Usage");
+		printTable(agents as Record<string, unknown>[], [
+			{ key: "label", label: "Label", width: 24, render: (v) => pc.white(String(v ?? "-")) },
+			{
+				key: "phase",
+				label: "Phase",
+				width: 14,
+				render: (v) => (v ? pc.magenta(String(v)) : pc.dim("-")),
+			},
+			{
+				key: "model",
+				label: "Model",
+				width: 22,
+				render: (v) => (v ? pc.cyan(String(v)) : pc.dim("-")),
+			},
+			{
+				key: "totalTokens",
+				label: "Tokens",
+				width: 10,
+				render: (v) => pc.white(String(v ?? 0)),
+			},
+			{
+				key: "cost",
+				label: "Cost",
+				width: 12,
+				render: (v) => {
+					const obj = v && typeof v === "object" ? (v as Record<string, unknown>) : {};
+					return pc.white(`$${Number(obj.total ?? 0).toFixed(4)}`);
+				},
+			},
+		]);
+	}
+
 	if (journal.agents.length > 0) {
 		console.log();
 		console.log(pc.bold("  Journal Cache"));

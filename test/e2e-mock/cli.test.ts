@@ -389,4 +389,68 @@ describe("CLI — show usage", () => {
 		expect(body.usage).toHaveProperty("cost");
 		expect(body.usage?.cost).toMatchObject({ total: 0 });
 	});
+
+	it("includes usage.agents in --json output when agents exist", async () => {
+		const taskId = await createTask(
+			`export const meta = { name: 'cli-agents-json', description: 'Test' }\nreturn 'done'`,
+		);
+		const agentsArray = [
+			{
+				label: "dev",
+				phase: "Implement",
+				model: "m1",
+				role: "developer",
+				input: 100,
+				output: 50,
+				cacheRead: 200,
+				cacheWrite: 0,
+				totalTokens: 350,
+				cost: { total: 0.0033 },
+			},
+		];
+		const db = new Database(join(kanadeDir, "db", "state.db"));
+		try {
+			const row = db.prepare("SELECT usage FROM tasks WHERE id = ?").get(taskId) as { usage: string | null };
+			const usage = row?.usage ? JSON.parse(row.usage) : {};
+			usage.agents = agentsArray;
+			db.prepare("UPDATE tasks SET usage = ? WHERE id = ?").run(JSON.stringify(usage), taskId);
+		} finally {
+			db.close();
+		}
+
+		const body = cliJson(`show ${taskId}`) as { usage: { agents?: unknown[] } };
+		expect(body.usage.agents).toEqual(agentsArray);
+	});
+
+	it("renders Per-Agent Usage section when agents exist in usage", async () => {
+		const taskId = await createTask(
+			`export const meta = { name: 'cli-agents-section', description: 'Test' }\nreturn 'done'`,
+		);
+		const agentsArray = [
+			{ label: "dev", phase: "Implement", model: "m1", input: 100, output: 50, totalTokens: 150, cost: { total: 0.01 } },
+			{ label: "reviewer", phase: "Review", model: "m2", input: 200, output: 100, totalTokens: 300, cost: { total: 0.02 } },
+		];
+		const db = new Database(join(kanadeDir, "db", "state.db"));
+		try {
+			const row = db.prepare("SELECT usage FROM tasks WHERE id = ?").get(taskId) as { usage: string | null };
+			const usage = row?.usage ? JSON.parse(row.usage) : {};
+			usage.agents = agentsArray;
+			db.prepare("UPDATE tasks SET usage = ? WHERE id = ?").run(JSON.stringify(usage), taskId);
+		} finally {
+			db.close();
+		}
+
+		const out = cli(`show ${taskId}`);
+		expect(out).toContain("Per-Agent Usage");
+		expect(out).toContain("dev");
+		expect(out).toContain("reviewer");
+	});
+
+	it("does not render Per-Agent Usage section when no agents exist", async () => {
+		const taskId = await createTask(
+			`export const meta = { name: 'cli-no-agents', description: 'Test' }\nreturn 'done'`,
+		);
+		const out = cli(`show ${taskId}`);
+		expect(out).not.toContain("Per-Agent Usage");
+	});
 });
