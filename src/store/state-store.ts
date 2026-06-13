@@ -462,6 +462,11 @@ export class StateStore {
 		return rows as NeedsHumanRow[];
 	}
 
+	listNeedsHumanByTask(taskId: string): NeedsHumanRow[] {
+		const rows = this.db.prepare("SELECT * FROM needs_human WHERE task_id = ? ORDER BY created_at ASC").all(taskId);
+		return rows as NeedsHumanRow[];
+	}
+
 	// === task_phases ===
 
 	insertPhase(row: TaskPhaseRow): void {

@@ -1,4 +1,5 @@
-export { loadConfig } from "./config.ts";
+export { loadConfig, maskConfig, validateConfigPatch, writeConfigPatch } from "./config.ts";
+export type { ConfigValidationResult } from "./config.ts";
 export type {
 	AnnouncerConfig,
 	CleanupConfig,

@@ -150,6 +150,34 @@ type WorkflowPlanStep = {
 	conditional: boolean;
 };
 
+type ReviewSummary = {
+	task_id: string;
+	status: string;
+	state: string;
+	mergeable: boolean;
+	recommendation: string;
+	blockers: string[];
+	checks: Record<string, boolean>;
+	workflow?: { source?: string; name?: string | null };
+	worktree?: WorktreeSummary;
+	review?: {
+		agents?: { total?: number; done?: number; failed?: number };
+		phases?: { completed?: number; in_progress?: number };
+		human_gates?: { pending?: number; resolved?: number };
+	};
+	usage?: Record<string, unknown> | null;
+	iteration_chain?: string[];
+	created_at?: number;
+	started_at?: number | null;
+	finished_at?: number | null;
+};
+
+// Sanitize multiline text for safe rendering
+function sanitizeText(text: unknown): string {
+	if (typeof text !== "string") return String(text ?? "");
+	return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "").trim();
+}
+
 type TaskDetail = {
 	loading: boolean;
 	loadedAt?: number;
@@ -163,6 +191,7 @@ type TaskDetail = {
 	sessions?: SessionListItem[];
 	sessionLabel?: string;
 	sessionEvents?: SessionEvent[];
+	review?: ReviewSummary | null;
 };
 
 type KanadeOverview = {
@@ -179,11 +208,11 @@ type TaskListView = {
 	query: string;
 };
 
-type Tab = "Map" | "Agent" | "Events" | "Worktree" | "Usage" | "Result";
+type Tab = "Map" | "Agent" | "Events" | "Worktree" | "Usage" | "Result" | "Review" | "Settings";
 
 type Counts = { running: number; needsHuman: number; failed: number; finished: number };
 
-type ActionKey = "respond" | "iterate" | "merge" | "abort" | "reject" | "recovery" | "agent" | "refresh";
+type ActionKey = "respond" | "iterate" | "merge" | "abort" | "reject" | "recovery" | "agent" | "refresh" | "settings";
 
 type ActionItem = {
 	key: ActionKey;
@@ -218,7 +247,7 @@ const CREATE_TASK_PARAMS = Type.Object({
 
 const KANADE_SPINNER = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
 const DEFAULT_BASE_URL = "http://127.0.0.1:7777";
-const TABS: readonly Tab[] = ["Map", "Agent", "Events", "Worktree", "Usage", "Result"];
+const TABS: readonly Tab[] = ["Map", "Agent", "Events", "Worktree", "Usage", "Result", "Review", "Settings"];
 const PANEL_BODY_ROWS = 32;
 const MAX_VISIBLE_TASKS = 10;
 const MAX_VISIBLE_NARROW_TASKS = 5;
@@ -293,12 +322,13 @@ async function fetchOverview(): Promise<KanadeOverview> {
 
 async function fetchTaskDetail(taskId: string, includeSession = false): Promise<TaskDetail> {
 	const detail: TaskDetail = { loading: false, loadedAt: Date.now() };
-	const [taskResult, snapshotResult, scriptResult, worktreesResult, sessionsResult] = await Promise.allSettled([
+	const [taskResult, snapshotResult, scriptResult, worktreesResult, sessionsResult, reviewResult] = await Promise.allSettled([
 		getJson<{ task: KanadeTask; usage?: UsageSummary | null }>(`/tasks/${encodeURIComponent(taskId)}`),
 		getJson<{ snapshot: WorkflowSnapshot }>(`/tasks/${encodeURIComponent(taskId)}/snapshot`),
 		getJson<{ script: string }>(`/tasks/${encodeURIComponent(taskId)}/script`),
 		getJson<{ worktrees: WorktreeRow[] }>(`/tasks/${encodeURIComponent(taskId)}/worktrees`),
 		getJson<{ sessions: SessionListItem[] }>(`/tasks/${encodeURIComponent(taskId)}/sessions`),
+		getJson<ReviewSummary>(`/tasks/${encodeURIComponent(taskId)}/review`),
 	]);
 
 	const errors: string[] = [];
@@ -318,6 +348,8 @@ async function fetchTaskDetail(taskId: string, includeSession = false): Promise<
 	else detail.worktrees = [];
 	if (sessionsResult.status === "fulfilled") detail.sessions = sessionsResult.value.sessions ?? [];
 	else detail.sessions = [];
+	if (reviewResult.status === "fulfilled") detail.review = reviewResult.value;
+	else detail.review = null;
 
 	if (includeSession && detail.sessions.length > 0) {
 		const preferred = pickSession(detail.sessions);
@@ -902,8 +934,13 @@ class KanadePanel implements Component {
 
 	private actionItems(task: KanadeTask): ActionItem[] {
 		const items: ActionItem[] = [];
+		const detail = this.details.get(task.id);
 		if (task.status === "needs_human") items.push({ key: "respond", label: "Respond to human request" });
-		if (isTaskMergeable(task)) items.push({ key: "merge", label: "Merge task", danger: true });
+		// Gate merge: hide for merged, no-changes, and non-finished tasks
+		const review = detail?.review;
+		const isMerged = review?.state === "merged" || task.worktree_summary?.status === "merged";
+		const isNoChanges = review?.state === "no_changes";
+		if (!isMerged && !isNoChanges && isTaskMergeable(task, review)) items.push({ key: "merge", label: "Merge task", danger: true });
 		if (task.status === "failed" || task.status === "aborted") {
 			items.push({ key: "recovery", label: "Open recovery view" });
 			items.push({ key: "iterate", label: "Iterate with instructions" });
@@ -915,6 +952,7 @@ class KanadePanel implements Component {
 		if (task.status !== "running" && task.status !== "created")
 			items.push({ key: "iterate", label: "Iterate with instructions" });
 		items.push({ key: "agent", label: "Open agent detail" });
+		items.push({ key: "settings", label: "Settings" });
 		items.push({ key: "refresh", label: "Refresh" });
 		return dedupeActions(items);
 	}
@@ -1017,6 +1055,10 @@ class KanadePanel implements Component {
 		}
 		if (item.key === "agent") {
 			await this.openAgentDetail();
+			return;
+		}
+		if (item.key === "settings") {
+			await this.openSettings();
 			return;
 		}
 		await this.runPanelAction(async () => {
@@ -1230,7 +1272,9 @@ class KanadePanel implements Component {
 		else if (this.activeTab === "Events") lines.push(...this.eventLines(task, detail, width));
 		else if (this.activeTab === "Worktree") lines.push(...this.worktreeLines(task, detail, width));
 		else if (this.activeTab === "Usage") lines.push(...this.usageLines(detail, width));
-		else lines.push(...this.resultLines(task, width));
+		else if (this.activeTab === "Result") lines.push(...this.resultLines(task, width));
+		else if (this.activeTab === "Review") lines.push(...this.reviewLines(task, detail, width));
+		else if (this.activeTab === "Settings") lines.push(...this.settingsLines(width));
 		return lines;
 	}
 
@@ -1549,6 +1593,94 @@ class KanadePanel implements Component {
 		return lines;
 	}
 
+	private reviewLines(task: KanadeTask, detail: TaskDetail | undefined, width: number): string[] {
+		const review = detail?.review;
+		if (!review) return [this.color("muted", "Review"), this.color("dim", "Loading review summary...")];
+
+		const lines: string[] = [];
+		const stateLabel = reviewStateLabel(review.state);
+		const stateColor = review.state === "ready" ? "success" : review.state === "merged" ? "accent" : review.state === "blocked" || review.state === "checks_failed" ? "error" : "warning";
+		lines.push(`${this.color("muted", "Merge Readiness")}  ${this.color(stateColor, stateLabel)}`);
+		lines.push(this.color("dim", truncatePlain(review.recommendation, width)));
+		lines.push(rule(width, this.theme));
+
+		// Checklist
+		const checks = review.checks ?? {};
+		for (const [key, passed] of Object.entries(checks)) {
+			const icon = passed ? this.color("success", "✓") : this.color("error", "✖");
+			lines.push(`  ${icon} ${checkLabel(key)}`);
+		}
+
+		// Blockers
+		const blockers = review.blockers ?? [];
+		if (blockers.length > 0) {
+			lines.push("");
+			lines.push(this.color("warning", "Blockers:"));
+			for (const blocker of blockers) {
+				lines.push(this.color("error", `  ${sanitizeText(truncatePlain(blocker, width - 4))}`));
+			}
+		}
+
+		// Agent/phase stats
+		const reviewData = review.review;
+		if (reviewData) {
+			lines.push("");
+			const agents = reviewData.agents ?? {};
+			lines.push(this.color("dim", `Agents: ${agents.total ?? 0} total, ${agents.done ?? 0} done, ${agents.failed ?? 0} failed`));
+			const phases = reviewData.phases ?? {};
+			lines.push(this.color("dim", `Phases: ${phases.completed ?? 0} completed, ${phases.in_progress ?? 0} in progress`));
+			const gates = reviewData.human_gates ?? {};
+			lines.push(this.color("dim", `Human gates: ${gates.resolved ?? 0} resolved, ${gates.pending ?? 0} pending`));
+		}
+
+		return lines;
+	}
+
+	private settingsLines(width: number): string[] {
+		return [this.color("muted", "Settings"), this.color("dim", "Loading config...")];
+	}
+
+	private async openSettings(): Promise<void> {
+		this.lastNotice = undefined;
+		this.actionInProgress = true;
+		this.invalidateAndRender();
+		try {
+			const config = await getJson<Record<string, unknown>>("/config");
+			const lines: string[] = [this.color("muted", "Kanade Settings"), ""];
+			lines.push(this.color("dim", `Config: ${String((config.paths as Record<string, unknown>)?.configFile ?? "unknown")}`));
+			lines.push(rule(60, this.theme));
+
+			// Show important sections
+			const sections = ["defaults", "isolation", "merge", "debug", "cleanup"];
+			for (const section of sections) {
+				const sectionData = config[section] as Record<string, unknown> | undefined;
+				if (!sectionData) continue;
+				lines.push("");
+				lines.push(this.color("accent", section.toUpperCase()));
+				for (const [key, value] of Object.entries(sectionData)) {
+					const display = typeof value === "object" ? JSON.stringify(value) : String(value);
+					lines.push(truncateAnsi(`  ${this.color("dim", key)}: ${display}`, width - 2));
+				}
+			}
+
+			await this.ui.custom<void>(
+				(_tui, theme, _keybindings, done) => ({
+					render: () => box(lines, Math.min(width, 80), "Kanade Settings", theme),
+					handleInput: (data: string) => {
+						if (isKey(data, "escape", "\x1b") || isKey(data, "ctrl+c") || data === "q") done();
+					},
+				}),
+				{ overlay: true, overlayOptions: { anchor: "top-center", offsetY: 3, width: "80%", minWidth: 80, maxHeight: "80%" } },
+			);
+		} catch (error) {
+			this.lastNotice = { kind: "error", text: error instanceof Error ? error.message : String(error) };
+			this.ui.notify(this.lastNotice.text, "error");
+		} finally {
+			this.actionInProgress = false;
+			this.invalidateAndRender();
+		}
+	}
+
 	private headerLine(width: number): string {
 		const counts = countTasks(this.overview.tasks);
 		const status = this.overview.connected
@@ -1727,8 +1859,36 @@ function worktreeStateLabel(task: KanadeTask): string {
 	return "";
 }
 
-function isTaskMergeable(task: KanadeTask): boolean {
+function reviewStateLabel(state: string): string {
+	if (state === "ready") return "Ready for merge";
+	if (state === "merged") return "Already merged";
+	if (state === "preserved") return "Preserved (failed)";
+	if (state === "running") return "Running";
+	if (state === "blocked") return "Blocked";
+	if (state === "no_changes") return "No changes";
+	if (state === "checks_failed") return "Checks failed";
+	if (state === "checks_missing") return "Checks missing";
+	if (state === "needs_review") return "Needs review";
+	return "Unknown";
+}
+
+function checkLabel(key: string): string {
+	const labels: Record<string, string> = {
+		task_finished: "Task finished",
+		worktree_exists: "Worktree exists",
+		has_changes: "Has changes",
+		no_agent_errors: "No agent errors",
+		all_phases_done: "All phases done",
+		human_gates_resolved: "Human gates resolved",
+	};
+	return labels[key] ?? key;
+}
+
+function isTaskMergeable(task: KanadeTask, review?: ReviewSummary | null): boolean {
 	if (task.status !== "finished") return false;
+	// If we have review data, use it
+	if (review) return review.mergeable === true;
+	// Fallback to worktree summary check
 	const summary = task.worktree_summary;
 	if (!summary) return true;
 	return summary.status === "active" || summary.status === "inactive";

@@ -2,7 +2,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import type { KanadeConfig } from "../config/config.ts";
+import { type KanadeConfig, maskConfig, validateConfigPatch, writeConfigPatch } from "../config/config.ts";
 import type { TaskStatus } from "../store/index.ts";
 import { AppError } from "./errors.ts";
 import type { EventBus, ServerEvent } from "./event-bus.ts";
@@ -210,6 +210,51 @@ export function createApp(ctx: AppContext): Hono {
 		};
 		const result = ctx.taskManager.iterate(c.req.param("id"), body);
 		return c.json(result, 202);
+	});
+
+	// ── Review / merge-readiness ─────────────────────────────────────────────
+
+	app.get("/tasks/:id/review", (c) => {
+		const review = ctx.taskManager.getReview(c.req.param("id"));
+		if (!review) return c.json({ error: "Task not found" }, 404);
+		return c.json(review);
+	});
+
+	// ── Config API ──────────────────────────────────────────────────────────
+
+	app.get("/config", (c) => {
+		if (!ctx.config) return c.json({ error: "Config not available" }, 500);
+		return c.json(maskConfig(ctx.config));
+	});
+
+	app.patch("/config", async (c) => {
+		if (!ctx.config) return c.json({ error: "Config not available" }, 500);
+		const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+		const validation = validateConfigPatch(body);
+		if (!validation.valid) {
+			return c.json({ error: "Validation failed", errors: validation.errors }, 400);
+		}
+		try {
+			ctx.config = writeConfigPatch(ctx.config, validation.sanitized);
+			return c.json({ ok: true, config: maskConfig(ctx.config), requires_restart: validation.requiresRestart });
+		} catch (err) {
+			return c.json({ error: `Failed to write config: ${err instanceof Error ? err.message : String(err)}` }, 500);
+		}
+	});
+
+	app.put("/config", async (c) => {
+		if (!ctx.config) return c.json({ error: "Config not available" }, 500);
+		const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+		const validation = validateConfigPatch(body);
+		if (!validation.valid) {
+			return c.json({ error: "Validation failed", errors: validation.errors }, 400);
+		}
+		try {
+			ctx.config = writeConfigPatch(ctx.config, validation.sanitized);
+			return c.json({ ok: true, config: maskConfig(ctx.config), requires_restart: validation.requiresRestart });
+		} catch (err) {
+			return c.json({ error: `Failed to write config: ${err instanceof Error ? err.message : String(err)}` }, 500);
+		}
 	});
 
 	// ── Subagent session routes ──────────────────────────────────────────────

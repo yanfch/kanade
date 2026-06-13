@@ -4,7 +4,7 @@
  * Override via env vars for testing.
  */
 
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import YAML from "yaml";
@@ -346,6 +346,141 @@ function deepMerge<T>(base: T, overrides: Partial<T> | undefined): T {
 		}
 	}
 	return result;
+}
+
+// ── Config validation + write (for PATCH/PUT /config API) ───────────────────
+
+/** Top-level keys allowed in a config PATCH/PUT body. */
+const EDITABLE_TOP_KEYS = new Set([
+	"defaults",
+	"isolation",
+	"merge",
+	"tracing",
+	"models",
+	"network",
+	"debug",
+	"cleanup",
+	"liveAcceptance",
+	"announcers",
+]);
+
+/** Nested field paths that must NOT be modified at runtime. */
+const BLOCKED_PATHS = new Set([
+	"paths",
+	"server",
+	"models.mode",
+	"models.agentDir",
+	"models.piAgentDir",
+]);
+
+export interface ConfigValidationResult {
+	valid: boolean;
+	errors: string[];
+	sanitized: Partial<KanadeConfig>;
+	requiresRestart: string[];
+}
+
+/**
+ * Validate a partial config patch against allowed fields.
+ * Returns errors for unknown/blocked fields and type mismatches.
+ */
+export function validateConfigPatch(patch: Record<string, unknown>): ConfigValidationResult {
+	const errors: string[] = [];
+	const requiresRestart: string[] = [];
+	const sanitized: Record<string, unknown> = {};
+
+	for (const [key, value] of Object.entries(patch)) {
+		if (!EDITABLE_TOP_KEYS.has(key)) {
+			errors.push(`Unknown or read-only top-level key: "${key}"`);
+			continue;
+		}
+		if (value === undefined) continue;
+		if (value === null) {
+			sanitized[key] = value;
+			continue;
+		}
+		if (typeof value !== "object" || Array.isArray(value)) {
+			// Top-level keys must be objects (except announcers which is an array)
+			if (key === "announcers" && Array.isArray(value)) {
+				sanitized[key] = value;
+				continue;
+			}
+			errors.push(`"${key}" must be an object`);
+			continue;
+		}
+		// Check nested blocked fields
+		const nested = value as Record<string, unknown>;
+		const cleanNested: Record<string, unknown> = {};
+		for (const [nestedKey, nestedValue] of Object.entries(nested)) {
+			const path = `${key}.${nestedKey}`;
+			if (BLOCKED_PATHS.has(path)) {
+				errors.push(`Blocked field: "${path}" (read-only)`);
+				requiresRestart.push(path);
+				continue;
+			}
+			cleanNested[nestedKey] = nestedValue;
+		}
+		sanitized[key] = cleanNested;
+	}
+
+	return { valid: errors.length === 0, errors, sanitized: sanitized as Partial<KanadeConfig>, requiresRestart };
+}
+
+/**
+ * Mask sensitive fields in config before exposing via API.
+ */
+export function maskConfig(config: KanadeConfig): Record<string, unknown> {
+	const masked = JSON.parse(JSON.stringify(config)) as Record<string, unknown>;
+	const models = masked.models as Record<string, unknown> | undefined;
+	if (models) {
+		if (models.authPath) models.authPath = "<configured>";
+		if (models.modelsPath) models.modelsPath = "<configured>";
+	}
+	// Remove internal paths from public view
+	if (masked.paths) {
+		const paths = masked.paths as Record<string, unknown>;
+		// Keep root and configFile for debugging, mask internals
+		masked.paths = {
+			root: paths.root,
+			configFile: paths.configFile,
+		};
+	}
+	return masked;
+}
+
+/**
+ * Write a partial config patch to config.yml (atomic replace).
+ * Returns the new merged config after reload.
+ */
+export function writeConfigPatch(
+	currentConfig: KanadeConfig,
+	patch: Partial<KanadeConfig>,
+): KanadeConfig {
+	const configPath = currentConfig.paths.configFile;
+
+	// Read existing YAML
+	let existingYaml: Record<string, unknown> = {};
+	if (existsSync(configPath)) {
+		try {
+			existingYaml = YAML.parse(readFileSync(configPath, "utf8")) ?? {};
+		} catch {
+			existingYaml = {};
+		}
+	}
+
+	// Deep merge patch into existing
+	const merged = deepMerge(existingYaml, patch as Record<string, unknown>);
+
+	// Atomic write: write to temp file, then rename
+	const tmpPath = `${configPath}.tmp.${process.pid}`;
+	const yaml = YAML.stringify(merged, { indent: 2 });
+	writeFileSync(tmpPath, yaml, "utf8");
+
+	// Rename is atomic on the same filesystem
+	renameSync(tmpPath, configPath);
+
+	// Reload and return
+	return loadConfig();
 }
 
 export function loadConfig(): KanadeConfig {
