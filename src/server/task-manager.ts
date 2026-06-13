@@ -1073,9 +1073,9 @@ function branchDiffSummary(row: WorktreeRow): Partial<TaskWorktreeSummary> {
 function mergedDiffSummary(row: WorktreeRow): Partial<TaskWorktreeSummary> {
 	if (!row.merge_commit) return branchDiffSummary(row);
 	const summary: Partial<TaskWorktreeSummary> = {};
-	const diffStat = gitOutput(row.base_repo, ["show", "--shortstat", "--format=", row.merge_commit]);
+	const diffStat = gitOutput(row.base_repo, ["diff", "--shortstat", `${row.merge_commit}^1`, row.merge_commit]);
 	const commitCount = gitOutput(row.base_repo, ["rev-list", "--count", `${row.merge_commit}^1..${row.merge_commit}^2`]);
-	const changedFiles = gitOutput(row.base_repo, ["show", "--name-only", "--format=", row.merge_commit]);
+	const changedFiles = gitOutput(row.base_repo, ["diff", "--name-only", `${row.merge_commit}^1`, row.merge_commit]);
 	const changedCount = countNonEmptyLines(changedFiles);
 	if (diffStat) summary.diff_stat = diffStat;
 	if (commitCount && /^\d+$/.test(commitCount)) summary.commit_count = Number(commitCount);

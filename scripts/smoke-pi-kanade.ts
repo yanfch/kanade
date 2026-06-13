@@ -31,6 +31,27 @@ const TASK_FAILED: Record<string, unknown> = {
 	finished_at: Date.now() - 30_000,
 };
 
+const TASK_MERGED: Record<string, unknown> = {
+	id: "T-0003",
+	status: "finished",
+	workflow_source: "generated",
+	workflow_name: "merged-workflow",
+	created_at: Date.now() - 240_000,
+	started_at: Date.now() - 210_000,
+	finished_at: Date.now() - 180_000,
+	worktree_summary: {
+		status: "merged",
+		count: 1,
+		branch: "kanade/T-0003",
+		path: "/tmp/T-0003",
+		merge_commit: "abc123",
+		diff_stat: "2 files changed, 12 insertions(+)",
+		changed_files_count: 2,
+		commit_count: 2,
+		has_changes: true,
+	},
+};
+
 const SNAPSHOT: Record<string, unknown> = {
 	name: "test-workflow",
 	phases: ["implement"],
@@ -53,6 +74,14 @@ const USAGE: Record<string, unknown> = {
 };
 
 const WORKTREES: unknown[] = [];
+const WORKTREES_MERGED: unknown[] = [
+	{
+		branch: "kanade/T-0003",
+		worktree_path: "/tmp/T-0003",
+		status: "merged",
+		merge_commit: "abc123",
+	},
+];
 const SESSIONS: unknown[] = [];
 
 const fetchCalls: string[] = [];
@@ -67,13 +96,19 @@ function mockFetch(url: string | URL | Request, init?: RequestInit): Promise<Res
 		new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
 
 	if (path === "/health") return json({ ok: true });
-	if (path === "/tasks" && method === "GET") return json({ tasks: [TASK, TASK_FAILED] });
+	if (path === "/tasks" && method === "GET") return json({ tasks: [TASK, TASK_FAILED, TASK_MERGED] });
 	if (path === "/inbox") return json({ requests: [] });
 	if (/^\/tasks\/T-0001\/snapshot$/.test(path)) return json({ snapshot: SNAPSHOT });
 	if (/^\/tasks\/T-0001\/script$/.test(path)) return json({ script: SCRIPT });
 	if (/^\/tasks\/T-0001\/worktrees$/.test(path)) return json({ worktrees: WORKTREES });
 	if (/^\/tasks\/T-0001\/sessions$/.test(path)) return json({ sessions: SESSIONS });
 	if (/^\/tasks\/T-0001$/.test(path) && method === "GET") return json({ task: TASK, usage: USAGE });
+	if (/^\/tasks\/T-0003\/snapshot$/.test(path))
+		return json({ snapshot: { ...SNAPSHOT, name: "merged-workflow", agents: [] } });
+	if (/^\/tasks\/T-0003\/script$/.test(path)) return json({ script: SCRIPT });
+	if (/^\/tasks\/T-0003\/worktrees$/.test(path)) return json({ worktrees: WORKTREES_MERGED });
+	if (/^\/tasks\/T-0003\/sessions$/.test(path)) return json({ sessions: [] });
+	if (/^\/tasks\/T-0003$/.test(path) && method === "GET") return json({ task: TASK_MERGED, usage: USAGE });
 
 	// Task-detail sub-requests that return errors (for test 5)
 	if (/^\/tasks\/T-0002/.test(path)) {
@@ -430,6 +465,72 @@ function assert(label: string, condition: boolean, detail?: string) {
 			detailEntry.resolve(undefined);
 			await delay(50);
 		}
+	}
+}
+
+// ---------- Test 6: merged task list badge stays concise ----------
+{
+	console.log("\nTest 6: merged task list badge stays concise");
+	const panel = await createPanel();
+	panel.handleInput("/");
+	for (const ch of "T-0003") panel.handleInput(ch);
+	await delay(150);
+	const output = panel.render(120);
+	const text = strip(output.join("\n"));
+	const taskLine = text
+		.split("\n")
+		.find((line) => line.includes("T-0003"))
+		?.trim();
+	assert("merged task appears", Boolean(taskLine), `output: ${text.slice(0, 500)}`);
+	assert("list shows merged state", Boolean(taskLine?.includes("merged")), `line: ${taskLine}`);
+	assert("list omits commit/file counts", !/commits?|files?/.test(taskLine ?? ""), `line too noisy: ${taskLine}`);
+}
+
+// ---------- Test 7: Worktree tab keeps detailed diff summary ----------
+{
+	console.log("\nTest 7: Worktree tab shows detailed diff summary");
+	customCalls.length = 0;
+	const panel = await createPanel();
+	panel.handleInput("/");
+	for (const ch of "T-0003") panel.handleInput(ch);
+	panel.handleInput("\r"); // opens actions for the selected task
+	await delay(150);
+	const actionCall = customCalls.at(-1);
+	if (actionCall) {
+		const overlayComp = actionCall.component as { handleInput?: (d: string) => void };
+		overlayComp?.handleInput?.("\x1b");
+		actionCall.resolve(null);
+	}
+	await delay(150);
+	panel.handleInput("\t");
+	panel.handleInput("\t");
+	panel.handleInput("\t");
+	await delay(300);
+	const text = strip(panel.render(120).join("\n"));
+	assert("Worktree tab selected", text.includes("[Worktree]"), `output: ${text.slice(0, 500)}`);
+	assert("shows diff stat in detail", text.includes("2 files changed"), `output: ${text.slice(0, 800)}`);
+	assert("shows merge commit in detail", text.includes("abc123"), `output: ${text.slice(0, 800)}`);
+}
+
+// ---------- Test 8: already-merged task cannot be merged again ----------
+{
+	console.log("\nTest 8: already-merged task action menu hides Merge task");
+	customCalls.length = 0;
+	const panel = await createPanel();
+	panel.handleInput("/");
+	for (const ch of "T-0003") panel.handleInput(ch);
+	panel.handleInput("\r");
+	await delay(150);
+	const actionCall = customCalls.at(-1);
+	if (!actionCall) {
+		assert("action menu opened", false);
+	} else {
+		const overlayComp = actionCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
+		const text = strip(overlayComp.render(80).join("\n"));
+		assert("action menu opened", text.includes("Actions"), `overlay: ${text.slice(0, 300)}`);
+		assert("Merge task hidden for merged task", !text.includes("Merge task"), `overlay: ${text.slice(0, 300)}`);
+		overlayComp.handleInput?.("\x1b");
+		actionCall.resolve(null);
 	}
 }
 

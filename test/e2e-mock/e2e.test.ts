@@ -848,6 +848,49 @@ return await agent('work', { label: 'worker' })`,
 			ctx.cleanup();
 		}
 	});
+
+	it("GET /tasks/:id/sessions/:label/stream streams persisted session entries", async () => {
+		const mock = createMockSessionFactory({ text: "ok" });
+		const ctx = createE2EContext(mock.createSession, { persistSubagents: true });
+		const decoder = new TextDecoder();
+		const controller = new AbortController();
+		try {
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'test', description: 'Test' }
+return await agent('stream work', { label: 'streamer' })`,
+			});
+
+			await waitForTask(ctx.taskManager, task.task_id);
+
+			const res = await ctx.app.request(`/tasks/${task.task_id}/sessions/streamer/stream`, {
+				signal: controller.signal,
+			});
+			expect(res.status).toBe(200);
+			expect(res.body).toBeDefined();
+			const reader = res.body?.getReader();
+			let text = "";
+			for (let i = 0; i < 5 && reader && !text.includes("session.entry"); i++) {
+				const chunk = await Promise.race([
+					reader.read(),
+					new Promise<ReadableStreamReadResult<Uint8Array>>((_, reject) =>
+						setTimeout(() => reject(new Error("timed out waiting for session stream")), 1000),
+					),
+				]);
+				if (chunk.done) break;
+				text += decoder.decode(chunk.value, { stream: true });
+			}
+			controller.abort();
+			await reader?.cancel().catch(() => {});
+
+			expect(text).toContain("event: session.entry");
+			expect(text).toContain("streamer");
+			expect(text).toContain("debug/subagents/streamer");
+		} finally {
+			controller.abort();
+			ctx.cleanup();
+		}
+	});
 });
 
 describe("E2E — worktree isolation", () => {

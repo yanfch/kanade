@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -79,6 +80,7 @@ describe("GET /tasks", () => {
 		const { store, app } = setup();
 		try {
 			const now = Date.now();
+			const head = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 			for (const id of ["TL-merged", "TL-review", "TL-none"] as const) {
 				store.insertTask({
 					id,
@@ -109,7 +111,7 @@ describe("GET /tasks", () => {
 				created_at: now,
 				last_used_at: now,
 				finished_at: now,
-				merge_commit: "abc123",
+				merge_commit: head,
 			});
 			store.insertWorktree({
 				id: "wt-review",
@@ -128,12 +130,29 @@ describe("GET /tasks", () => {
 
 			const res = await app.request("/tasks");
 			const body = (await res.json()) as {
-				tasks: Array<{ id: string; worktree_summary: { status: string; merge_commit?: string } }>;
+				tasks: Array<{
+					id: string;
+					worktree_summary: {
+						status: string;
+						merge_commit?: string;
+						has_changes?: boolean;
+						changed_files_count?: number;
+						commit_count?: number;
+						diff_stat?: string;
+					};
+				}>;
 			};
 			const byId = new Map(body.tasks.map((task) => [task.id, task]));
 
 			expect(res.status).toBe(200);
-			expect(byId.get("TL-merged")?.worktree_summary).toMatchObject({ status: "merged", merge_commit: "abc123" });
+			expect(byId.get("TL-merged")?.worktree_summary).toMatchObject({
+				status: "merged",
+				merge_commit: head,
+				has_changes: true,
+			});
+			expect(byId.get("TL-merged")?.worktree_summary.changed_files_count).toBeGreaterThan(0);
+			expect(byId.get("TL-merged")?.worktree_summary.commit_count).toBeGreaterThan(0);
+			expect(byId.get("TL-merged")?.worktree_summary.diff_stat).toContain("file");
 			expect(byId.get("TL-review")?.worktree_summary).toMatchObject({ status: "inactive" });
 			expect(byId.get("TL-none")?.worktree_summary).toMatchObject({ status: "none" });
 		} finally {

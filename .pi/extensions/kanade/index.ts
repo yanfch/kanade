@@ -1472,19 +1472,24 @@ class KanadePanel implements Component {
 	}
 
 	private worktreeLines(task: KanadeTask, detail: TaskDetail | undefined, width: number): string[] {
-		const lines = [
-			this.color("muted", task.status === "failed" || task.status === "aborted" ? "Recovery Center" : "Worktree"),
-		];
+		const isRecovery = task.status === "failed" || task.status === "aborted";
+		const lines = [this.color("muted", isRecovery ? "Recovery Center" : "Worktree")];
 		const worktrees = detail?.worktrees ?? [];
-		if (task.status === "failed" || task.status === "aborted") {
-			const summary = task.worktree_summary;
+		const summary = task.worktree_summary;
+		if (isRecovery) {
 			lines.push(`${this.color("error", "✖")} ${task.id} ${taskTitle(task, width - 10)}`);
 			lines.push(this.color("dim", `Failure: ${truncatePlain(task.error ?? "unknown", width - 9)}`));
-			if (summary?.diff_stat) lines.push(this.color("dim", `Changes: ${truncatePlain(summary.diff_stat, width - 9)}`));
-			else if (summary?.has_changes) lines.push(this.color("dim", `Changes: ${worktreeChangeLabel(summary)}`));
 			lines.push("");
-			lines.push(this.color("muted", "Preserved Assets"));
 		}
+		if (summary) {
+			lines.push(`${this.color("dim", "Merge")}    ${worktreeStateLabel(task)}`);
+			const changeSummary = worktreeDetailLabel(summary);
+			if (changeSummary) lines.push(`${this.color("dim", "Changes")}  ${truncatePlain(changeSummary, width - 9)}`);
+			if (summary.merge_commit)
+				lines.push(`${this.color("dim", "Commit")}   ${truncatePlain(summary.merge_commit, width - 9)}`);
+			lines.push("");
+		}
+		if (isRecovery) lines.push(this.color("muted", "Preserved Assets"));
 		if (worktrees.length === 0) {
 			lines.push(this.color("dim", "No worktree records found."));
 		} else {
@@ -1497,7 +1502,7 @@ class KanadePanel implements Component {
 				lines.push("");
 			}
 		}
-		if (task.status === "failed" || task.status === "aborted") {
+		if (isRecovery) {
 			lines.push(this.color("muted", "Recommended Actions"));
 			lines.push("  1. Open agent detail and inspect the failed step");
 			lines.push("  2. Iterate with focused recovery instructions");
@@ -1704,17 +1709,21 @@ function taskTitle(task: KanadeTask, max = 80): string {
 function taskWorktreeHint(task: KanadeTask): string {
 	const summary = task.worktree_summary;
 	if (!summary) return task.status === "finished" ? "review/merge" : "";
-	const details = worktreeChangeLabel(summary);
-	if (summary.status === "merged") return joinMeta("merged", details);
-	if (summary.status === "preserved") return joinMeta("preserved", details);
+	return worktreeStateLabel(task);
+}
+
+function worktreeStateLabel(task: KanadeTask): string {
+	const summary = task.worktree_summary;
+	if (!summary) return task.status === "finished" ? "review/merge" : "";
+	if (summary.status === "merged") return "merged";
+	if (summary.status === "preserved") return "preserved";
 	if (summary.status === "rejected") return "cleaned";
 	if (task.status === "finished") {
-		if (summary.status === "active" || summary.status === "inactive") return joinMeta("review/merge", details);
+		if (summary.status === "active" || summary.status === "inactive") return "review/merge";
 		return "no changes";
 	}
-	if ((task.status === "failed" || task.status === "aborted") && summary.status && summary.status !== "none") {
-		return joinMeta("preserved", details);
-	}
+	if ((task.status === "failed" || task.status === "aborted") && summary.status && summary.status !== "none")
+		return "preserved";
 	return "";
 }
 
@@ -1736,8 +1745,11 @@ function worktreeChangeLabel(summary: WorktreeSummary): string {
 	return parts.join(" · ");
 }
 
-function joinMeta(...parts: Array<string | undefined>): string {
-	return parts.filter(Boolean).join(" · ");
+function worktreeDetailLabel(summary: WorktreeSummary): string {
+	if (summary.diff_stat) return summary.diff_stat;
+	if (summary.has_changes) return worktreeChangeLabel(summary);
+	if (summary.status === "none") return "no worktree";
+	return "no diff detected";
 }
 
 function relativeTime(ts?: number | null): string {
