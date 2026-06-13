@@ -45,10 +45,6 @@ const TASK_MERGED: Record<string, unknown> = {
 		branch: "kanade/T-0003",
 		path: "/tmp/T-0003",
 		merge_commit: "abc123",
-		diff_stat: "2 files changed, 12 insertions(+)",
-		changed_files_count: 2,
-		commit_count: 2,
-		has_changes: true,
 	},
 };
 
@@ -130,7 +126,12 @@ const REVIEW_MERGED: Record<string, unknown> = {
 	blockers: [],
 	checks: {},
 	workflow: { source: "generated", name: "merged-workflow" },
-	worktree: { status: "merged" },
+	worktree: {
+		status: "merged",
+		has_changes: true,
+		changed_files_count: 2,
+		diff_stat: "2 files changed, 10 insertions(+), 5 deletions(-)",
+	},
 	review: {
 		agents: { total: 0, done: 0, failed: 0 },
 		phases: { completed: 0, in_progress: 0 },

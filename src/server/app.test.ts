@@ -147,11 +147,12 @@ describe("GET /tasks", () => {
 			expect(byId.get("TL-merged")?.worktree_summary).toMatchObject({
 				status: "merged",
 				merge_commit: head,
-				has_changes: true,
 			});
-			expect(byId.get("TL-merged")?.worktree_summary.changed_files_count).toBeGreaterThan(0);
-			expect(byId.get("TL-merged")?.worktree_summary.commit_count).toBeGreaterThan(0);
-			expect(byId.get("TL-merged")?.worktree_summary.diff_stat).toContain("file");
+			// List endpoint returns lightweight summaries: no git-derived fields
+			expect(byId.get("TL-merged")?.worktree_summary.has_changes).toBeUndefined();
+			expect(byId.get("TL-merged")?.worktree_summary.changed_files_count).toBeUndefined();
+			expect(byId.get("TL-merged")?.worktree_summary.commit_count).toBeUndefined();
+			expect(byId.get("TL-merged")?.worktree_summary.diff_stat).toBeUndefined();
 			expect(byId.get("TL-review")?.worktree_summary).toMatchObject({ status: "inactive" });
 			expect(byId.get("TL-none")?.worktree_summary).toMatchObject({ status: "none" });
 		} finally {
@@ -203,6 +204,154 @@ describe("GET /tasks", () => {
 			const task = body.tasks.find((row) => row.id === "TL-failed-preserved");
 			expect(task?.worktree_summary).toMatchObject({ status: "preserved", path: worktreePath });
 		} finally {
+			store.close();
+		}
+	});
+	it("reports missing rejected worktrees as rejected (not preserved)", async () => {
+		const { store, app } = setup();
+		try {
+			const now = Date.now();
+			// Path does not exist on disk
+			const worktreePath = "/tmp/nonexistent-rejected-wt";
+			store.insertTask({
+				id: "TL-failed-rejected",
+				workflow_source: "inline",
+				workflow_name: null,
+				workflow_path: "/tmp/TL-failed-rejected.js",
+				status: "failed",
+				base_repo: null,
+				base_branch: "main",
+				cwd: process.cwd(),
+				created_at: now,
+				started_at: now,
+				finished_at: now,
+				error: "auto-commit failed",
+				options: "{}",
+				result: null,
+			});
+			store.insertWorktree({
+				id: "wt-failed-rejected",
+				task_id: "TL-failed-rejected",
+				label: "dev",
+				branch: "kanade/TL-failed-rejected",
+				base_branch: "main",
+				worktree_path: worktreePath,
+				status: "rejected",
+				base_repo: process.cwd(),
+				created_at: now,
+				last_used_at: now,
+				finished_at: now,
+				merge_commit: null,
+			});
+
+			const res = await app.request("/tasks");
+			const body = (await res.json()) as {
+				tasks: Array<{ id: string; worktree_summary: { status: string; path?: string } }>;
+			};
+			const task = body.tasks.find((row) => row.id === "TL-failed-rejected");
+			expect(task?.worktree_summary).toMatchObject({ status: "rejected" });
+		} finally {
+			store.close();
+		}
+	});
+	it("list returns no git-derived fields while review returns them", async () => {
+		const { store, app } = setup();
+		const branchName = "kanade/TL-struct-test";
+		const tmpDir = "/tmp/wt-struct-test";
+		const cleanupGitFixture = () => {
+			execFileSync("git", ["worktree", "remove", tmpDir, "--force"], { encoding: "utf8", stdio: "ignore" });
+			execFileSync("git", ["branch", "-D", branchName], { encoding: "utf8", stdio: "ignore" });
+		};
+		try {
+			try {
+				cleanupGitFixture();
+			} catch {
+				// ignore stale fixture cleanup failures
+			}
+			const now = Date.now();
+
+			// Create a real branch with a commit
+			execFileSync("git", ["branch", branchName], { encoding: "utf8" });
+			execFileSync("git", ["worktree", "add", tmpDir, branchName], { encoding: "utf8" });
+			writeFileSync(join(tmpDir, "struct-test.txt"), "struct content");
+			execFileSync("git", ["add", "struct-test.txt"], { cwd: tmpDir, encoding: "utf8" });
+			execFileSync("git", ["commit", "-m", "struct test"], { cwd: tmpDir, encoding: "utf8" });
+
+			// Create a finished task with an active worktree pointing to the real branch
+			store.insertTask({
+				id: "TL-struct-test",
+				workflow_source: "inline",
+				workflow_name: null,
+				workflow_path: "/tmp/TL-struct-test.js",
+				status: "finished",
+				base_repo: null,
+				base_branch: "main",
+				cwd: process.cwd(),
+				created_at: now,
+				started_at: now,
+				finished_at: now,
+				error: null,
+				options: "{}",
+				result: null,
+			});
+			store.insertWorktree({
+				id: "wt-struct-test",
+				task_id: "TL-struct-test",
+				label: "dev",
+				branch: branchName,
+				base_branch: "main",
+				worktree_path: tmpDir,
+				status: "inactive",
+				base_repo: process.cwd(),
+				created_at: now,
+				last_used_at: now,
+				finished_at: now,
+				merge_commit: null,
+			});
+
+			// List endpoint: no git-derived fields
+			const listRes = await app.request("/tasks");
+			const listBody = (await listRes.json()) as {
+				tasks: Array<{
+					id: string;
+					worktree_summary: {
+						status: string;
+						has_changes?: boolean;
+						changed_files_count?: number;
+						commit_count?: number;
+						diff_stat?: string;
+					};
+				}>;
+			};
+			expect(listRes.status).toBe(200);
+			const listTask = listBody.tasks.find((t) => t.id === "TL-struct-test");
+			expect(listTask).toBeDefined();
+			expect(listTask?.worktree_summary.status).toBe("inactive");
+			expect(listTask?.worktree_summary.has_changes).toBeUndefined();
+			expect(listTask?.worktree_summary.changed_files_count).toBeUndefined();
+			expect(listTask?.worktree_summary.commit_count).toBeUndefined();
+			expect(listTask?.worktree_summary.diff_stat).toBeUndefined();
+
+			// Review endpoint: git-derived fields are present
+			const reviewRes = await app.request("/tasks/TL-struct-test/review");
+			const reviewBody = (await reviewRes.json()) as {
+				worktree: {
+					status: string;
+					has_changes?: boolean;
+					changed_files_count?: number;
+					commit_count?: number;
+					diff_stat?: string;
+				};
+			};
+			expect(reviewRes.status).toBe(200);
+			expect(reviewBody.worktree.has_changes).toBe(true);
+			expect(reviewBody.worktree.commit_count).toBeGreaterThan(0);
+		} finally {
+			try {
+				cleanupGitFixture();
+			} catch {
+				// ignore fixture cleanup failures
+			}
 			store.close();
 		}
 	});
