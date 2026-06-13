@@ -130,6 +130,13 @@ type SessionEvent = {
 	state?: "running" | "done" | "error" | "neutral";
 };
 
+type WorkflowPlanStep = {
+	phase: string;
+	helper: string;
+	label: string;
+	conditional: boolean;
+};
+
 type TaskDetail = {
 	loading: boolean;
 	loadedAt?: number;
@@ -137,6 +144,8 @@ type TaskDetail = {
 	task?: KanadeTask;
 	usage?: UsageSummary | null;
 	snapshot?: WorkflowSnapshot | null;
+	workflowScript?: string;
+	workflowPlan?: WorkflowPlanStep[];
 	worktrees?: WorktreeRow[];
 	sessions?: SessionListItem[];
 	sessionLabel?: string;
@@ -270,9 +279,10 @@ async function fetchOverview(): Promise<KanadeOverview> {
 
 async function fetchTaskDetail(taskId: string, includeSession = false): Promise<TaskDetail> {
 	const detail: TaskDetail = { loading: false, loadedAt: Date.now() };
-	const [taskResult, snapshotResult, worktreesResult, sessionsResult] = await Promise.allSettled([
+	const [taskResult, snapshotResult, scriptResult, worktreesResult, sessionsResult] = await Promise.allSettled([
 		getJson<{ task: KanadeTask; usage?: UsageSummary | null }>(`/tasks/${encodeURIComponent(taskId)}`),
 		getJson<{ snapshot: WorkflowSnapshot }>(`/tasks/${encodeURIComponent(taskId)}/snapshot`),
+		getJson<{ script: string }>(`/tasks/${encodeURIComponent(taskId)}/script`),
 		getJson<{ worktrees: WorktreeRow[] }>(`/tasks/${encodeURIComponent(taskId)}/worktrees`),
 		getJson<{ sessions: SessionListItem[] }>(`/tasks/${encodeURIComponent(taskId)}/sessions`),
 	]);
@@ -286,6 +296,10 @@ async function fetchTaskDetail(taskId: string, includeSession = false): Promise<
 	}
 	if (snapshotResult.status === "fulfilled") detail.snapshot = snapshotResult.value.snapshot;
 	else detail.snapshot = null;
+	if (scriptResult.status === "fulfilled") {
+		detail.workflowScript = scriptResult.value.script;
+		detail.workflowPlan = parseWorkflowPlan(scriptResult.value.script);
+	}
 	if (worktreesResult.status === "fulfilled") detail.worktrees = worktreesResult.value.worktrees ?? [];
 	else detail.worktrees = [];
 	if (sessionsResult.status === "fulfilled") detail.sessions = sessionsResult.value.sessions ?? [];
@@ -308,6 +322,44 @@ async function fetchTaskDetail(taskId: string, includeSession = false): Promise<
 
 	if (errors.length > 0) detail.error = errors.join("; ");
 	return detail;
+}
+
+function parseWorkflowPlan(script: string): WorkflowPlanStep[] {
+	const steps: WorkflowPlanStep[] = [];
+	let phase = "Workflow";
+	let conditionalDepth = 0;
+	for (const rawLine of script.split("\n")) {
+		const line = rawLine.trim();
+		const phaseMatch = line.match(/\bphase\(\s*['"`]([^'"`]+)['"`]\s*\)/);
+		if (phaseMatch?.[1]) {
+			phase = phaseMatch[1];
+			conditionalDepth = line.includes("if ") || line.startsWith("if(") ? 1 : conditionalDepth;
+			continue;
+		}
+		if (/^if\b|^if\s*\(/.test(line)) conditionalDepth++;
+		const helperMatch = line.match(
+			/\b(implement|reviewChange|continueImplementation|testChange|requestHuman|askHuman)\s*\(/,
+		);
+		if (helperMatch?.[1]) {
+			steps.push({
+				phase,
+				helper: helperMatch[1],
+				label: workflowHelperLabel(helperMatch[1]),
+				conditional: conditionalDepth > 0,
+			});
+		}
+		if (line.includes("}") && conditionalDepth > 0) conditionalDepth--;
+	}
+	return steps;
+}
+
+function workflowHelperLabel(helper: string): string {
+	if (helper === "implement") return "implement";
+	if (helper === "reviewChange") return "review";
+	if (helper === "continueImplementation") return "fix";
+	if (helper === "testChange") return "validate";
+	if (helper === "requestHuman" || helper === "askHuman") return "human gate";
+	return helper;
 }
 
 function pickSession(sessions: SessionListItem[]): SessionListItem | undefined {
@@ -529,26 +581,22 @@ class AgentDetailOverlay implements Component {
 		if (this.loading) body.push(this.theme.fg("dim", "loading agent detail..."));
 		if (this.error) body.push(this.theme.fg("warning", truncatePlain(this.error, contentWidth)));
 		const agents = this.detail?.snapshot?.agents ?? [];
-		body.push(this.theme.fg("muted", "Agents"));
-		if (agents.length === 0) body.push(this.theme.fg("dim", "No agent snapshot yet."));
-		for (const agent of agents.slice(-6)) {
-			const icon =
-				agent.status === "running" ? "[running]" : agent.status === "error" ? "[error]" : `[${agent.status}]`;
-			body.push(
-				truncateAnsi(
-					`${this.theme.fg(agent.status === "error" ? "warning" : "muted", icon)} ${agent.label}`,
-					contentWidth,
-				),
-			);
-			const summary = agent.error || agent.resultPreview;
-			if (summary) body.push(this.theme.fg("dim", truncatePlain(`  ${summary}`, contentWidth)));
+		const activeAgent = agents.find((agent) => agent.status === "running") ?? agents.at(-1);
+		if (activeAgent) {
+			body.push(`${this.theme.fg("muted", "Agent:")} ${activeAgent.label} · ${activeAgent.status}`);
+			const summary = activeAgent.error || activeAgent.resultPreview;
+			if (summary) body.push(this.theme.fg("dim", truncatePlain(summary, contentWidth)));
+		} else {
+			body.push(this.theme.fg("dim", "No agent snapshot yet."));
 		}
 		const sessions = this.detail?.sessions ?? [];
-		if (sessions.length > 0) body.push(this.theme.fg("dim", `Sessions: ${sessions.map((s) => s.label).join(", ")}`));
+		if (this.detail?.sessionLabel) body.push(this.theme.fg("dim", `Session: ${this.detail.sessionLabel}`));
+		else if (sessions.length > 0)
+			body.push(this.theme.fg("dim", `Sessions: ${sessions.map((s) => s.label).join(", ")}`));
+		const model = latestSessionModel(this.detail?.sessionEvents ?? []);
+		if (model) body.push(this.theme.fg("dim", `Model: ${model}`));
 		body.push(rule(contentWidth, this.theme));
-		body.push(
-			this.theme.fg("muted", `Activity Stream${this.detail?.sessionLabel ? ` · ${this.detail.sessionLabel}` : ""}`),
-		);
+		body.push(this.theme.fg("muted", "Activity"));
 		const events = this.detail?.sessionEvents ?? [];
 		if (events.length === 0) body.push(this.theme.fg("dim", "No persisted session events yet. Auto-refreshing."));
 		for (const event of events.slice(-20)) {
@@ -1182,6 +1230,7 @@ class KanadePanel implements Component {
 
 	private mapLines(task: KanadeTask, detail: TaskDetail | undefined, width: number): string[] {
 		const snapshot = detail?.snapshot;
+		if (detail?.workflowPlan?.length) return this.workflowPlanLines(task, detail, width);
 		if (snapshot?.agents?.length) return this.snapshotMapLines(task, snapshot, width);
 		if (task.status === "running") {
 			return [
@@ -1219,6 +1268,63 @@ class KanadePanel implements Component {
 		return [this.color("dim", "Workflow Runtime will appear as the task executes.")];
 	}
 
+	private workflowPlanLines(task: KanadeTask, detail: TaskDetail, width: number): string[] {
+		const snapshot = detail.snapshot;
+		const currentPhase = snapshot?.currentPhase;
+		const runtimeAgents = snapshot?.agents ?? [];
+		const phases: Array<{ phase: string; steps: WorkflowPlanStep[] }> = [];
+		for (const step of detail.workflowPlan ?? []) {
+			let group = phases.find((candidate) => candidate.phase === step.phase);
+			if (!group) {
+				group = { phase: step.phase, steps: [] };
+				phases.push(group);
+			}
+			group.steps.push(step);
+		}
+		const currentIndex = phases.findIndex((group) => group.phase === currentPhase);
+		const lines = [this.color("muted", "Workflow Plan")];
+		for (let phaseIndex = 0; phaseIndex < phases.length; phaseIndex++) {
+			const group = phases[phaseIndex];
+			const conditional = group.steps.some((step) => step.conditional);
+			const phaseAgents = runtimeAgents.filter((agent) => agent.phase === group.phase);
+			const hasRunning = phaseAgents.some((agent) => agent.status === "running");
+			const hasError = phaseAgents.some((agent) => agent.status === "error");
+			const isCurrent = currentPhase === group.phase || hasRunning;
+			const isDone = currentIndex >= 0 && phaseIndex < currentIndex;
+			const icon = hasError
+				? this.color("error", "✖")
+				: isCurrent
+					? this.spin()
+					: isDone || task.status === "finished"
+						? this.color("success", "✓")
+						: this.color("dim", "○");
+			if (conditional) lines.push(this.color("dim", `├─ ${phaseConditionLabel(group.phase)} →`));
+			const phaseLabel = isCurrent ? this.color("accent", group.phase) : group.phase;
+			lines.push(
+				`${conditional ? this.color("dim", "│  ") : ""}${icon} Phase: ${truncatePlain(phaseLabel, width - 14)}`,
+			);
+			for (const step of group.steps) {
+				const agent = phaseAgents.find((candidate) => helperMatchesAgent(step, candidate)) ?? phaseAgents.at(0);
+				const agentStatus = agent?.status ?? (isDone ? "done" : isCurrent ? "running" : "planned");
+				const agentIcon =
+					agentStatus === "running"
+						? this.spin()
+						: agentStatus === "error"
+							? this.color("error", "✖")
+							: agentStatus === "done"
+								? this.color("success", "✓")
+								: this.color("dim", "○");
+				const agentLabel = agent?.label ?? step.label;
+				lines.push(
+					`${conditional ? this.color("dim", "│  ") : ""}${this.color("dim", "└─")} ${agentIcon} Agent: ${truncatePlain(agentLabel, width - 24)}${this.color("dim", ` · ${agentStatus}`)}`,
+				);
+			}
+			if (phaseIndex < phases.length - 1) lines.push(this.color("dim", "│"));
+		}
+		if (snapshot?.graph?.cursorNodeId) lines.push(this.color("dim", `Current: ${currentPhase ?? "runtime"}`));
+		return lines;
+	}
+
 	private snapshotMapLines(task: KanadeTask, snapshot: WorkflowSnapshot, width: number): string[] {
 		if (snapshot.graph?.nodes?.length) return this.graphMapLines(task, snapshot.graph, width);
 
@@ -1253,24 +1359,24 @@ class KanadePanel implements Component {
 			const isCursor = graph.cursorNodeId === node.id;
 			const icon = this.graphNodeIcon(node, isCursor);
 			const label = isCursor ? this.color("accent", node.label) : node.label;
-			const kind = node.kind === "agent" ? "agent" : node.kind === "human" ? "human" : "";
-			lines.push(
-				`${icon} ${index + 1} ${truncatePlain(label, width - 8)}${kind ? this.color("dim", ` · ${kind}`) : ""}`,
-			);
+			const prefix =
+				node.kind === "agent"
+					? "  Agent:"
+					: node.kind === "phase"
+						? "Phase:"
+						: node.kind === "human"
+							? "Human:"
+							: `${node.kind}:`;
+			const status = node.kind === "agent" ? this.color("dim", ` · ${node.status}`) : "";
+			lines.push(`${icon} ${prefix} ${truncatePlain(label, width - visibleWidth(`${prefix} `) - 6)}${status}`);
 			const summary = node.error ?? node.summary;
 			if (summary) {
+				const indent = node.kind === "agent" ? "    " : "  ";
 				const styledSummary =
 					node.status === "error"
-						? this.color("error", truncatePlain(summary, width - 4))
-						: this.color("dim", truncatePlain(summary, width - 4));
-				lines.push(`    ${styledSummary}`);
-			}
-			if (index < nodes.length - 1) {
-				const edge = graph.edges.find(
-					(candidate) => candidate.from === node.id && candidate.to === nodes[index + 1].id,
-				);
-				if (edge?.label) lines.push(this.color(edge.status === "warning" ? "warning" : "dim", `  │ ${edge.label}`));
-				else lines.push(this.color("dim", "  │"));
+						? this.color("error", truncatePlain(summary, width - indent.length))
+						: this.color("dim", truncatePlain(summary, width - indent.length));
+				lines.push(`${indent}${styledSummary}`);
 			}
 		}
 		return lines;
@@ -1288,31 +1394,33 @@ class KanadePanel implements Component {
 		const lines: string[] = [];
 		const snapshotAgents = detail?.snapshot?.agents ?? [];
 		const sessions = detail?.sessions ?? [];
-		lines.push(this.color("muted", "Agents"));
+		const activeAgent = snapshotAgents.find((agent) => agent.status === "running") ?? snapshotAgents.at(-1);
+		if (activeAgent) {
+			const icon =
+				activeAgent.status === "running"
+					? this.spin()
+					: activeAgent.status === "error"
+						? this.color("error", "✖")
+						: this.color("success", "✓");
+			lines.push(
+				`${this.color("muted", "Agent:")} ${icon} ${truncatePlain(activeAgent.label, width - 12)} · ${activeAgent.status}`,
+			);
+			if (activeAgent.resultPreview) lines.push(this.color("dim", truncatePlain(activeAgent.resultPreview, width)));
+		} else {
+			lines.push(this.color("muted", "Agent"));
+			lines.push(this.color("dim", "No agent snapshot yet."));
+		}
+		if (detail?.sessionLabel) lines.push(this.color("dim", `Session: ${detail.sessionLabel}`));
+		else if (sessions.length > 0) lines.push(this.color("dim", `Sessions: ${sessions.map((s) => s.label).join(", ")}`));
 		if (snapshotAgents.length === 0 && sessions.length === 0) {
-			lines.push(this.color("dim", "No persisted subagent sessions yet."));
 			lines.push(this.color("dim", "Kanade stores sessions under runs/<task>/debug/subagents."));
 			return lines;
 		}
-		for (const agent of snapshotAgents.slice(0, 4)) {
-			const icon =
-				agent.status === "running"
-					? this.spin()
-					: agent.status === "error"
-						? this.color("error", "✖")
-						: this.color("success", "✓");
-			lines.push(`${icon} ${truncatePlain(agent.label, width - 4)}`);
-			lines.push(this.color("dim", `    ${agent.status}${agent.resultPreview ? ` · ${agent.resultPreview}` : ""}`));
-		}
-		for (const session of sessions.slice(0, Math.max(0, 4 - snapshotAgents.length))) {
-			lines.push(`${this.color("dim", "•")} ${truncatePlain(session.label, width - 4)}`);
-			lines.push(this.color("dim", `    ${session.files.length} session file(s)`));
-		}
 		lines.push("");
-		lines.push(
-			this.color("muted", detail?.sessionLabel ? `Activity Stream · ${detail.sessionLabel}` : "Activity Stream"),
-		);
 		const events = detail?.sessionEvents ?? [];
+		const model = latestSessionModel(events);
+		if (model) lines.push(this.color("dim", `Model: ${model}`));
+		lines.push(this.color("muted", "Activity"));
 		if (events.length === 0) {
 			lines.push(
 				this.color("dim", task.status === "running" ? "Loading latest session..." : "No session preview loaded."),
@@ -1539,6 +1647,22 @@ class KanadePanel implements Component {
 	}
 }
 
+function helperMatchesAgent(step: WorkflowPlanStep, agent: WorkflowAgentSnapshot): boolean {
+	const label = agent.label.toLowerCase();
+	if (step.helper === "implement") return label.includes("implement");
+	if (step.helper === "reviewChange") return label.includes("review");
+	if (step.helper === "continueImplementation") return label.includes("fix") || label.includes("implement");
+	if (step.helper === "testChange") return label.includes("validate") || label.includes("test");
+	return false;
+}
+
+function phaseConditionLabel(phase: string): string {
+	const normalized = phase.toLowerCase();
+	if (normalized.includes("review")) return "if review needs_fix";
+	if (normalized.includes("validation") || normalized.includes("validate")) return "if validation failed";
+	return "conditional";
+}
+
 function summarizePhase(agents: WorkflowAgentSnapshot[]): string {
 	if (agents.length === 0) return "";
 	const running = agents.filter((agent) => agent.status === "running").length;
@@ -1572,6 +1696,14 @@ function relativeTime(ts?: number | null): string {
 	const hours = Math.floor(minutes / 60);
 	if (hours < 24) return `${hours}h ago`;
 	return `${Math.floor(hours / 24)}d ago`;
+}
+
+function latestSessionModel(events: SessionEvent[]): string | undefined {
+	for (let i = events.length - 1; i >= 0; i--) {
+		const event = events[i];
+		if (event?.label === "model" && event.summary) return event.summary;
+	}
+	return undefined;
 }
 
 function isLiveStatus(status: string): boolean {
