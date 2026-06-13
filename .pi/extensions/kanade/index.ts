@@ -373,7 +373,7 @@ async function fetchOverview(): Promise<KanadeOverview> {
 	}
 }
 
-async function fetchTaskDetail(taskId: string, includeSession = false): Promise<TaskDetail> {
+async function fetchTaskDetail(taskId: string, includeSession = false, includeEvents = false): Promise<TaskDetail> {
 	const detail: TaskDetail = { loading: false, loadedAt: Date.now() };
 	const [taskResult, snapshotResult, scriptResult, worktreesResult, sessionsResult, reviewResult] =
 		await Promise.allSettled([
@@ -393,11 +393,14 @@ async function fetchTaskDetail(taskId: string, includeSession = false): Promise<
 		errors.push(`task: ${taskResult.reason}`);
 	}
 
-	// Fetch task events (SSE replay) — best effort
-	try {
-		detail.taskEvents = await fetchTaskEvents(taskId);
-	} catch {
-		// non-critical
+	if (includeEvents) {
+		// Fetch task events (SSE replay) — best effort. Keep this opt-in so normal
+		// detail loads and Agent Detail open do not wait on a long-lived SSE stream.
+		try {
+			detail.taskEvents = await fetchTaskEvents(taskId);
+		} catch {
+			// non-critical
+		}
 	}
 	if (snapshotResult.status === "fulfilled") detail.snapshot = snapshotResult.value.snapshot;
 	else detail.snapshot = null;
@@ -434,7 +437,7 @@ async function fetchTaskDetail(taskId: string, includeSession = false): Promise<
 	return detail;
 }
 
-async function fetchTaskEvents(taskId: string, timeoutMs = 4000): Promise<TaskEvent[]> {
+async function fetchTaskEvents(taskId: string, timeoutMs = 250): Promise<TaskEvent[]> {
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), timeoutMs);
 	try {
@@ -1080,7 +1083,8 @@ class AgentDetailOverlay implements Component {
 	) {
 		this.detail = initialDetail;
 		this.error = initialError;
-		this.loading = false;
+		this.loading = !initialDetail && !initialError;
+		if (!initialError) void this.refresh(false);
 	}
 
 	invalidate(): void {
@@ -1326,6 +1330,7 @@ class KanadePanel implements Component {
 			const i = TABS.indexOf(this.activeTab);
 			this.activeTab = TABS[(i + 1) % TABS.length];
 			this.invalidateAndRender();
+			this.scheduleSelectedDetailLoad(0, this.activeTab === "Agent", this.activeTab === "Events");
 			return;
 		}
 		if (isKey(data, "return", "\r", "\n") || isKey(data, "enter", "\r", "\n")) {
@@ -1401,15 +1406,9 @@ class KanadePanel implements Component {
 		this.actionInProgress = true;
 		this.invalidateAndRender();
 		try {
-			let initialDetail: TaskDetail | undefined;
-			let initialError: string | undefined;
-			try {
-				initialDetail = await fetchTaskDetail(task.id, true);
-			} catch (error) {
-				initialError = error instanceof Error ? error.message : String(error);
-			}
+			const initialDetail = this.details.get(task.id);
 			await this.ui.custom<void>(
-				(tui, theme, _keybindings, done) => new AgentDetailOverlay(tui, theme, task, done, initialDetail, initialError),
+				(tui, theme, _keybindings, done) => new AgentDetailOverlay(tui, theme, task, done, initialDetail),
 				{
 					overlay: true,
 					overlayOptions: { anchor: "top-center", offsetY: 5, width: "90%", minWidth: 104, maxHeight: "80%" },
@@ -2226,28 +2225,42 @@ class KanadePanel implements Component {
 		return { tasks: tasks.slice(0, this.taskLimit), total: tasks.length, query };
 	}
 
-	private scheduleSelectedDetailLoad(delayMs = 180, includeSession = this.activeTab === "Agent"): void {
+	private scheduleSelectedDetailLoad(
+		delayMs = 180,
+		includeSession = this.activeTab === "Agent",
+		includeEvents = this.activeTab === "Events",
+	): void {
 		if (this.detailLoadTimer) clearTimeout(this.detailLoadTimer);
 		const task = this.selectedTask();
 		if (!task) return;
 		const seq = ++this.detailLoadSeq;
 		this.detailLoadTimer = setTimeout(() => {
-			void this.loadSelectedDetail(task.id, seq, includeSession);
+			void this.loadSelectedDetail(task.id, seq, includeSession, includeEvents);
 		}, delayMs);
 	}
 
-	private async loadSelectedDetail(taskId: string, seq: number, includeSession: boolean): Promise<void> {
+	private async loadSelectedDetail(
+		taskId: string,
+		seq: number,
+		includeSession: boolean,
+		includeEvents: boolean,
+	): Promise<void> {
 		if (!this.overview.connected || this.closed) return;
 		const existing = this.details.get(taskId);
-		if (existing?.loading) return;
-		if (existing?.loadedAt && Date.now() - existing.loadedAt < 10_000 && (!includeSession || existing.sessionEvents)) {
+		if (existing?.loading && !includeSession && !includeEvents) return;
+		if (
+			existing?.loadedAt &&
+			Date.now() - existing.loadedAt < 10_000 &&
+			(!includeSession || existing.sessionEvents) &&
+			(!includeEvents || existing.taskEvents)
+		) {
 			if (this.selectedTask()?.id === taskId && seq === this.detailLoadSeq) this.invalidateAndRender();
 			return;
 		}
 		this.details.set(taskId, { ...existing, loading: true });
 		if (this.selectedTask()?.id === taskId && seq === this.detailLoadSeq) this.invalidateAndRender();
 		try {
-			const detail = await fetchTaskDetail(taskId, includeSession);
+			const detail = await fetchTaskDetail(taskId, includeSession, includeEvents);
 			if (this.closed) return;
 			this.details.set(taskId, detail);
 		} catch (error) {
