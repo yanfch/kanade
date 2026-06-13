@@ -554,8 +554,12 @@ class AgentDetailOverlay implements Component {
 		private readonly theme: Theme,
 		private readonly task: KanadeTask,
 		private readonly done: () => void,
+		initialDetail?: TaskDetail,
+		initialError?: string,
 	) {
-		void this.refresh(true);
+		this.detail = initialDetail;
+		this.error = initialError;
+		this.loading = false;
 	}
 
 	invalidate(): void {
@@ -643,13 +647,8 @@ function sortTasks(tasks: KanadeTask[]): KanadeTask[] {
 			case "running":
 			case "created":
 				return 1;
-			case "failed":
-			case "aborted":
-				return 2;
-			case "finished":
-				return 3;
 			default:
-				return 4;
+				return 2;
 		}
 	};
 	return [...tasks].sort((a, b) => priority(a) - priority(b) || Number(b.created_at ?? 0) - Number(a.created_at ?? 0));
@@ -867,10 +866,20 @@ class KanadePanel implements Component {
 		this.actionInProgress = true;
 		this.invalidateAndRender();
 		try {
-			await this.ui.custom<void>((tui, theme, _keybindings, done) => new AgentDetailOverlay(tui, theme, task, done), {
-				overlay: true,
-				overlayOptions: { anchor: "top-center", offsetY: 5, width: "90%", minWidth: 104, maxHeight: "80%" },
-			});
+			let initialDetail: TaskDetail | undefined;
+			let initialError: string | undefined;
+			try {
+				initialDetail = await fetchTaskDetail(task.id, true);
+			} catch (error) {
+				initialError = error instanceof Error ? error.message : String(error);
+			}
+			await this.ui.custom<void>(
+				(tui, theme, _keybindings, done) => new AgentDetailOverlay(tui, theme, task, done, initialDetail, initialError),
+				{
+					overlay: true,
+					overlayOptions: { anchor: "top-center", offsetY: 5, width: "90%", minWidth: 104, maxHeight: "80%" },
+				},
+			);
 		} finally {
 			this.actionInProgress = false;
 			this.invalidateAndRender();
