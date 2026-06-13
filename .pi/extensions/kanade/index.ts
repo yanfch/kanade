@@ -270,7 +270,7 @@ const CLEAR_CELL = "\u00A0";
 const ANSI_SGR_PREFIX = new RegExp(`^${ESC}\\[[0-9;]*m`);
 const ANSI_SGR_GLOBAL = new RegExp(`${ESC}\\[[0-9;]*m`, "g");
 
-type SettingsFieldType = "boolean" | "number" | "string";
+type SettingsFieldType = "boolean" | "number" | "string" | "json";
 
 type SettingsFieldDef = {
 	key: string;
@@ -278,18 +278,112 @@ type SettingsFieldDef = {
 	label: string;
 	type: SettingsFieldType;
 	dangerous?: boolean;
+	readOnly?: boolean;
 };
 
-const SETTINGS_FIELDS: readonly SettingsFieldDef[] = [
-	{ key: "defaults.maxConcurrentTasks", section: "defaults", label: "Max Concurrent Tasks", type: "number" },
-	{ key: "defaults.concurrency", section: "defaults", label: "Concurrency", type: "number" },
-	{ key: "defaults.agentTimeoutMs", section: "defaults", label: "Agent Timeout Ms", type: "number" },
-	{ key: "isolation.defaultMode", section: "isolation", label: "Isolation Mode", type: "string" },
-	{ key: "merge.targetBranch", section: "merge", label: "Target Branch", type: "string" },
-	{ key: "debug.persistSubagents", section: "debug", label: "Persist Subagents", type: "boolean" },
-	{ key: "debug.dumpArtifacts", section: "debug", label: "Dump Artifacts", type: "boolean" },
-	{ key: "cleanup.enabled", section: "cleanup", label: "Cleanup Enabled", type: "boolean", dangerous: true },
-	{ key: "cleanup.schedule", section: "cleanup", label: "Cleanup Schedule", type: "string", dangerous: true },
+type SettingsGroup = { section: string; label: string; fields: SettingsFieldDef[] };
+
+const SETTINGS_GROUPS: readonly SettingsGroup[] = [
+	{
+		section: "models",
+		label: "Models",
+		fields: [
+			{ key: "models.modelsPath", section: "models", label: "Models Path", type: "string" },
+			{ key: "models.inheritPiSettings", section: "models", label: "Inherit Pi Settings", type: "boolean" },
+			{
+				key: "models.disableSubagentCompaction",
+				section: "models",
+				label: "Disable Subagent Compaction",
+				type: "boolean",
+			},
+		],
+	},
+	{
+		section: "defaults",
+		label: "Defaults",
+		fields: [
+			{ key: "defaults.maxConcurrentTasks", section: "defaults", label: "Max Concurrent Tasks", type: "number" },
+			{ key: "defaults.concurrency", section: "defaults", label: "Concurrency", type: "number" },
+			{ key: "defaults.agentTimeoutMs", section: "defaults", label: "Agent Timeout Ms", type: "number" },
+			{ key: "defaults.authorModel", section: "defaults", label: "Author Model", type: "string" },
+			{ key: "defaults.agentModel", section: "defaults", label: "Agent Model", type: "string" },
+			{ key: "defaults.roleModels", section: "defaults", label: "Role Models", type: "json" },
+		],
+	},
+	{
+		section: "isolation",
+		label: "Isolation",
+		fields: [{ key: "isolation.defaultMode", section: "isolation", label: "Isolation Mode", type: "string" }],
+	},
+	{
+		section: "merge",
+		label: "Merge",
+		fields: [{ key: "merge.targetBranch", section: "merge", label: "Target Branch", type: "string" }],
+	},
+	{
+		section: "debug",
+		label: "Debug",
+		fields: [
+			{ key: "debug.persistSubagents", section: "debug", label: "Persist Subagents", type: "boolean" },
+			{ key: "debug.dumpArtifacts", section: "debug", label: "Dump Artifacts", type: "boolean" },
+		],
+	},
+	{
+		section: "cleanup",
+		label: "Cleanup",
+		fields: [
+			{ key: "cleanup.enabled", section: "cleanup", label: "Cleanup Enabled", type: "boolean", dangerous: true },
+			{ key: "cleanup.schedule", section: "cleanup", label: "Cleanup Schedule", type: "string", dangerous: true },
+		],
+	},
+	{
+		section: "network",
+		label: "Network",
+		fields: [
+			{ key: "network.httpProxy", section: "network", label: "HTTP Proxy", type: "string" },
+			{ key: "network.httpsProxy", section: "network", label: "HTTPS Proxy", type: "string" },
+			{ key: "network.allProxy", section: "network", label: "All Proxy", type: "string" },
+			{ key: "network.noProxy", section: "network", label: "No Proxy", type: "string" },
+			{ key: "network.httpIdleTimeoutMs", section: "network", label: "HTTP Idle Timeout Ms", type: "number" },
+		],
+	},
+	{
+		section: "liveAcceptance",
+		label: "Live Acceptance",
+		fields: [
+			{ key: "liveAcceptance.timeoutMs", section: "liveAcceptance", label: "Timeout Ms", type: "number" },
+			{ key: "liveAcceptance.pollMs", section: "liveAcceptance", label: "Poll Ms", type: "number" },
+		],
+	},
+	{
+		section: "_readonly",
+		label: "Read-only / Sensitive",
+		fields: [
+			{ key: "models.mode", section: "models", label: "Mode", type: "string", readOnly: true },
+			{ key: "models.authPath", section: "models", label: "Auth Path", type: "string", readOnly: true },
+			{ key: "models.agentDir", section: "models", label: "Agent Dir", type: "string", readOnly: true },
+			{ key: "models.piAgentDir", section: "models", label: "Pi Agent Dir", type: "string", readOnly: true },
+			{ key: "paths.root", section: "paths", label: "Root", type: "string", readOnly: true },
+			{ key: "paths.configFile", section: "paths", label: "Config File", type: "string", readOnly: true },
+			{ key: "paths.dbDir", section: "paths", label: "DB Dir", type: "string", readOnly: true },
+			{ key: "paths.rolesDir", section: "paths", label: "Roles Dir", type: "string", readOnly: true },
+			{ key: "paths.workflowsDir", section: "paths", label: "Workflows Dir", type: "string", readOnly: true },
+			{ key: "paths.runsDir", section: "paths", label: "Runs Dir", type: "string", readOnly: true },
+			{ key: "paths.worktreesDir", section: "paths", label: "Worktrees Dir", type: "string", readOnly: true },
+			{ key: "paths.tracesDir", section: "paths", label: "Traces Dir", type: "string", readOnly: true },
+			{ key: "paths.stateDb", section: "paths", label: "State DB", type: "string", readOnly: true },
+			{ key: "paths.logsDir", section: "paths", label: "Logs Dir", type: "string", readOnly: true },
+			{
+				key: "paths.sharedExtensionsDir",
+				section: "paths",
+				label: "Shared Extensions Dir",
+				type: "string",
+				readOnly: true,
+			},
+			{ key: "server.port", section: "server", label: "Port", type: "number", readOnly: true },
+			{ key: "server.bind", section: "server", label: "Bind", type: "string", readOnly: true },
+		],
+	},
 ];
 
 function kanadeBaseUrl(): string {
@@ -812,18 +906,31 @@ class SettingsOverlay implements Component {
 	private savedField?: string;
 	private editBuffer?: string;
 
+	private readonly _displayItems: Array<
+		{ kind: "section"; label: string } | { kind: "field"; field: SettingsFieldDef }
+	>;
+
 	constructor(
 		private readonly tui: TuiHandle,
 		private readonly theme: Theme,
 		private readonly ui: Ui,
 		private readonly config: Record<string, unknown>,
 		private readonly done: () => void,
-	) {}
+	) {
+		const items: typeof this._displayItems = [];
+		for (const group of SETTINGS_GROUPS) {
+			items.push({ kind: "section", label: group.label });
+			for (const field of group.fields) items.push({ kind: "field", field });
+		}
+		this._displayItems = items;
+		// Ensure selected starts on a field, not a section header
+		while (this.selected < items.length && items[this.selected]?.kind === "section") this.selected++;
+	}
 
 	invalidate(): void {}
 
 	render(width: number): string[] {
-		const boxWidth = Math.min(Math.max(72, width), 100);
+		const boxWidth = Math.min(Math.max(72, width), 120);
 		const contentWidth = Math.max(40, boxWidth - 4);
 		const lines: string[] = [this.theme.fg("muted", "Global Kanade Settings"), ""];
 		lines.push(
@@ -834,23 +941,49 @@ class SettingsOverlay implements Component {
 		);
 		lines.push(rule(Math.min(60, contentWidth), this.theme));
 
-		for (let i = 0; i < SETTINGS_FIELDS.length; i++) {
-			const field = SETTINGS_FIELDS[i];
+		for (let i = 0; i < this._displayItems.length; i++) {
+			const item = this._displayItems[i];
+			if (!item) continue;
+			if (item.kind === "section") {
+				lines.push(this.theme.fg("muted", `── ${item.label} ──`));
+				continue;
+			}
+			const field = item.field;
 			const value = this.getFieldValue(field.key);
 			const selected = i === this.selected && !this.editBuffer;
 			const prefix = selected ? this.theme.fg("accent", "▸") : " ";
-			const label = this.theme.fg("dim", field.label);
 			const display = this.displayValue(field, value);
 			const dangerTag = field.dangerous ? this.theme.fg("warning", " ⚠") : "";
-			lines.push(`${prefix} ${label}: ${display}${dangerTag}`);
+			if (field.readOnly) {
+				lines.push(
+					`${prefix} ${this.theme.fg("dim", `${field.label}: ${display}`)}${this.theme.fg("dim", " [read-only]")}`,
+				);
+			} else {
+				lines.push(`${prefix} ${this.theme.fg("dim", field.label)}: ${display}${dangerTag}`);
+			}
 		}
 
 		// Edit mode indicator
 		if (this.editBuffer !== undefined) {
 			lines.push("");
-			const field = SETTINGS_FIELDS[this.selected];
-			lines.push(this.theme.fg("accent", `Editing ${field.label}: ${this.editBuffer}▏`));
-			lines.push(this.theme.fg("dim", "Type to edit · Enter save · Esc cancel"));
+			const field = this.currentField();
+			if (field) {
+				if (field.type === "json") {
+					lines.push(this.theme.fg("accent", `Editing ${field.label}:`));
+					const bufLines = this.editBuffer.split("\n");
+					for (const bl of bufLines) {
+						lines.push(this.theme.fg("accent", `  ${bl}`));
+					}
+					lines.push(this.theme.fg("accent", "  ▏"));
+				} else {
+					lines.push(this.theme.fg("accent", `Editing ${field.label}: ${this.editBuffer}▏`));
+				}
+				if (field.type === "json") {
+					lines.push(this.theme.fg("dim", "Type to edit · Enter newline · Ctrl+S save · Esc cancel"));
+				} else {
+					lines.push(this.theme.fg("dim", "Type to edit · Enter save · Esc cancel"));
+				}
+			}
 		}
 
 		// Notice
@@ -871,25 +1004,33 @@ class SettingsOverlay implements Component {
 			lines.push(this.theme.fg("dim", "↑↓ select · Enter edit/toggle · Esc close"));
 		}
 
-		const fitLines = fitBodyRows(lines, 18, 24);
+		const fitLines = fitBodyRows(lines, 24, 60);
 		return box(fitLines, boxWidth, "Kanade Settings", this.theme);
+	}
+
+	private currentField(): SettingsFieldDef | undefined {
+		const item = this._displayItems[this.selected];
+		return item?.kind === "field" ? item.field : undefined;
 	}
 
 	handleInput(data: string): void {
 		// Edit mode
 		if (this.editBuffer !== undefined) {
-			handleEditModeInput(
-				data,
-				this.editBuffer,
-				SETTINGS_FIELDS[this.selected],
-				(buffer) => {
-					this.editBuffer = buffer;
-				},
-				() => {
-					this.editBuffer = undefined;
-				},
-				() => void this.saveCurrentField(),
-			);
+			const field = this.currentField();
+			if (field) {
+				handleEditModeInput(
+					data,
+					this.editBuffer,
+					field,
+					(buffer) => {
+						this.editBuffer = buffer;
+					},
+					() => {
+						this.editBuffer = undefined;
+					},
+					() => void this.saveCurrentField(),
+				);
+			}
 			return;
 		}
 
@@ -899,12 +1040,17 @@ class SettingsOverlay implements Component {
 		}
 		if (isKey(data, "up", "\x1b[A", "\x1bOA")) {
 			this.selected = Math.max(0, this.selected - 1);
+			// Skip section headers
+			while (this.selected > 0 && this._displayItems[this.selected]?.kind === "section") this.selected--;
 			this.notice = undefined;
 			this.savedField = undefined;
 			return;
 		}
 		if (isKey(data, "down", "\x1b[B", "\x1bOB")) {
-			this.selected = Math.min(SETTINGS_FIELDS.length - 1, this.selected + 1);
+			this.selected = Math.min(this._displayItems.length - 1, this.selected + 1);
+			// Skip section headers
+			while (this.selected < this._displayItems.length - 1 && this._displayItems[this.selected]?.kind === "section")
+				this.selected++;
 			this.notice = undefined;
 			this.savedField = undefined;
 			return;
@@ -926,17 +1072,30 @@ class SettingsOverlay implements Component {
 
 	private displayValue(field: SettingsFieldDef, value: unknown): string {
 		if (field.type === "boolean") return value ? "true" : "false";
+		if (field.type === "json") {
+			if (value && typeof value === "object") return JSON.stringify(value);
+			return String(value ?? "{}");
+		}
 		return String(value ?? "");
 	}
 
 	private async activateField(): Promise<void> {
-		const field = SETTINGS_FIELDS[this.selected];
+		const field = this.currentField();
+		if (!field) return;
+		if (field.readOnly) {
+			this.notice = { kind: "warning", text: `${field.label} is read-only.` };
+			return;
+		}
 		if (field.type === "boolean") {
 			await this.toggleBoolean(field);
 		} else {
-			// Enter edit mode for string/number
+			// Enter edit mode for string/number/json
 			const current = this.getFieldValue(field.key);
-			this.editBuffer = String(current ?? "");
+			if (field.type === "json") {
+				this.editBuffer = current && typeof current === "object" ? JSON.stringify(current, null, 2) : "{}";
+			} else {
+				this.editBuffer = String(current ?? "");
+			}
 			this.notice = undefined;
 			this.savedField = undefined;
 		}
@@ -960,7 +1119,8 @@ class SettingsOverlay implements Component {
 	}
 
 	private async saveCurrentField(): Promise<void> {
-		const field = SETTINGS_FIELDS[this.selected];
+		const field = this.currentField();
+		if (!field) return;
 		const buffer = this.editBuffer ?? "";
 		let value: unknown;
 
@@ -972,6 +1132,13 @@ class SettingsOverlay implements Component {
 				return;
 			}
 			value = parsed;
+		} else if (field.type === "json") {
+			try {
+				value = JSON.parse(buffer);
+			} catch {
+				this.notice = { kind: "error", text: "Invalid JSON." };
+				return;
+			}
 		} else {
 			value = buffer;
 		}
@@ -1051,7 +1218,20 @@ function handleEditModeInput(
 		cancel();
 		return;
 	}
-	if (isKey(data, "return", "\r", "\n") || isKey(data, "enter", "\r", "\n")) {
+	// Ctrl+S saves (works for all field types including JSON)
+	if (isKey(data, "ctrl+s") || data === "\x13") {
+		save();
+		return;
+	}
+	// For JSON fields, Enter inserts a newline; use Ctrl+S to save
+	if ((field.type === "json" && isKey(data, "return", "\r", "\n")) || isKey(data, "enter", "\r", "\n")) {
+		if (field.type === "json") {
+			setBuffer(`${buffer}\n`);
+			return;
+		}
+	}
+	// For non-JSON fields, Enter saves
+	if (field.type !== "json" && (isKey(data, "return", "\r", "\n") || isKey(data, "enter", "\r", "\n"))) {
 		save();
 		return;
 	}

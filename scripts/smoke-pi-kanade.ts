@@ -201,14 +201,43 @@ const REVIEW_NO_CHANGES: Record<string, unknown> = {
 };
 
 const MOCK_CONFIG: Record<string, unknown> = {
-	paths: { root: "/tmp/kanade", configFile: "/tmp/kanade/config.yml" },
+	paths: {
+		root: "/tmp/kanade",
+		configFile: "/tmp/kanade/config.yml",
+		dbDir: "/tmp/kanade/db",
+		rolesDir: "/tmp/kanade/roles",
+		workflowsDir: "/tmp/kanade/workflows",
+		runsDir: "/tmp/kanade/runs",
+		worktreesDir: "/tmp/kanade/worktrees",
+		tracesDir: "/tmp/kanade/traces",
+		stateDb: "/tmp/kanade/state.db",
+		logsDir: "/tmp/kanade/logs",
+		sharedExtensionsDir: "/tmp/kanade/extensions",
+	},
 	server: { port: 7777, bind: "127.0.0.1" },
-	models: { mode: "inherit-pi", authPath: null, agentDir: null },
-	defaults: { concurrency: 16, agentModel: null, maxConcurrentTasks: 0, agentTimeoutMs: 1_800_000 },
+	models: {
+		mode: "inherit-pi",
+		authPath: "/tmp/kanade/auth.json",
+		agentDir: "/tmp/agents",
+		piAgentDir: "/tmp/pi-agents",
+		modelsPath: "/tmp/models",
+		inheritPiSettings: true,
+		disableSubagentCompaction: true,
+	},
+	defaults: {
+		concurrency: 16,
+		agentModel: "claude-sonnet-4",
+		authorModel: "gpt-4o",
+		roleModels: { implement: "claude-sonnet-4", review: "gpt-4o" },
+		maxConcurrentTasks: 0,
+		agentTimeoutMs: 1_800_000,
+	},
 	isolation: { defaultMode: "worktree", branchPrefix: "kanade" },
 	merge: { targetBranch: "main", useNoFf: true, requireCleanLint: true, requireCleanTest: true },
 	debug: { persistSubagents: false, dumpArtifacts: false },
 	cleanup: { enabled: true, schedule: "0 * * * *" },
+	network: { httpProxy: null, httpsProxy: null, allProxy: null, noProxy: null, httpIdleTimeoutMs: 300000 },
+	liveAcceptance: { prepare: [], checks: [], timeoutMs: 1800000, pollMs: 10000 },
 };
 
 const WORKTREES: unknown[] = [];
@@ -1197,6 +1226,16 @@ function assert(label: string, condition: boolean, detail?: string) {
 		assert("shows Isolation Mode label", text.includes("Isolation Mode"), `output: ${text.slice(0, 500)}`);
 		assert("shows Persist Subagents label", text.includes("Persist Subagents"), `output: ${text.slice(0, 500)}`);
 		assert("shows Cleanup Enabled label", text.includes("Cleanup Enabled"), `output: ${text.slice(0, 500)}`);
+		assert("shows Inherit Pi Settings label", text.includes("Inherit Pi Settings"), `output: ${text.slice(0, 500)}`);
+		assert("shows Author Model label", text.includes("Author Model"), `output: ${text.slice(0, 500)}`);
+		assert("shows Agent Model label", text.includes("Agent Model"), `output: ${text.slice(0, 500)}`);
+		assert("shows Role Models label", text.includes("Role Models"), `output: ${text.slice(0, 500)}`);
+		assert("shows read-only marker for authPath", text.includes("[read-only]"), `output: ${text.slice(0, 500)}`);
+		assert(
+			"shows group headers",
+			text.includes("── Models ──") || text.includes("Models"),
+			`output: ${text.slice(0, 500)}`,
+		);
 		assert(
 			"shows current boolean value",
 			text.includes("false") || text.includes("true"),
@@ -1224,8 +1263,8 @@ function assert(label: string, condition: boolean, detail?: string) {
 		assert("settings overlay opened for toggle test", false);
 	} else {
 		const comp = settingsCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
-		// Navigate to Persist Subagents (index 5, boolean field)
-		for (let i = 0; i < 5; i++) comp.handleInput?.("\x1b[B"); // down arrow
+		// Navigate to Persist Subagents (11 down arrows from first field models.modelsPath)
+		for (let i = 0; i < 11; i++) comp.handleInput?.("\x1b[B"); // down arrow
 		await delay(50);
 		comp.handleInput?.("\r"); // Enter to toggle
 		await delay(200);
@@ -1266,8 +1305,11 @@ function assert(label: string, condition: boolean, detail?: string) {
 		assert("settings overlay opened for number edit", false);
 	} else {
 		const comp = settingsCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
-		// First field is Max Concurrent Tasks (index 0, number)
-		comp.handleInput?.("\r"); // Enter to start edit
+		// Navigate to Max Concurrent Tasks (3 down arrows from first field models.modelsPath)
+		for (let i = 0; i < 3; i++) comp.handleInput?.("\x1b[B"); // down arrow
+		await delay(50);
+		// Enter edit mode
+		comp.handleInput?.("\r");
 		await delay(50);
 		let text = strip(comp.render(90).join("\n"));
 		assert(
@@ -1317,8 +1359,8 @@ function assert(label: string, condition: boolean, detail?: string) {
 		assert("settings overlay opened for dangerous test", false);
 	} else {
 		const comp = settingsCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
-		// Navigate to Cleanup Enabled (index 7, boolean, dangerous)
-		for (let i = 0; i < 7; i++) comp.handleInput?.("\x1b[B"); // down arrow
+		// Navigate to Cleanup Enabled (13 down arrows from first field models.modelsPath)
+		for (let i = 0; i < 13; i++) comp.handleInput?.("\x1b[B"); // down arrow
 		await delay(50);
 		comp.handleInput?.("\r"); // Enter to toggle
 		await delay(300);
@@ -1353,7 +1395,10 @@ function assert(label: string, condition: boolean, detail?: string) {
 		assert("settings overlay opened for cancel test", false);
 	} else {
 		const comp = settingsCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
-		// First field (number), enter edit mode
+		// Navigate to an editable field (defaults, ~8 down arrows from first field)
+		for (let i = 0; i < 8; i++) comp.handleInput?.("\x1b[B"); // down arrow
+		await delay(50);
+		// Enter edit mode
 		comp.handleInput?.("\r");
 		await delay(50);
 		// Type some chars then cancel
@@ -1373,9 +1418,115 @@ function assert(label: string, condition: boolean, detail?: string) {
 	Object.assign(MOCK_CONFIG, savedConfig);
 }
 
-// ---------------------------------------------------------------------------
-// 5. Summary
-// ---------------------------------------------------------------------------
+// ---------- Test 25: Settings groups render section headers + model fields + read-only markers ----------
+{
+	console.log("\nTest 25: Settings groups render section headers, model fields, read-only markers");
+	const savedConfig = structuredClone(MOCK_CONFIG);
+	customCalls.length = 0;
+	const panel = await createPanel();
+	panel.handleInput("s");
+	await delay(200);
+	const settingsCall = customCalls.at(-1);
+	if (!settingsCall) {
+		assert("settings overlay opened for group test", false);
+	} else {
+		const comp = settingsCall.component as { render(w: number): string[] };
+		const text = strip(comp.render(90).join("\n"));
+		assert("shows Models group header", text.includes("Models"), `output: ${text.slice(0, 500)}`);
+		assert("shows Defaults group header", text.includes("Defaults"), `output: ${text.slice(0, 500)}`);
+		assert("shows Isolation group header", text.includes("Isolation"), `output: ${text.slice(0, 500)}`);
+		assert("shows Merge group header", text.includes("Merge"), `output: ${text.slice(0, 500)}`);
+		assert("shows Debug group header", text.includes("Debug"), `output: ${text.slice(0, 500)}`);
+		assert("shows Cleanup group header", text.includes("Cleanup"), `output: ${text.slice(0, 500)}`);
+		assert("shows Network group header", text.includes("Network"), `output: ${text.slice(0, 500)}`);
+		assert("shows Live Acceptance group header", text.includes("Live Acceptance"), `output: ${text.slice(0, 500)}`);
+		assert(
+			"shows read-only section header",
+			text.includes("Read-only") || text.includes("Sensitive"),
+			`output: ${text.slice(0, 500)}`,
+		);
+		assert(
+			"shows Disable Subagent Compaction label",
+			text.includes("Disable Subagent Compaction"),
+			`output: ${text.slice(0, 500)}`,
+		);
+		assert("shows Role Models label", text.includes("Role Models"), `output: ${text.slice(0, 500)}`);
+		assert("shows read-only marker for blocked field", text.includes("[read-only]"), `output: ${text.slice(0, 500)}`);
+		assert("shows Port in read-only section", text.includes("Port"), `output: ${text.slice(-500)}`);
+		assert("shows DB Dir in read-only section", text.includes("DB Dir"), `output: ${text.slice(0, 500)}`);
+		assert("shows Worktrees Dir in read-only section", text.includes("Worktrees Dir"), `output: ${text.slice(0, 500)}`);
+		assert("shows Models Path in models section", text.includes("Models Path"), `output: ${text.slice(0, 500)}`);
+		assert("shows HTTP Proxy label", text.includes("HTTP Proxy"), `output: ${text.slice(0, 500)}`);
+		assert("shows HTTP Idle Timeout label", text.includes("HTTP Idle Timeout"), `output: ${text.slice(0, 500)}`);
+		assert(
+			"shows Timeout Ms in Live Acceptance",
+			text.includes("Timeout Ms") && text.includes("Poll Ms"),
+			`output: ${text.slice(0, 500)}`,
+		);
+		assert(
+			"shows JSON value for roleModels",
+			text.includes("implement") || text.includes("roleModels"),
+			`output: ${text.slice(0, 500)}`,
+		);
+		(comp as { handleInput?: (d: string) => void }).handleInput?.("\x1b");
+		settingsCall.resolve(undefined);
+	}
+	Object.assign(MOCK_CONFIG, savedConfig);
+}
+
+// ---------- Test 26: Edit model default field (authorModel) with correct PATCH shape ----------
+{
+	console.log("\nTest 26: Edit model default field (authorModel) with correct PATCH shape");
+	const savedConfig = structuredClone(MOCK_CONFIG);
+	customCalls.length = 0;
+	fetchCalls.length = 0;
+	patchBodies.length = 0;
+	const panel = await createPanel();
+	panel.handleInput("s");
+	await delay(200);
+	const settingsCall = customCalls.at(-1);
+	if (!settingsCall) {
+		assert("settings overlay opened for model edit test", false);
+	} else {
+		const comp = settingsCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
+		// Navigate to Author Model field (6 down arrows from first field models.modelsPath)
+		for (let i = 0; i < 6; i++) comp.handleInput?.("\x1b[B"); // down arrow
+		await delay(50);
+		// Enter edit mode
+		comp.handleInput?.("\r");
+		await delay(50);
+		let text = strip(comp.render(90).join("\n"));
+		assert(
+			"shows edit mode indicator",
+			text.includes("Editing") || text.includes("▏"),
+			`output: ${text.slice(0, 500)}`,
+		);
+		// Clear existing value then type new value
+		for (let i = 0; i < 10; i++) comp.handleInput?.("\x7f"); // DEL = backspace
+		for (const ch of "claude-opus-4") comp.handleInput?.(ch);
+		comp.handleInput?.("\r"); // Enter to save
+		await delay(200);
+		text = strip(comp.render(90).join("\n"));
+		assert(
+			"shows saved after authorModel edit",
+			text.includes("Saved") || text.includes("authorModel"),
+			`output: ${text.slice(0, 500)}`,
+		);
+		assert(
+			"PATCH was called for authorModel",
+			fetchCalls.some((c) => c.includes("PATCH")),
+			`calls: ${fetchCalls.join(", ")}`,
+		);
+		assert(
+			"authorModel PATCH uses nested defaults body",
+			(patchBodies.at(-1)?.defaults as Record<string, unknown> | undefined)?.authorModel === "claude-opus-4",
+			`patch: ${JSON.stringify(patchBodies.at(-1))}`,
+		);
+		comp.handleInput?.("\x1b");
+		settingsCall.resolve(undefined);
+	}
+	Object.assign(MOCK_CONFIG, savedConfig);
+}
 
 console.log(`\n${"=".repeat(50)}`);
 console.log(`Smoke results: ${passed} passed, ${failed} failed`);

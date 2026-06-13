@@ -484,17 +484,8 @@ export function maskConfig(config: KanadeConfig): Record<string, unknown> {
 	const models = masked.models as Record<string, unknown> | undefined;
 	if (models) {
 		if (models.authPath) models.authPath = "<configured>";
-		if (models.modelsPath) models.modelsPath = "<configured>";
 	}
-	// Remove internal paths from public view
-	if (masked.paths) {
-		const paths = masked.paths as Record<string, unknown>;
-		// Keep root and configFile for debugging, mask internals
-		masked.paths = {
-			root: paths.root,
-			configFile: paths.configFile,
-		};
-	}
+	// Paths and server are read-only in the UI; expose all fields as-is
 	return masked;
 }
 
