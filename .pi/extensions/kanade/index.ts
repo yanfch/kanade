@@ -102,6 +102,8 @@ type WorkflowGraphNode = {
 	phase?: string;
 	summary?: string;
 	error?: string;
+	createdAt?: number;
+	updatedAt?: number;
 };
 
 type WorkflowGraphSnapshot = {
@@ -1764,10 +1766,11 @@ class KanadePanel implements Component {
 		if (this.confirmDialog) return this.confirmDialogLines(width);
 		const detail = this.details.get(task.id);
 		const lines: string[] = [];
-		const status = `${task.status}${relativeTime(task.started_at) ? ` · ${relativeTime(task.started_at)}` : ""}`;
-		lines.push(
-			`${task.id} · ${taskTitle(task, Math.max(12, width - 30))}${padToRight(status, width - visibleWidth(`${task.id} · ${taskTitle(task)}`))}`,
-		);
+		const taskDuration = taskDurationLabel(task);
+		const status = `${task.status}${taskDuration ? ` · ${taskDuration}` : relativeTime(task.started_at) ? ` · ${relativeTime(task.started_at)}` : ""}`;
+		const titleText = `${task.id} · ${taskTitle(task, Math.max(12, width - 30))}`;
+		const pad = Math.max(1, width - visibleWidth(titleText) - visibleWidth(status));
+		lines.push(`${titleText}${" ".repeat(pad)}${status}`);
 		lines.push(this.renderTabs(width));
 		lines.push("");
 		if (detail?.loading) lines.push(`${this.color("dim", "Loading")} task detail...`);
@@ -1877,8 +1880,9 @@ class KanadePanel implements Component {
 								? this.color("success", "✓")
 								: this.color("dim", "○");
 				const agentLabel = agent?.label ?? step.label;
+				const agentDuration = agent ? nodeDurationLabel(agent, isTerminalTask) : "";
 				lines.push(
-					`${conditional ? "  " : ""}${this.color("dim", "└─")} ${agentIcon} Agent: ${truncatePlain(agentLabel, width - 24)}${this.color("dim", ` · ${agentStatus}`)}`,
+					`${conditional ? "  " : ""}${this.color("dim", "└─")} ${agentIcon} Agent: ${truncatePlain(agentLabel, width - 24)}${this.color("dim", ` · ${agentStatus}${agentDuration ? ` · ${agentDuration}` : ""}`)}`,
 				);
 			}
 			if (phaseIndex < phases.length - 1) lines.push(this.color("dim", "│"));
@@ -1927,7 +1931,7 @@ class KanadePanel implements Component {
 			const node = nodes[index];
 			const isCursor = !terminal && graph.cursorNodeId === node.id;
 			const normalizedNode =
-				terminal && node.kind === "phase" && node.status === "running" ? { ...node, status: "done" } : node;
+				terminal && (node.status === "running" || node.status === "planned") ? { ...node, status: "done" } : node;
 			const icon = this.graphNodeIcon(normalizedNode, isCursor);
 			const label = isCursor ? this.color("accent", node.label) : node.label;
 			const prefix =
@@ -1938,7 +1942,11 @@ class KanadePanel implements Component {
 						: node.kind === "human"
 							? "Human:"
 							: `${node.kind}:`;
-			const status = node.kind === "agent" ? this.color("dim", ` · ${normalizedNode.status}`) : "";
+			const durationLabel = nodeDurationLabel(normalizedNode, terminal);
+			const status =
+				node.kind === "agent"
+					? this.color("dim", ` · ${normalizedNode.status}${durationLabel ? ` · ${durationLabel}` : ""}`)
+					: "";
 			lines.push(`${icon} ${prefix} ${truncatePlain(label, width - visibleWidth(`${prefix} `) - 6)}${status}`);
 			const summary = node.error ?? node.summary;
 			if (summary) {
@@ -1986,6 +1994,32 @@ class KanadePanel implements Component {
 		if (snapshotAgents.length === 0 && sessions.length === 0) {
 			lines.push(this.color("dim", "Kanade stores sessions under runs/<task>/debug/subagents."));
 			return lines;
+		}
+		const graph = detail?.snapshot?.graph;
+		if (graph) {
+			lines.push("");
+			lines.push(this.color("muted", "Agent Timing"));
+			for (const node of graph.nodes) {
+				if (node.kind !== "agent" && node.kind !== "phase") continue;
+				const phase = node.phase ?? node.label;
+				const status =
+					terminalTask(task) && (node.status === "running" || node.status === "planned") ? "done" : node.status;
+				const duration = nodeDurationLabel(node, terminalTask(task));
+				const icon =
+					status === "running"
+						? this.color("accent", "▸")
+						: status === "done"
+							? this.color("success", "✓")
+							: status === "error"
+								? this.color("error", "✖")
+								: this.color("dim", "○");
+				lines.push(
+					truncateAnsi(
+						`  ${icon} ${truncatePlain(phase, 16).padEnd(16)} ${status.padEnd(8)} ${duration || "–"}`,
+						width,
+					),
+				);
+			}
 		}
 		lines.push("");
 		const events = detail?.sessionEvents ?? [];
@@ -2452,10 +2486,32 @@ function formatDuration(ms: number): string {
 	if (seconds < 60) return `${seconds}s`;
 	const minutes = Math.floor(seconds / 60);
 	const remainSec = seconds % 60;
-	if (minutes < 60) return `${minutes}m${remainSec}s`;
+	if (minutes < 60) return `${minutes}m ${remainSec}s`;
 	const hours = Math.floor(minutes / 60);
 	const remainMin = minutes % 60;
-	return `${hours}h${remainMin}m`;
+	return `${hours}h ${remainMin}m`;
+}
+
+function terminalTask(task: KanadeTask): boolean {
+	return task.status === "finished" || task.status === "failed" || task.status === "aborted";
+}
+
+function taskDurationLabel(task: KanadeTask): string {
+	const started = task.started_at ?? task.created_at;
+	if (!started) return "";
+	const end = task.finished_at;
+	if (end) return formatDuration(end - started);
+	return `elapsed ${formatDuration(Date.now() - started)}`;
+}
+
+function nodeDurationLabel(node: WorkflowGraphNode, isTerminal: boolean): string {
+	if (!node.createdAt) return "";
+	const end = isTerminal ? (node.updatedAt ?? node.createdAt) : (node.updatedAt ?? node.createdAt);
+	const ms = end - node.createdAt;
+	if (ms < 1000) return "";
+	if (isTerminal) return formatDuration(ms);
+	if (node.status === "running") return `elapsed ${formatDuration(Date.now() - node.createdAt)}`;
+	return formatDuration(ms);
 }
 
 function latestSessionModel(events: SessionEvent[]): string | undefined {
