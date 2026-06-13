@@ -633,6 +633,11 @@ export class TaskManager {
 	respond(taskId: string, requestId: string, response: unknown): void {
 		const row = this.store.getNeedsHuman(requestId);
 		if (!row || row.task_id !== taskId) throw new AppError(`Human request not found for task: ${requestId}`, 404);
+		const task = this.store.getTask(taskId);
+		if (!task) throw new AppError(`Task not found: ${taskId}`, 404);
+		if (task.status === "failed" || task.status === "aborted" || task.status === "finished") {
+			throw new AppError(`Cannot respond to human request for task in ${task.status} state: ${taskId}`, 409);
+		}
 		this.humanGate.resolve(requestId, response as never);
 		this.store.updateTask(taskId, { status: "running" });
 		this.events.emit("task.human_resolved", { taskId, requestId, response }, taskId);
@@ -1125,6 +1130,34 @@ export class TaskManager {
 		};
 	}
 
+	/**
+	 * Recover tasks left in `created` or `running` status by a previous server process.
+	 * Called once at startup. Transitions orphaned tasks to `failed` with a clear
+	 * error message and emits `task.failed` for each. Preserves worktrees/branches.
+	 *
+	 * @returns The number of tasks recovered.
+	 */
+	recoverStaleTasks(): number {
+		const staleTasks = this.store.listTasksByStatuses(["created", "running"], Number.MAX_SAFE_INTEGER);
+		const now = Date.now();
+		const errorMsg = "Task recovered: server restarted while task was in progress";
+		for (const task of staleTasks) {
+			this.store.updateTask(task.id, {
+				status: "failed",
+				finished_at: now,
+				error: errorMsg,
+			});
+			this.events.emit("task.failed", { taskId: task.id, error: errorMsg }, task.id);
+			this.logger.forTask(task.id).info("stale task recovered", {
+				previousStatus: task.status,
+			});
+		}
+		if (staleTasks.length > 0) {
+			this.logger.info("recovered stale tasks on startup", { count: String(staleTasks.length) });
+		}
+		return staleTasks.length;
+	}
+
 	private realAuthorRequired(options?: TaskOptions): boolean {
 		return Boolean(
 			options?.author_model ||
@@ -1201,6 +1234,16 @@ function summarizeTaskWorktrees(task: TaskRow, worktrees: WorktreeRow[]): TaskWo
 			...rejectedSummary,
 		};
 	}
+	if (task.status === "failed" || task.status === "aborted") {
+		const fallback = worktrees.find((row) => row.status === "active") ?? preferred;
+		return {
+			status: "preserved",
+			count: worktrees.length,
+			branch: fallback.branch,
+			path: fallback.worktree_path,
+			...branchDiffSummary(fallback),
+		};
+	}
 	const active = worktrees.find((row) => row.status === "active");
 	if (active) {
 		return {
@@ -1209,15 +1252,6 @@ function summarizeTaskWorktrees(task: TaskRow, worktrees: WorktreeRow[]): TaskWo
 			branch: active.branch,
 			path: active.worktree_path,
 			...branchDiffSummary(active),
-		};
-	}
-	if (task.status === "failed" || task.status === "aborted") {
-		return {
-			status: "preserved",
-			count: worktrees.length,
-			branch: preferred.branch,
-			path: preferred.worktree_path,
-			...branchDiffSummary(preferred),
 		};
 	}
 	return {
