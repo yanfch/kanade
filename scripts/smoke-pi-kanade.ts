@@ -201,7 +201,19 @@ const REVIEW_NO_CHANGES: Record<string, unknown> = {
 };
 
 const MOCK_CONFIG: Record<string, unknown> = {
-	paths: { root: "/tmp/kanade", configFile: "/tmp/kanade/config.yml" },
+	paths: {
+		root: "/tmp/kanade",
+		configFile: "/tmp/kanade/config.yml",
+		dbDir: "/tmp/kanade/db",
+		rolesDir: "/tmp/kanade/roles",
+		workflowsDir: "/tmp/kanade/workflows",
+		runsDir: "/tmp/kanade/runs",
+		worktreesDir: "/tmp/kanade/worktrees",
+		tracesDir: "/tmp/kanade/traces",
+		stateDb: "/tmp/kanade/state.db",
+		logsDir: "/tmp/kanade/logs",
+		sharedExtensionsDir: "/tmp/kanade/extensions",
+	},
 	server: { port: 7777, bind: "127.0.0.1" },
 	models: {
 		mode: "inherit-pi",
@@ -1255,8 +1267,8 @@ function assert(label: string, condition: boolean, detail?: string) {
 		assert("settings overlay opened for toggle test", false);
 	} else {
 		const comp = settingsCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
-		// Navigate to Persist Subagents (grouped, ~15 down arrows from first field)
-		for (let i = 0; i < 15; i++) comp.handleInput?.("\x1b[B"); // down arrow
+		// Navigate to Persist Subagents (11 down arrows from first field models.modelsPath)
+		for (let i = 0; i < 11; i++) comp.handleInput?.("\x1b[B"); // down arrow
 		await delay(50);
 		comp.handleInput?.("\r"); // Enter to toggle
 		await delay(200);
@@ -1297,8 +1309,8 @@ function assert(label: string, condition: boolean, detail?: string) {
 		assert("settings overlay opened for number edit", false);
 	} else {
 		const comp = settingsCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
-		// Navigate to Max Concurrent Tasks (defaults, ~7 down arrows from first field)
-		for (let i = 0; i < 7; i++) comp.handleInput?.("\x1b[B"); // down arrow
+		// Navigate to Max Concurrent Tasks (3 down arrows from first field models.modelsPath)
+		for (let i = 0; i < 3; i++) comp.handleInput?.("\x1b[B"); // down arrow
 		await delay(50);
 		// Enter edit mode
 		comp.handleInput?.("\r");
@@ -1351,8 +1363,8 @@ function assert(label: string, condition: boolean, detail?: string) {
 		assert("settings overlay opened for dangerous test", false);
 	} else {
 		const comp = settingsCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
-		// Navigate to Cleanup Enabled (grouped, ~17 down arrows from first field)
-		for (let i = 0; i < 17; i++) comp.handleInput?.("\x1b[B"); // down arrow
+		// Navigate to Cleanup Enabled (13 down arrows from first field models.modelsPath)
+		for (let i = 0; i < 13; i++) comp.handleInput?.("\x1b[B"); // down arrow
 		await delay(50);
 		comp.handleInput?.("\r"); // Enter to toggle
 		await delay(300);
@@ -1444,7 +1456,10 @@ function assert(label: string, condition: boolean, detail?: string) {
 		);
 		assert("shows Role Models label", text.includes("Role Models"), `output: ${text.slice(0, 500)}`);
 		assert("shows read-only marker for blocked field", text.includes("[read-only]"), `output: ${text.slice(0, 500)}`);
-		assert("shows Port in read-only section", text.includes("Port"), `output: ${text.slice(0, 500)}`);
+		assert("shows Port in read-only section", text.includes("Port"), `output: ${text.slice(-500)}`);
+		assert("shows DB Dir in read-only section", text.includes("DB Dir"), `output: ${text.slice(0, 500)}`);
+		assert("shows Worktrees Dir in read-only section", text.includes("Worktrees Dir"), `output: ${text.slice(0, 500)}`);
+		assert("shows Models Path in models section", text.includes("Models Path"), `output: ${text.slice(0, 500)}`);
 		assert("shows HTTP Proxy label", text.includes("HTTP Proxy"), `output: ${text.slice(0, 500)}`);
 		assert("shows HTTP Idle Timeout label", text.includes("HTTP Idle Timeout"), `output: ${text.slice(0, 500)}`);
 		assert(
@@ -1478,8 +1493,8 @@ function assert(label: string, condition: boolean, detail?: string) {
 		assert("settings overlay opened for model edit test", false);
 	} else {
 		const comp = settingsCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
-		// Navigate to Author Model field (~10 down arrows from first field)
-		for (let i = 0; i < 10; i++) comp.handleInput?.("\x1b[B"); // down arrow
+		// Navigate to Author Model field (6 down arrows from first field models.modelsPath)
+		for (let i = 0; i < 6; i++) comp.handleInput?.("\x1b[B"); // down arrow
 		await delay(50);
 		// Enter edit mode
 		comp.handleInput?.("\r");

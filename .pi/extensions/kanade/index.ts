@@ -288,13 +288,14 @@ const SETTINGS_GROUPS: readonly SettingsGroup[] = [
 		section: "models",
 		label: "Models",
 		fields: [
-			{ key: "models.mode", section: "models", label: "Mode", type: "string", readOnly: true },
-			{ key: "models.authPath", section: "models", label: "Auth Path", type: "string", readOnly: true },
-			{ key: "models.agentDir", section: "models", label: "Agent Dir", type: "string", readOnly: true },
-			{ key: "models.piAgentDir", section: "models", label: "Pi Agent Dir", type: "string", readOnly: true },
 			{ key: "models.modelsPath", section: "models", label: "Models Path", type: "string" },
 			{ key: "models.inheritPiSettings", section: "models", label: "Inherit Pi Settings", type: "boolean" },
-			{ key: "models.disableSubagentCompaction", section: "models", label: "Disable Subagent Compaction", type: "boolean" },
+			{
+				key: "models.disableSubagentCompaction",
+				section: "models",
+				label: "Disable Subagent Compaction",
+				type: "boolean",
+			},
 		],
 	},
 	{
@@ -358,8 +359,27 @@ const SETTINGS_GROUPS: readonly SettingsGroup[] = [
 		section: "_readonly",
 		label: "Read-only / Sensitive",
 		fields: [
+			{ key: "models.mode", section: "models", label: "Mode", type: "string", readOnly: true },
+			{ key: "models.authPath", section: "models", label: "Auth Path", type: "string", readOnly: true },
+			{ key: "models.agentDir", section: "models", label: "Agent Dir", type: "string", readOnly: true },
+			{ key: "models.piAgentDir", section: "models", label: "Pi Agent Dir", type: "string", readOnly: true },
 			{ key: "paths.root", section: "paths", label: "Root", type: "string", readOnly: true },
 			{ key: "paths.configFile", section: "paths", label: "Config File", type: "string", readOnly: true },
+			{ key: "paths.dbDir", section: "paths", label: "DB Dir", type: "string", readOnly: true },
+			{ key: "paths.rolesDir", section: "paths", label: "Roles Dir", type: "string", readOnly: true },
+			{ key: "paths.workflowsDir", section: "paths", label: "Workflows Dir", type: "string", readOnly: true },
+			{ key: "paths.runsDir", section: "paths", label: "Runs Dir", type: "string", readOnly: true },
+			{ key: "paths.worktreesDir", section: "paths", label: "Worktrees Dir", type: "string", readOnly: true },
+			{ key: "paths.tracesDir", section: "paths", label: "Traces Dir", type: "string", readOnly: true },
+			{ key: "paths.stateDb", section: "paths", label: "State DB", type: "string", readOnly: true },
+			{ key: "paths.logsDir", section: "paths", label: "Logs Dir", type: "string", readOnly: true },
+			{
+				key: "paths.sharedExtensionsDir",
+				section: "paths",
+				label: "Shared Extensions Dir",
+				type: "string",
+				readOnly: true,
+			},
 			{ key: "server.port", section: "server", label: "Port", type: "number", readOnly: true },
 			{ key: "server.bind", section: "server", label: "Bind", type: "string", readOnly: true },
 		],
@@ -935,7 +955,9 @@ class SettingsOverlay implements Component {
 			const display = this.displayValue(field, value);
 			const dangerTag = field.dangerous ? this.theme.fg("warning", " ⚠") : "";
 			if (field.readOnly) {
-				lines.push(`${prefix} ${this.theme.fg("dim", `${field.label}: ${display}`)}${this.theme.fg("dim", " [read-only]")}`);
+				lines.push(
+					`${prefix} ${this.theme.fg("dim", `${field.label}: ${display}`)}${this.theme.fg("dim", " [read-only]")}`,
+				);
 			} else {
 				lines.push(`${prefix} ${this.theme.fg("dim", field.label)}: ${display}${dangerTag}`);
 			}
@@ -946,8 +968,21 @@ class SettingsOverlay implements Component {
 			lines.push("");
 			const field = this.currentField();
 			if (field) {
-				lines.push(this.theme.fg("accent", `Editing ${field.label}: ${this.editBuffer}▏`));
-				lines.push(this.theme.fg("dim", "Type to edit · Enter save · Esc cancel"));
+				if (field.type === "json") {
+					lines.push(this.theme.fg("accent", `Editing ${field.label}:`));
+					const bufLines = this.editBuffer.split("\n");
+					for (const bl of bufLines) {
+						lines.push(this.theme.fg("accent", `  ${bl}`));
+					}
+					lines.push(this.theme.fg("accent", "  ▏"));
+				} else {
+					lines.push(this.theme.fg("accent", `Editing ${field.label}: ${this.editBuffer}▏`));
+				}
+				if (field.type === "json") {
+					lines.push(this.theme.fg("dim", "Type to edit · Enter newline · Ctrl+S save · Esc cancel"));
+				} else {
+					lines.push(this.theme.fg("dim", "Type to edit · Enter save · Esc cancel"));
+				}
 			}
 		}
 
@@ -969,7 +1004,7 @@ class SettingsOverlay implements Component {
 			lines.push(this.theme.fg("dim", "↑↓ select · Enter edit/toggle · Esc close"));
 		}
 
-		const fitLines = fitBodyRows(lines, 24, 50);
+		const fitLines = fitBodyRows(lines, 24, 60);
 		return box(fitLines, boxWidth, "Kanade Settings", this.theme);
 	}
 
@@ -1014,10 +1049,7 @@ class SettingsOverlay implements Component {
 		if (isKey(data, "down", "\x1b[B", "\x1bOB")) {
 			this.selected = Math.min(this._displayItems.length - 1, this.selected + 1);
 			// Skip section headers
-			while (
-				this.selected < this._displayItems.length - 1 &&
-				this._displayItems[this.selected]?.kind === "section"
-			)
+			while (this.selected < this._displayItems.length - 1 && this._displayItems[this.selected]?.kind === "section")
 				this.selected++;
 			this.notice = undefined;
 			this.savedField = undefined;
@@ -1186,7 +1218,20 @@ function handleEditModeInput(
 		cancel();
 		return;
 	}
-	if (isKey(data, "return", "\r", "\n") || isKey(data, "enter", "\r", "\n")) {
+	// Ctrl+S saves (works for all field types including JSON)
+	if (isKey(data, "ctrl+s") || data === "\x13") {
+		save();
+		return;
+	}
+	// For JSON fields, Enter inserts a newline; use Ctrl+S to save
+	if ((field.type === "json" && isKey(data, "return", "\r", "\n")) || isKey(data, "enter", "\r", "\n")) {
+		if (field.type === "json") {
+			setBuffer(`${buffer}\n`);
+			return;
+		}
+	}
+	// For non-JSON fields, Enter saves
+	if (field.type !== "json" && (isKey(data, "return", "\r", "\n") || isKey(data, "enter", "\r", "\n"))) {
 		save();
 		return;
 	}
@@ -1205,11 +1250,6 @@ function handleEditModeInput(
 			setBuffer(String(Number.isNaN(n) ? 0 : n - 1));
 			return;
 		}
-	}
-	// Allow newline in JSON fields
-	if (field.type === "json" && data === "\n") {
-		setBuffer(buffer + "\n");
-		return;
 	}
 	// Allow typing printable characters
 	if (data.length === 1 && data >= " " && data <= "~") {
