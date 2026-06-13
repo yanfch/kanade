@@ -1,6 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
 
 type TaskStatus = "created" | "running" | "needs_human" | "finished" | "aborted" | "failed";
 type Theme = ExtensionCommandContext["ui"]["theme"];
@@ -234,23 +233,6 @@ type ConfirmDialog = {
 	danger?: boolean;
 	onConfirm: () => Promise<void>;
 };
-
-const EMPTY_PARAMS = Type.Object({});
-const TASK_DETAIL_PARAMS = Type.Object({
-	task_id: Type.String({ description: "Kanade task id, for example T-0048" }),
-	include_session: Type.Optional(
-		Type.Boolean({ description: "Include a compact preview of the latest persisted subagent session" }),
-	),
-});
-const CREATE_TASK_PARAMS = Type.Object({
-	prompt: Type.String({ description: "Task request for Kanade to turn into a generated semantic workflow" }),
-	author_model: Type.Optional(Type.String({ description: "Optional workflow author model override" })),
-	agent_model: Type.Optional(Type.String({ description: "Optional runtime/subagent model override" })),
-	agent_timeout_ms: Type.Optional(Type.Number({ description: "Optional per-agent timeout in milliseconds" })),
-	prepare_commands: Type.Optional(
-		Type.Array(Type.String(), { description: "Optional commands to run in the worktree before agents" }),
-	),
-});
 
 const KANADE_SPINNER = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
 const DEFAULT_BASE_URL = "http://127.0.0.1:7777";
@@ -1874,7 +1856,7 @@ function worktreeStateLabel(task: KanadeTask): string {
 	if (!summary) return task.status === "finished" ? "review/merge" : "";
 	if (summary.status === "merged") return "merged";
 	if (summary.status === "preserved") return "preserved";
-	if (summary.status === "rejected") return "cleaned";
+	if (summary.status === "rejected") return summary.has_changes || summary.path ? "preserved" : "cleaned";
 	if (task.status === "finished") {
 		if (summary.status === "active" || summary.status === "inactive") return "review/merge";
 		return "no changes";
@@ -2169,95 +2151,7 @@ async function updateFooterStatus(ctx: { ui: Ui }): Promise<void> {
 	);
 }
 
-function registerKanadeTools(pi: ExtensionAPI): void {
-	pi.registerTool({
-		name: "kanade_status",
-		label: "Kanade Status",
-		description: "Inspect Kanade server health, task counts, top tasks, and pending human requests.",
-		parameters: EMPTY_PARAMS,
-		async execute() {
-			const overview = await fetchOverview();
-			const counts = countTasks(overview.tasks);
-			return {
-				content: [
-					{
-						type: "text",
-						text: JSON.stringify(
-							{
-								connected: overview.connected,
-								baseUrl: overview.baseUrl,
-								error: overview.error,
-								counts,
-								pendingHuman: overview.inbox.map((request) => ({
-									task_id: request.task_id,
-									request_id: request.request_id,
-									title: request.payload?.title,
-									options: request.payload?.options,
-								})),
-								tasks: overview.tasks.slice(0, 20).map((task) => ({
-									id: task.id,
-									status: task.status,
-									title: taskTitle(task),
-									error: task.error,
-									created_at: task.created_at,
-								})),
-							},
-							null,
-							2,
-						),
-					},
-				],
-				details: { connected: overview.connected, counts },
-			};
-		},
-	});
-
-	pi.registerTool({
-		name: "kanade_task_detail",
-		label: "Kanade Task Detail",
-		description:
-			"Inspect a Kanade task with usage, snapshot, worktrees, sessions, and optional compact session preview.",
-		parameters: TASK_DETAIL_PARAMS,
-		async execute(_toolCallId, params) {
-			const detail = await fetchTaskDetail(params.task_id, params.include_session ?? false);
-			return {
-				content: [{ type: "text", text: JSON.stringify(detail, null, 2) }],
-				details: { taskId: params.task_id, hasError: Boolean(detail.error) },
-			};
-		},
-	});
-
-	pi.registerTool({
-		name: "kanade_create_task",
-		label: "Kanade Create Task",
-		description:
-			"Create a generated Kanade task. This starts background work but does not merge, abort, reject, or respond to human gates.",
-		parameters: CREATE_TASK_PARAMS,
-		async execute(_toolCallId, params) {
-			const options: Record<string, unknown> = {};
-			if (params.author_model) options.author_model = params.author_model;
-			if (params.agent_model) options.agent_model = params.agent_model;
-			if (params.agent_timeout_ms) options.agent_timeout_ms = params.agent_timeout_ms;
-			if (params.prepare_commands?.length) options.prepare_commands = params.prepare_commands;
-			const result = await postJson<{ task_id: string; run_dir: string; workflow_path: string; generated?: true }>(
-				"/tasks",
-				{
-					source: "generated",
-					prompt: params.prompt,
-					...(Object.keys(options).length > 0 ? { options } : {}),
-				},
-			);
-			return {
-				content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-				details: result,
-			};
-		},
-	});
-}
-
 export default function kanadeExtension(pi: ExtensionAPI) {
-	registerKanadeTools(pi);
-
 	let statusTimer: ReturnType<typeof setInterval> | undefined;
 
 	pi.on("session_start", async (_event, ctx) => {

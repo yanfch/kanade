@@ -9,17 +9,33 @@ Kanade is a multi-agent workflow runtime. Use it when the user wants a task dele
 
 ## Preferred interface
 
-When available, use Kanade extension tools instead of shelling out to the CLI.
+Use the Kanade CLI as the portable baseline. The skill should work even when the Pi extension is not installed, as long as the `kanade` CLI is available.
 
-Available non-destructive tools:
+Common CLI commands:
 
-- `kanade_status` — inspect server health, task counts, top tasks, and pending human requests.
-- `kanade_task_detail` — inspect one task, including usage, snapshot, worktrees, sessions, and optional compact subagent session preview.
-- `kanade_create_task` — create a generated background task. This starts work but does not merge, abort, reject, or respond to human gates.
+```bash
+kanade health
+kanade ls
+kanade ls --status running
+kanade show <task-id>
+kanade show <task-id> --json
+kanade run <workflow> --args '{}'
+kanade iterate <task-id> --instructions '...'
+kanade workflows
+```
 
-Use the `/kanade` cockpit for human-visible inspection and actions. Do not add extra slash commands unless the user explicitly asks.
+Prefer compact CLI or targeted HTTP/JQ commands for monitoring so large JSON does not flood the model context:
 
-Dangerous actions (`merge`, `reject cleanup`, `abort`) must go through explicit user confirmation in Cockpit/dialogs. Do not implement or call hidden dangerous tools for these actions.
+```bash
+kanade ls --status running
+kanade show <task-id> | sed -n '1,120p'
+curl -s http://127.0.0.1:7777/tasks/<task-id> | jq '{id:.task.id,status:.task.status,started_at:.task.started_at,error:.task.error}'
+tail -n 40 <session.jsonl>
+```
+
+Use the `/kanade` cockpit for human-visible inspection and actions when available. Do not depend on project-specific custom tools for normal Kanade operation, and do not add extra slash commands unless the user explicitly asks.
+
+Dangerous actions (`merge`, `reject cleanup`, `abort`) must require explicit user confirmation. Prefer Cockpit/dialog confirmation when available; otherwise ask the user clearly before running CLI commands such as `kanade merge`, `kanade reject`, or abort endpoints.
 
 ## Creating tasks
 
@@ -32,6 +48,16 @@ Use Kanade when the user says things like:
 - “生成一个 workflow 来做这个”
 
 Prefer generated tasks for natural-language work requests. Keep prompts project-agnostic unless the user provides project-specific commands or acceptance criteria.
+
+Portable CLI path:
+
+```bash
+kanade run <saved-workflow> --args '{}'
+```
+
+For generated natural-language tasks, prefer a portable CLI/API path. If a generated-task CLI command is unavailable in that installation, create or use a saved workflow instead of depending on Pi-specific tools.
+
+Pass prepare commands only when they are explicitly needed or clearly project-appropriate. Do not add heavyweight default prepare commands globally.
 
 ## Monitoring tasks
 
