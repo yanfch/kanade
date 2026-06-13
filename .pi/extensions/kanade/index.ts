@@ -281,6 +281,7 @@ type SettingsFieldDef = {
 const SETTINGS_FIELDS: readonly SettingsFieldDef[] = [
 	{ key: "defaults.maxConcurrentTasks", section: "defaults", label: "Max Concurrent Tasks", type: "number" },
 	{ key: "defaults.concurrency", section: "defaults", label: "Concurrency", type: "number" },
+	{ key: "defaults.agentTimeoutMs", section: "defaults", label: "Agent Timeout Ms", type: "number" },
 	{ key: "isolation.defaultMode", section: "isolation", label: "Isolation Mode", type: "string" },
 	{ key: "merge.targetBranch", section: "merge", label: "Target Branch", type: "string" },
 	{ key: "debug.persistSubagents", section: "debug", label: "Persist Subagents", type: "boolean" },
@@ -979,7 +980,7 @@ class SettingsOverlay implements Component {
 		this.savedField = undefined;
 		this.tui.requestRender();
 		try {
-			await patchJson("/config", { [key]: value });
+			await patchJson("/config", buildConfigPatch(key, value));
 			this.notice = { kind: "info", text: `✓ Saved ${key}` };
 			this.savedField = key;
 			// Update local config cache
@@ -1005,6 +1006,21 @@ class SettingsOverlay implements Component {
 		}
 		current[parts[parts.length - 1]!] = value;
 	}
+}
+
+function buildConfigPatch(key: string, value: unknown): Record<string, unknown> {
+	const parts = key.split(".");
+	if (parts.length < 2) return { [key]: value };
+	const root: Record<string, unknown> = {};
+	let current = root;
+	for (let i = 0; i < parts.length - 1; i++) {
+		const part = parts[i]!;
+		const next: Record<string, unknown> = {};
+		current[part] = next;
+		current = next;
+	}
+	current[parts[parts.length - 1]!] = value;
+	return root;
 }
 
 function handleEditModeInput(

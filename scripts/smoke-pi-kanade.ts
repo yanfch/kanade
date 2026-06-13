@@ -179,7 +179,7 @@ const MOCK_CONFIG: Record<string, unknown> = {
 	paths: { root: "/tmp/kanade", configFile: "/tmp/kanade/config.yml" },
 	server: { port: 7777, bind: "127.0.0.1" },
 	models: { mode: "inherit-pi", authPath: null, agentDir: null },
-	defaults: { concurrency: 16, agentModel: null, maxConcurrentTasks: 0 },
+	defaults: { concurrency: 16, agentModel: null, maxConcurrentTasks: 0, agentTimeoutMs: 1_800_000 },
 	isolation: { defaultMode: "worktree", branchPrefix: "kanade" },
 	merge: { targetBranch: "main", useNoFf: true, requireCleanLint: true, requireCleanTest: true },
 	debug: { persistSubagents: false, dumpArtifacts: false },
@@ -198,6 +198,7 @@ const WORKTREES_MERGED: unknown[] = [
 const SESSIONS: unknown[] = [];
 
 const fetchCalls: string[] = [];
+const patchBodies: Record<string, unknown>[] = [];
 
 function mockFetch(url: string | URL | Request, init?: RequestInit): Promise<Response> {
 	const raw = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
@@ -245,16 +246,15 @@ function mockFetch(url: string | URL | Request, init?: RequestInit): Promise<Res
 		try {
 			body = JSON.parse((init?.body as string) ?? "{}");
 		} catch {}
-		// Apply patch to mock config
-		for (const [key, value] of Object.entries(body)) {
-			const parts = key.split(".");
-			let target: Record<string, unknown> = MOCK_CONFIG;
-			for (let i = 0; i < parts.length - 1; i++) {
-				const part = parts[i]!;
-				if (typeof target[part] !== "object" || target[part] === null) target[part] = {};
-				target = target[part] as Record<string, unknown>;
-			}
-			target[parts[parts.length - 1]!] = value;
+		patchBodies.push(body);
+		if (Object.keys(body).some((key) => key.includes("."))) {
+			return json({ error: "dotted top-level keys are not accepted" }, 400);
+		}
+		// Apply nested patch to mock config, matching the real PATCH /config API shape.
+		for (const [section, sectionPatch] of Object.entries(body)) {
+			if (typeof sectionPatch !== "object" || sectionPatch === null) continue;
+			const target = (MOCK_CONFIG[section] ?? {}) as Record<string, unknown>;
+			MOCK_CONFIG[section] = { ...target, ...(sectionPatch as Record<string, unknown>) };
 		}
 		return json({ ok: true, config: MOCK_CONFIG });
 	}
@@ -1043,6 +1043,7 @@ function assert(label: string, condition: boolean, detail?: string) {
 		const text = strip(comp.render(90).join("\n"));
 		assert("shows Max Concurrent Tasks label", text.includes("Max Concurrent Tasks"), `output: ${text.slice(0, 500)}`);
 		assert("shows Concurrency label", text.includes("Concurrency"), `output: ${text.slice(0, 500)}`);
+		assert("shows Agent Timeout label", text.includes("Agent Timeout Ms"), `output: ${text.slice(0, 500)}`);
 		assert("shows Isolation Mode label", text.includes("Isolation Mode"), `output: ${text.slice(0, 500)}`);
 		assert("shows Persist Subagents label", text.includes("Persist Subagents"), `output: ${text.slice(0, 500)}`);
 		assert("shows Cleanup Enabled label", text.includes("Cleanup Enabled"), `output: ${text.slice(0, 500)}`);
@@ -1063,6 +1064,8 @@ function assert(label: string, condition: boolean, detail?: string) {
 	console.log("\nTest 21: Settings toggle boolean via Enter");
 	const savedConfig = structuredClone(MOCK_CONFIG);
 	customCalls.length = 0;
+	fetchCalls.length = 0;
+	patchBodies.length = 0;
 	const panel = await createPanel(true); // confirmResult = true
 	panel.handleInput("s");
 	await delay(200);
@@ -1071,8 +1074,8 @@ function assert(label: string, condition: boolean, detail?: string) {
 		assert("settings overlay opened for toggle test", false);
 	} else {
 		const comp = settingsCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
-		// Navigate to Persist Subagents (index 4, boolean field)
-		for (let i = 0; i < 4; i++) comp.handleInput?.("\x1b[B"); // down arrow
+		// Navigate to Persist Subagents (index 5, boolean field)
+		for (let i = 0; i < 5; i++) comp.handleInput?.("\x1b[B"); // down arrow
 		await delay(50);
 		comp.handleInput?.("\r"); // Enter to toggle
 		await delay(200);
@@ -1087,6 +1090,11 @@ function assert(label: string, condition: boolean, detail?: string) {
 			fetchCalls.some((c) => c.includes("PATCH") && c.includes("/config")),
 			`calls: ${fetchCalls.join(", ")}`,
 		);
+		assert(
+			"PATCH uses nested config body",
+			Boolean((patchBodies.at(-1)?.debug as Record<string, unknown> | undefined)?.persistSubagents),
+			`patch: ${JSON.stringify(patchBodies.at(-1))}`,
+		);
 		comp.handleInput?.("\x1b");
 		settingsCall.resolve(undefined);
 	}
@@ -1099,6 +1107,7 @@ function assert(label: string, condition: boolean, detail?: string) {
 	const savedConfig = structuredClone(MOCK_CONFIG);
 	customCalls.length = 0;
 	fetchCalls.length = 0;
+	patchBodies.length = 0;
 	const panel = await createPanel();
 	panel.handleInput("s");
 	await delay(200);
@@ -1131,6 +1140,11 @@ function assert(label: string, condition: boolean, detail?: string) {
 			fetchCalls.some((c) => c.includes("PATCH")),
 			`calls: ${fetchCalls.join(", ")}`,
 		);
+		assert(
+			"number PATCH uses nested defaults body",
+			(patchBodies.at(-1)?.defaults as Record<string, unknown> | undefined)?.maxConcurrentTasks === 5,
+			`patch: ${JSON.stringify(patchBodies.at(-1))}`,
+		);
 		comp.handleInput?.("\x1b");
 		settingsCall.resolve(undefined);
 	}
@@ -1143,6 +1157,7 @@ function assert(label: string, condition: boolean, detail?: string) {
 	const savedConfig = structuredClone(MOCK_CONFIG);
 	customCalls.length = 0;
 	fetchCalls.length = 0;
+	patchBodies.length = 0;
 	// confirmResult = false means the confirmation dialog will be rejected
 	const panel = await createPanel(false);
 	panel.handleInput("s");
@@ -1152,8 +1167,8 @@ function assert(label: string, condition: boolean, detail?: string) {
 		assert("settings overlay opened for dangerous test", false);
 	} else {
 		const comp = settingsCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
-		// Navigate to Cleanup Enabled (index 6, boolean, dangerous)
-		for (let i = 0; i < 6; i++) comp.handleInput?.("\x1b[B"); // down arrow
+		// Navigate to Cleanup Enabled (index 7, boolean, dangerous)
+		for (let i = 0; i < 7; i++) comp.handleInput?.("\x1b[B"); // down arrow
 		await delay(50);
 		comp.handleInput?.("\r"); // Enter to toggle
 		await delay(300);
