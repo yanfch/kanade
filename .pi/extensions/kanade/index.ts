@@ -13,6 +13,14 @@ type Component = {
 	invalidate(): void;
 };
 
+type WorktreeSummary = {
+	status?: "none" | "active" | "inactive" | "merged" | "preserved" | "rejected" | string;
+	count?: number;
+	branch?: string;
+	path?: string;
+	merge_commit?: string;
+};
+
 type KanadeTask = {
 	id: string;
 	status: TaskStatus | string;
@@ -27,6 +35,7 @@ type KanadeTask = {
 	finished_at?: number | null;
 	error?: string | null;
 	result?: string | null;
+	worktree_summary?: WorktreeSummary;
 };
 
 type InboxRequest = {
@@ -1183,7 +1192,7 @@ class KanadePanel implements Component {
 			lines.push(`${prefix} ${icon} ${task.id} ${title}`);
 			const metaParts = [
 				String(task.status),
-				task.status === "finished" ? "review/merge" : "",
+				taskWorktreeHint(task),
 				relativeTime(task.finished_at ?? task.started_at ?? task.created_at),
 			].filter(Boolean);
 			lines.push(this.color("dim", truncatePlain(`    ${metaParts.join(" · ")}`, width)));
@@ -1685,6 +1694,22 @@ function countTasks(tasks: KanadeTask[]): Counts {
 
 function taskTitle(task: KanadeTask, max = 80): string {
 	return truncatePlain(task.workflow_name || task.workflow_source || "task", max);
+}
+
+function taskWorktreeHint(task: KanadeTask): string {
+	const summary = task.worktree_summary;
+	if (!summary) return task.status === "finished" ? "review/merge" : "";
+	if (summary.status === "merged") return "merged";
+	if (summary.status === "preserved") return "preserved";
+	if (summary.status === "rejected") return "cleaned";
+	if (task.status === "finished") {
+		if (summary.status === "active" || summary.status === "inactive") return "review/merge";
+		return "no changes";
+	}
+	if ((task.status === "failed" || task.status === "aborted") && summary.status && summary.status !== "none") {
+		return "preserved";
+	}
+	return "";
 }
 
 function relativeTime(ts?: number | null): string {

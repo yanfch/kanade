@@ -54,6 +54,18 @@ export interface CreateTaskResult {
 	generated?: true;
 }
 
+export type TaskWorktreeSummaryStatus = "none" | "active" | "inactive" | "merged" | "preserved" | "rejected";
+
+export interface TaskWorktreeSummary {
+	status: TaskWorktreeSummaryStatus;
+	count: number;
+	branch?: string;
+	path?: string;
+	merge_commit?: string;
+}
+
+export type TaskListRow = TaskRow & { worktree_summary: TaskWorktreeSummary };
+
 export interface GenerateWorkflowResult {
 	script: string;
 }
@@ -462,8 +474,11 @@ export class TaskManager {
 		}
 	}
 
-	list(status?: TaskStatus): TaskRow[] {
-		return this.store.listTasks({ status });
+	list(status?: TaskStatus): TaskListRow[] {
+		return this.store.listTasks({ status }).map((task) => ({
+			...task,
+			worktree_summary: summarizeTaskWorktrees(task, this.store.findWorktreesByTask(task.id)),
+		}));
 	}
 
 	inbox(): NeedsHumanRow[] {
@@ -982,6 +997,36 @@ export class TaskManager {
 			persistDir,
 		});
 	}
+}
+
+function summarizeTaskWorktrees(task: TaskRow, worktrees: WorktreeRow[]): TaskWorktreeSummary {
+	if (worktrees.length === 0) return { status: "none", count: 0 };
+	const preferred = [...worktrees].sort((a, b) => b.last_used_at - a.last_used_at)[0];
+	const merged = worktrees.find((row) => row.merge_commit || row.status === "merged");
+	if (merged) {
+		return {
+			status: "merged",
+			count: worktrees.length,
+			branch: merged.branch,
+			path: merged.worktree_path,
+			merge_commit: merged.merge_commit ?? undefined,
+		};
+	}
+	const rejected = worktrees.find((row) => row.status === "rejected");
+	if (rejected && worktrees.every((row) => row.status === "rejected")) {
+		return { status: "rejected", count: worktrees.length, branch: rejected.branch, path: rejected.worktree_path };
+	}
+	const active = worktrees.find((row) => row.status === "active");
+	if (active) return { status: "active", count: worktrees.length, branch: active.branch, path: active.worktree_path };
+	if (task.status === "failed" || task.status === "aborted") {
+		return {
+			status: "preserved",
+			count: worktrees.length,
+			branch: preferred.branch,
+			path: preferred.worktree_path,
+		};
+	}
+	return { status: "inactive", count: worktrees.length, branch: preferred.branch, path: preferred.worktree_path };
 }
 
 const noopSpan = {

@@ -74,6 +74,74 @@ describe("server app — existing", () => {
 	});
 });
 
+describe("GET /tasks", () => {
+	it("includes lightweight worktree summaries for cockpit merge state", async () => {
+		const { store, app } = setup();
+		try {
+			const now = Date.now();
+			for (const id of ["TL-merged", "TL-review", "TL-none"] as const) {
+				store.insertTask({
+					id,
+					workflow_source: "inline",
+					workflow_name: null,
+					workflow_path: `/tmp/${id}.js`,
+					status: "finished",
+					base_repo: null,
+					base_branch: "main",
+					cwd: process.cwd(),
+					created_at: now,
+					started_at: now,
+					finished_at: now,
+					error: null,
+					options: "{}",
+					result: null,
+				});
+			}
+			store.insertWorktree({
+				id: "wt-merged",
+				task_id: "TL-merged",
+				label: "dev",
+				branch: "kanade/TL-merged",
+				base_branch: "main",
+				worktree_path: "/tmp/TL-merged",
+				status: "merged",
+				base_repo: process.cwd(),
+				created_at: now,
+				last_used_at: now,
+				finished_at: now,
+				merge_commit: "abc123",
+			});
+			store.insertWorktree({
+				id: "wt-review",
+				task_id: "TL-review",
+				label: "dev",
+				branch: "kanade/TL-review",
+				base_branch: "main",
+				worktree_path: "/tmp/TL-review",
+				status: "inactive",
+				base_repo: process.cwd(),
+				created_at: now,
+				last_used_at: now,
+				finished_at: now,
+				merge_commit: null,
+			});
+
+			const res = await app.request("/tasks");
+			const body = (await res.json()) as {
+				tasks: Array<{ id: string; worktree_summary: { status: string; merge_commit?: string } }>;
+			};
+			const byId = new Map(body.tasks.map((task) => [task.id, task]));
+
+			expect(res.status).toBe(200);
+			expect(byId.get("TL-merged")?.worktree_summary).toMatchObject({ status: "merged", merge_commit: "abc123" });
+			expect(byId.get("TL-review")?.worktree_summary).toMatchObject({ status: "inactive" });
+			expect(byId.get("TL-none")?.worktree_summary).toMatchObject({ status: "none" });
+		} finally {
+			store.close();
+		}
+	});
+});
+
 describe("GET /tasks/:id/script", () => {
 	it("returns 404 for unknown task", async () => {
 		const { store, app } = setup();
