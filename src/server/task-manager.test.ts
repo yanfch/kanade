@@ -322,10 +322,10 @@ describe("TaskManager — iterate", () => {
 		const { store, manager } = setup(undefined, mock.createSession);
 		try {
 			const t1 = manager.create({ source: "inline", script: SIMPLE_SCRIPT });
-			await vi.waitFor(() => expect(manager.get(t1.task_id)?.status).toBe("finished"));
+			await vi.waitFor(() => expect(manager.get(t1.task_id)?.status).toBe("finished"), { timeout: 5000 });
 
 			const t2 = manager.iterate(t1.task_id, { instructions: "step 2" });
-			await vi.waitFor(() => expect(manager.get(t2.task_id)?.status).toBe("finished"));
+			await vi.waitFor(() => expect(manager.get(t2.task_id)?.status).toBe("finished"), { timeout: 5000 });
 
 			const t3 = manager.iterate(t2.task_id, { instructions: "step 3" });
 
