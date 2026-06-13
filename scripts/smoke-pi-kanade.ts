@@ -80,6 +80,30 @@ const SNAPSHOT: Record<string, unknown> = {
 	runningCount: 1,
 	doneCount: 0,
 	errorCount: 0,
+	graph: {
+		nodes: [
+			{
+				id: "p1",
+				kind: "phase",
+				label: "implement",
+				status: "running",
+				phase: "implement",
+				createdAt: Date.now() - 25000,
+				updatedAt: Date.now() - 5000,
+			},
+			{
+				id: "a1",
+				kind: "agent",
+				label: "implement-agent",
+				status: "running",
+				phase: "implement",
+				createdAt: Date.now() - 20000,
+				updatedAt: Date.now() - 5000,
+			},
+		],
+		edges: [],
+		cursorNodeId: "a1",
+	},
 };
 
 const SCRIPT = 'phase("implement")\nawait implement("fix the bug")\n';
@@ -221,7 +245,57 @@ function mockFetch(url: string | URL | Request, init?: RequestInit): Promise<Res
 	if (/^\/tasks\/T-0001\/review$/.test(path)) return json(REVIEW_READY);
 	if (/^\/tasks\/T-0001$/.test(path) && method === "GET") return json({ task: TASK, usage: USAGE });
 	if (/^\/tasks\/T-0003\/snapshot$/.test(path))
-		return json({ snapshot: { ...SNAPSHOT, name: "merged-workflow", agents: [] } });
+		return json({
+			snapshot: {
+				...SNAPSHOT,
+				name: "merged-workflow",
+				agents: [
+					{ id: 1, label: "implement-agent", prompt: "do stuff", status: "done", phase: "implement" },
+					{ id: 2, label: "review-agent", prompt: "review stuff", status: "done", phase: "review" },
+				],
+				graph: {
+					nodes: [
+						{
+							id: "p1",
+							kind: "phase",
+							label: "implement",
+							status: "done",
+							phase: "implement",
+							createdAt: Date.now() - 210000,
+							updatedAt: Date.now() - 120000,
+						},
+						{
+							id: "a1",
+							kind: "agent",
+							label: "implement-agent",
+							status: "done",
+							phase: "implement",
+							createdAt: Date.now() - 210000,
+							updatedAt: Date.now() - 120000,
+						},
+						{
+							id: "p2",
+							kind: "phase",
+							label: "review",
+							status: "done",
+							phase: "review",
+							createdAt: Date.now() - 120000,
+							updatedAt: Date.now() - 180000,
+						},
+						{
+							id: "a2",
+							kind: "agent",
+							label: "review-agent",
+							status: "done",
+							phase: "review",
+							createdAt: Date.now() - 120000,
+							updatedAt: Date.now() - 180000,
+						},
+					],
+					edges: [],
+				},
+			},
+		});
 	if (/^\/tasks\/T-0003\/script$/.test(path)) return json({ script: SCRIPT });
 	if (/^\/tasks\/T-0003\/worktrees$/.test(path)) return json({ worktrees: WORKTREES_MERGED });
 	if (/^\/tasks\/T-0003\/sessions$/.test(path)) return json({ sessions: [] });
@@ -963,6 +1037,85 @@ function assert(label: string, condition: boolean, detail?: string) {
 		(detailComp as { handleInput?: (d: string) => void }).handleInput?.("\x1b");
 		detailEntry.resolve(undefined);
 	}
+}
+
+// ---------- Test 17b: Total task duration in detail header ----------
+{
+	console.log("\nTest 17b: Total task duration shown in detail header");
+	customCalls.length = 0;
+	const panel = await createPanel();
+	await delay(300);
+	// Select T-0003 (finished/merged task) which has created_at, started_at, finished_at
+	panel.handleInput("/");
+	for (const ch of "T-0003") panel.handleInput(ch);
+	await delay(200);
+	const output = panel.render(120);
+	const text = strip(output.join("\n"));
+	assert("detail header shows duration", /finished.*\d+[smh]/.test(text), `output: ${text.slice(0, 500)}`);
+	// Also check running task shows elapsed
+	customCalls.length = 0;
+	const panel2 = await createPanel();
+	await delay(300);
+	panel2.handleInput("/");
+	for (const ch of "T-0001") panel2.handleInput(ch);
+	await delay(200);
+	// Render wide enough so the right-aligned status isn't truncated
+	const output2 = panel2.render(160);
+	const text2 = strip(output2.join("\n"));
+	assert("running task shows elapsed in header", text2.includes("elapsed"), `output: ${text2.slice(0, 800)}`);
+}
+
+// ---------- Test 17c: Per-agent duration in Map workflow plan ----------
+{
+	console.log("\nTest 17c: Per-agent duration shown in Map workflow plan");
+	customCalls.length = 0;
+	const panel = await createPanel();
+	await delay(300);
+	// T-0001 has a workflow plan with graph nodes that have timestamps
+	panel.handleInput("/");
+	for (const ch of "T-0001") panel.handleInput(ch);
+	await delay(300);
+	const output = panel.render(120);
+	const text = strip(output.join("\n"));
+	assert(
+		"Map shows agent duration or elapsed",
+		/elapsed \d+[smh]|done · \d+[smh]|✓.*\d+[smh]|\d+[smh]/.test(text),
+		`output: ${text.slice(0, 800)}`,
+	);
+}
+
+// ---------- Test 17d: Agent timing table in Agent tab ----------
+{
+	console.log("\nTest 17d: Agent timing table in Agent tab");
+	customCalls.length = 0;
+	const panel = await createPanel();
+	await delay(300);
+	// Select T-0003 (merged, has graph with done agents)
+	panel.handleInput("/");
+	for (const ch of "T-0003") panel.handleInput(ch);
+	panel.handleInput("\r");
+	await delay(150);
+	const actionCall = customCalls.at(-1);
+	if (actionCall) {
+		const overlayComp = actionCall.component as { handleInput?: (d: string) => void };
+		overlayComp?.handleInput?.("\x1b");
+		actionCall.resolve(null);
+	}
+	await delay(150);
+	// Navigate to Agent tab
+	panel.handleInput("\t");
+	await delay(400);
+	const output = panel.render(120);
+	const text = strip(output.join("\n"));
+	assert("Agent tab selected", text.includes("[Agent]"), `output: ${text.slice(0, 500)}`);
+	assert("shows Agent Timing section", text.includes("Agent Timing"), `output: ${text.slice(0, 800)}`);
+	assert(
+		"shows agent name in timing",
+		text.includes("implement-agent") || text.includes("implement"),
+		`output: ${text.slice(0, 800)}`,
+	);
+	assert("shows done status in timing", text.includes("done"), `output: ${text.slice(0, 800)}`);
+	assert("shows duration in timing table", /\d+m \d+s/.test(text), `output: ${text.slice(0, 800)}`);
 }
 
 // ---------- Test 18: No braille spinner characters in output ----------
