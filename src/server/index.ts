@@ -43,6 +43,10 @@ export function startServer(
 	const recovered = humanGate.recover();
 	if (recovered > 0) logger.info("recovered pending human requests", { count: String(recovered) });
 
+	// Recover stale tasks left in created/running by a previous server process
+	const staleRecovered = taskManager.recoverStaleTasks();
+	if (staleRecovered > 0) logger.info("recovered stale tasks", { count: String(staleRecovered) });
+
 	// Start announcer registry
 	const announcerRegistry = new AnnouncerRegistry(config.announcers, tracing.logger.forComponent("announcer"));
 	announcerRegistry.probe().catch(() => {});

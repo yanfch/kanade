@@ -282,6 +282,19 @@ export class StateStore {
 		return rows as TaskRow[];
 	}
 
+	/**
+	 * List tasks matching any of the given statuses.
+	 * Used for startup recovery of orphaned tasks.
+	 */
+	listTasksByStatuses(statuses: TaskStatus[], limit = 100): TaskRow[] {
+		if (statuses.length === 0) return [];
+		const placeholders = statuses.map(() => "?").join(", ");
+		const rows = this.db
+			.prepare(`SELECT * FROM tasks WHERE status IN (${placeholders}) ORDER BY created_at DESC LIMIT ?`)
+			.all(...statuses, limit);
+		return rows as TaskRow[];
+	}
+
 	getTaskUsage(taskId: string): Record<string, unknown> | null {
 		const row = this.db.prepare("SELECT usage FROM tasks WHERE id = ?").get(taskId) as
 			| { usage: string | null }

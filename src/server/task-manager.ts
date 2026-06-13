@@ -1125,6 +1125,34 @@ export class TaskManager {
 		};
 	}
 
+	/**
+	 * Recover tasks left in `created` or `running` status by a previous server process.
+	 * Called once at startup. Transitions orphaned tasks to `failed` with a clear
+	 * error message and emits `task.failed` for each. Preserves worktrees/branches.
+	 *
+	 * @returns The number of tasks recovered.
+	 */
+	recoverStaleTasks(): number {
+		const staleTasks = this.store.listTasksByStatuses(["created", "running"]);
+		const now = Date.now();
+		const errorMsg = "Task recovered: server restarted while task was in progress";
+		for (const task of staleTasks) {
+			this.store.updateTask(task.id, {
+				status: "failed",
+				finished_at: now,
+				error: errorMsg,
+			});
+			this.events.emit("task.failed", { taskId: task.id, error: errorMsg }, task.id);
+			this.logger.forTask(task.id).info("stale task recovered", {
+				previousStatus: task.status,
+			});
+		}
+		if (staleTasks.length > 0) {
+			this.logger.info("recovered stale tasks on startup", { count: String(staleTasks.length) });
+		}
+		return staleTasks.length;
+	}
+
 	private realAuthorRequired(options?: TaskOptions): boolean {
 		return Boolean(
 			options?.author_model ||

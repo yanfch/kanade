@@ -700,6 +700,213 @@ describe("TaskManager — task failure", () => {
 	});
 });
 
+describe("TaskManager — startup recovery", () => {
+	it("recovers created tasks to failed", () => {
+		const { store, manager } = setup();
+		try {
+			store.insertTask({
+				id: "RC-0001",
+				workflow_source: "inline",
+				workflow_name: null,
+				workflow_path: "/tmp/RC-0001/workflow.js",
+				status: "created",
+				base_repo: null,
+				base_branch: "main",
+				cwd: "/tmp",
+				created_at: Date.now(),
+				started_at: null,
+				finished_at: null,
+				error: null,
+				options: "{}",
+				result: null,
+			});
+
+			const count = manager.recoverStaleTasks();
+			expect(count).toBe(1);
+
+			const task = store.getTask("RC-0001");
+			expect(task?.status).toBe("failed");
+			expect(task?.error).toBe("Task recovered: server restarted while task was in progress");
+			expect(task?.finished_at).toBeTruthy();
+		} finally {
+			store.close();
+		}
+	});
+
+	it("recovers running tasks to failed", () => {
+		const { store, manager } = setup();
+		try {
+			store.insertTask({
+				id: "RR-0001",
+				workflow_source: "inline",
+				workflow_name: null,
+				workflow_path: "/tmp/RR-0001/workflow.js",
+				status: "running",
+				base_repo: null,
+				base_branch: "main",
+				cwd: "/tmp",
+				created_at: Date.now(),
+				started_at: Date.now(),
+				finished_at: null,
+				error: null,
+				options: "{}",
+				result: null,
+			});
+
+			const count = manager.recoverStaleTasks();
+			expect(count).toBe(1);
+
+			const task = store.getTask("RR-0001");
+			expect(task?.status).toBe("failed");
+			expect(task?.error).toBe("Task recovered: server restarted while task was in progress");
+			expect(task?.finished_at).toBeTruthy();
+		} finally {
+			store.close();
+		}
+	});
+
+	it("does not touch finished/failed/aborted/needs_human tasks", () => {
+		const { store, manager } = setup();
+		try {
+			const statuses = ["finished", "failed", "aborted", "needs_human"] as const;
+			for (const status of statuses) {
+				store.insertTask({
+					id: `RN-${status}`,
+					workflow_source: "inline",
+					workflow_name: null,
+					workflow_path: `/tmp/RN-${status}/workflow.js`,
+					status,
+					base_repo: null,
+					base_branch: "main",
+					cwd: "/tmp",
+					created_at: Date.now(),
+					started_at: null,
+					finished_at: null,
+					error: null,
+					options: "{}",
+					result: null,
+				});
+			}
+
+			const count = manager.recoverStaleTasks();
+			expect(count).toBe(0);
+
+			for (const status of statuses) {
+				const task = store.getTask(`RN-${status}`);
+				expect(task?.status).toBe(status);
+			}
+		} finally {
+			store.close();
+		}
+	});
+
+	it("preserves worktree rows intact", () => {
+		const { store, manager } = setup();
+		try {
+			store.insertTask({
+				id: "RW-0001",
+				workflow_source: "inline",
+				workflow_name: null,
+				workflow_path: "/tmp/RW-0001/workflow.js",
+				status: "running",
+				base_repo: null,
+				base_branch: "main",
+				cwd: "/tmp",
+				created_at: Date.now(),
+				started_at: Date.now(),
+				finished_at: null,
+				error: null,
+				options: "{}",
+				result: null,
+			});
+			store.insertWorktree({
+				id: "wt-RW-0001",
+				task_id: "RW-0001",
+				label: "implement",
+				branch: "kanade/RW-0001",
+				base_branch: "main",
+				worktree_path: "/tmp/RW-0001-wt",
+				status: "active",
+				base_repo: "/tmp/repo",
+				created_at: Date.now(),
+				last_used_at: Date.now(),
+				finished_at: null,
+				merge_commit: null,
+			});
+
+			manager.recoverStaleTasks();
+
+			const worktrees = store.findWorktreesByTask("RW-0001");
+			expect(worktrees).toHaveLength(1);
+			expect(worktrees[0].status).toBe("active");
+			expect(worktrees[0].branch).toBe("kanade/RW-0001");
+		} finally {
+			store.close();
+		}
+	});
+
+	it("emits task.failed events", () => {
+		const { store, events, manager } = setup();
+		try {
+			store.insertTask({
+				id: "RE-0001",
+				workflow_source: "inline",
+				workflow_name: null,
+				workflow_path: "/tmp/RE-0001/workflow.js",
+				status: "created",
+				base_repo: null,
+				base_branch: "main",
+				cwd: "/tmp",
+				created_at: Date.now(),
+				started_at: null,
+				finished_at: null,
+				error: null,
+				options: "{}",
+				result: null,
+			});
+
+			const emitted: Array<{ type: string; data: unknown }> = [];
+			events.onAny((e) => emitted.push({ type: e.type, data: e.data }));
+
+			manager.recoverStaleTasks();
+
+			const failedEvents = emitted.filter((e) => e.type === "task.failed");
+			expect(failedEvents).toHaveLength(1);
+			expect((failedEvents[0].data as { taskId: string }).taskId).toBe("RE-0001");
+		} finally {
+			store.close();
+		}
+	});
+
+	it("recovers zero when no stale tasks", () => {
+		const { store, manager } = setup();
+		try {
+			// Insert a finished task — should not be recovered
+			store.insertTask({
+				id: "RZ-0001",
+				workflow_source: "inline",
+				workflow_name: null,
+				workflow_path: "/tmp/RZ-0001/workflow.js",
+				status: "finished",
+				base_repo: null,
+				base_branch: "main",
+				cwd: "/tmp",
+				created_at: Date.now(),
+				started_at: null,
+				finished_at: Date.now(),
+				error: null,
+				options: "{}",
+				result: '{"ok":true}',
+			});
+
+			const count = manager.recoverStaleTasks();
+			expect(count).toBe(0);
+		} finally {
+			store.close();
+		}
+	});
+});
+
 describe("TaskManager — lifecycle events", () => {
 	it("emits task.created then task.running then task.finished in order", async () => {
 		const { store, events, manager } = setup();
