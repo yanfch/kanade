@@ -601,6 +601,7 @@ function sortTasks(tasks: KanadeTask[]): KanadeTask[] {
 			case "needs_human":
 				return 0;
 			case "running":
+			case "created":
 				return 1;
 			case "failed":
 			case "aborted":
