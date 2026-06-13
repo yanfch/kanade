@@ -156,6 +156,7 @@ type SessionEntry = {
 
 type SessionEvent = {
 	time: string;
+	rawTs?: number;
 	label: string;
 	summary: string;
 	detail?: string;
@@ -401,9 +402,8 @@ async function fetchTaskEvents(taskId: string, timeoutMs = 4000): Promise<TaskEv
 			signal: controller.signal,
 		headers: { Accept: "text/event-stream" },
 		});
-		if (!res.ok) return [];
-		const text = await res.text();
-		return parseSSEEvents(text);
+		if (!res.ok || !res.body) return [];
+		return await collectSSEEvents(res.body, timer);
 	} catch {
 		return [];
 	} finally {
@@ -411,54 +411,58 @@ async function fetchTaskEvents(taskId: string, timeoutMs = 4000): Promise<TaskEv
 	}
 }
 
-function parseSSEEvents(raw: string): TaskEvent[] {
+async function collectSSEEvents(
+	body: ReadableStream<Uint8Array>,
+	timer: ReturnType<typeof setTimeout>,
+): Promise<TaskEvent[]> {
 	const events: TaskEvent[] = [];
-	let currentType = "";
+	const reader = body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = "";
 	let currentData = "";
-	for (const rawLine of raw.split("\n")) {
-		if (rawLine.startsWith("event:")) {
-			currentType = rawLine.slice(6).trim();
-			continue;
-		}
-		if (rawLine.startsWith("data:")) {
-			currentData = rawLine.slice(5).trim();
-			continue;
-		}
-		if (rawLine.startsWith(":")) continue;
-		if (rawLine.trim() === "" && currentData) {
-			try {
-				const parsed = JSON.parse(currentData) as ServerEvent;
-				if (TASK_EVENT_TYPES.includes(parsed.type)) {
-					events.push({
-						time: formatTime(parsed.ts),
-						type: parsed.type,
-						ts: parsed.ts,
-						summary: summarizeTaskEvent(parsed.type, parsed.data),
-					});
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			buffer += decoder.decode(value, { stream: true });
+			const lines = buffer.split("\n");
+			buffer = lines.pop() ?? "";
+			for (const line of lines) {
+				if (line.startsWith("data:")) {
+					currentData = line.slice(5).trim();
+					continue;
 				}
-			} catch {
-				// skip malformed event
+				if (line.startsWith(":") || line.startsWith("event:") || line.startsWith("id:")) continue;
+				if (line.trim() === "" && currentData) {
+					pushParsedEvent(events, currentData);
+					currentData = "";
+				}
 			}
-			currentType = "";
-			currentData = "";
 		}
-	}
-	if (currentData) {
-		try {
-			const parsed = JSON.parse(currentData) as ServerEvent;
-			if (TASK_EVENT_TYPES.includes(parsed.type)) {
-				events.push({
-					time: formatTime(parsed.ts),
-					type: parsed.type,
-					ts: parsed.ts,
-					summary: summarizeTaskEvent(parsed.type, parsed.data),
-				});
-			}
-		} catch {
-			// skip
-		}
+		if (currentData) pushParsedEvent(events, currentData);
+	} catch {
+		// Stream may abort; return whatever we collected
+	} finally {
+		reader.releaseLock();
+		clearTimeout(timer);
 	}
 	return events;
+}
+
+function pushParsedEvent(events: TaskEvent[], rawData: string): void {
+	try {
+		const parsed = JSON.parse(rawData) as ServerEvent;
+		if (TASK_EVENT_TYPES.includes(parsed.type)) {
+			events.push({
+				time: formatTime(parsed.ts),
+				type: parsed.type,
+				ts: parsed.ts,
+				summary: summarizeTaskEvent(parsed.type, parsed.data),
+			});
+		}
+	} catch {
+		// skip malformed event
+	}
 }
 
 function summarizeTaskEvent(type: string, data: unknown): string {
@@ -514,21 +518,8 @@ function findLastActivityTs(sessionEvents: SessionEvent[], taskEvents: TaskEvent
 	for (const ev of taskEvents) {
 		if (ev.ts > latest) latest = ev.ts;
 	}
-	// sessionEvents use string timestamps
 	for (const ev of sessionEvents) {
-		if (!ev.time) continue;
-		const parts = ev.time.split(":");
-		if (parts.length >= 3) {
-			// Use current date with parsed time for rough comparison
-			const today = new Date();
-			const h = Number(parts[0]);
-			const m = Number(parts[1]);
-			const s = Number(parts[2]);
-			if (!Number.isNaN(h) && !Number.isNaN(m) && !Number.isNaN(s)) {
-				today.setHours(h, m, s, 0);
-				if (today.getTime() > latest) latest = today.getTime();
-			}
-		}
+		if (ev.rawTs && ev.rawTs > latest) latest = ev.rawTs;
 	}
 	return latest > 0 ? latest : undefined;
 }
@@ -583,8 +574,9 @@ function summarizeSessionEntries(entries: SessionEntry[]): SessionEvent[] {
 	const events: SessionEvent[] = [];
 	for (const entry of entries) {
 		const time = formatTime(entry.timestamp);
+		const rawTs = typeof entry.timestamp === "number" ? entry.timestamp : undefined;
 		if (entry.type === "model_change") {
-			events.push({ time, label: "model", summary: `${entry.provider ?? "provider"}/${entry.modelId ?? "model"}` });
+			events.push({ time, rawTs, label: "model", summary: `${entry.provider ?? "provider"}/${entry.modelId ?? "model"}` });
 			continue;
 		}
 		if (entry.type !== "message") continue;
@@ -593,23 +585,24 @@ function summarizeSessionEntries(entries: SessionEntry[]): SessionEvent[] {
 		for (const part of message.content) {
 			const type = String(part.type ?? "");
 			if (type === "thinking") {
-				events.push({ time, label: "think", summary: firstLine(String(part.thinking ?? "thinking"), 180) });
+				events.push({ time, rawTs, label: "think", summary: firstLine(String(part.thinking ?? "thinking"), 180) });
 			} else if (type === "text") {
 				const text = firstLine(String(part.text ?? ""), 180);
-				if (text) events.push({ time, label: message.role === "user" ? "user" : "text", summary: text });
+				if (text) events.push({ time, rawTs, label: message.role === "user" ? "user" : "text", summary: text });
 			} else if (type === "toolCall") {
 				const name = String(part.name ?? "tool");
-				events.push({ time, label: toolLabel(name), summary: summarizeToolCall(name, part), state: "running" });
+				events.push({ time, rawTs, label: toolLabel(name), summary: summarizeToolCall(name, part), state: "running" });
 			} else if (type === "toolResult") {
 				const name = String(part.toolName ?? "tool");
 				events.push({
 					time,
+					rawTs,
 					label: toolLabel(name),
 					summary: summarizeToolResult(name, part),
 					state: part.isError ? "error" : "done",
 				});
 			} else if (type === "structured_output") {
-				events.push({ time, label: "out", summary: "structured output" });
+				events.push({ time, rawTs, label: "out", summary: "structured output" });
 			}
 		}
 	}
