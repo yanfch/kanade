@@ -1109,11 +1109,7 @@ function assert(label: string, condition: boolean, detail?: string) {
 	const text = strip(output.join("\n"));
 	assert("Agent tab selected", text.includes("[Agent]"), `output: ${text.slice(0, 500)}`);
 	assert("shows Agent Timing section", text.includes("Agent Timing"), `output: ${text.slice(0, 800)}`);
-	assert(
-		"shows agent name in timing",
-		text.includes("implement-agent") || text.includes("implement"),
-		`output: ${text.slice(0, 800)}`,
-	);
+	assert("shows agent name in timing", text.includes("implement-agent"), `output: ${text.slice(0, 800)}`);
 	assert("shows done status in timing", text.includes("done"), `output: ${text.slice(0, 800)}`);
 	assert("shows duration in timing table", /\d+m \d+s/.test(text), `output: ${text.slice(0, 800)}`);
 }
