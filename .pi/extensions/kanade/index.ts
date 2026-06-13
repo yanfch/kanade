@@ -583,7 +583,7 @@ class AgentDetailOverlay implements Component {
 		if (activeAgent) {
 			body.push(`${this.theme.fg("muted", "Agent:")} ${activeAgent.label} · ${activeAgent.status}`);
 			const summary = activeAgent.error || activeAgent.resultPreview;
-			if (summary) body.push(this.theme.fg("dim", truncatePlain(summary, contentWidth)));
+			if (summary) body.push(this.theme.fg("dim", firstLine(summary, contentWidth)));
 		} else {
 			body.push(this.theme.fg("dim", "No agent snapshot yet."));
 		}
@@ -1341,7 +1341,7 @@ class KanadePanel implements Component {
 			const title = isCurrent ? this.color("accent", phase) : phase;
 			lines.push(`${icon} ${index + 1} ${truncatePlain(title, width - 6)}`);
 			const summary = summarizePhase(phaseAgents);
-			if (summary) lines.push(this.color("dim", `    ${truncatePlain(summary, width - 4)}`));
+			if (summary) lines.push(this.color("dim", `    ${firstLine(summary, width - 4)}`));
 			if (index < phases.length - 1) lines.push(this.color("dim", "  │"));
 		});
 		if (task.status === "needs_human") {
@@ -1374,8 +1374,8 @@ class KanadePanel implements Component {
 				const indent = node.kind === "agent" ? "    " : "  ";
 				const styledSummary =
 					node.status === "error"
-						? this.color("error", truncatePlain(summary, width - indent.length))
-						: this.color("dim", truncatePlain(summary, width - indent.length));
+						? this.color("error", firstLine(summary, width - indent.length))
+						: this.color("dim", firstLine(summary, width - indent.length));
 				lines.push(`${indent}${styledSummary}`);
 			}
 		}
@@ -1405,7 +1405,7 @@ class KanadePanel implements Component {
 			lines.push(
 				`${this.color("muted", "Agent:")} ${icon} ${truncatePlain(activeAgent.label, width - 12)} · ${activeAgent.status}`,
 			);
-			if (activeAgent.resultPreview) lines.push(this.color("dim", truncatePlain(activeAgent.resultPreview, width)));
+			if (activeAgent.resultPreview) lines.push(this.color("dim", firstLine(activeAgent.resultPreview, width)));
 		} else {
 			lines.push(this.color("muted", "Agent"));
 			lines.push(this.color("dim", "No agent snapshot yet."));
@@ -1670,7 +1670,7 @@ function summarizePhase(agents: WorkflowAgentSnapshot[]): string {
 	const errors = agents.filter((agent) => agent.status === "error").length;
 	const latest = agents.at(-1);
 	const parts = [`${done} done`, `${running} running`, `${errors} errors`].filter((part) => !part.startsWith("0 "));
-	if (latest?.resultPreview) parts.push(latest.resultPreview);
+	if (latest?.resultPreview) parts.push(firstLine(latest.resultPreview, 120));
 	return parts.join(" · ");
 }
 
