@@ -12,6 +12,28 @@ describe("SnapshotBuilder", () => {
 		expect(snap.description).toBe("A test workflow");
 		expect(snap.agents).toEqual([]);
 		expect(snap.agentCount).toBe(0);
+		expect(snap.graph.nodes).toEqual([]);
+	});
+
+	it("seeds planned graph nodes from meta phases", () => {
+		const events = new EventBus();
+		const builder = new SnapshotBuilder(events);
+
+		const snap = builder.init("T-0001", {
+			name: "test",
+			description: "A test workflow",
+			phases: [{ title: "Analyze" }, { title: "Implement" }, { title: "Review" }],
+		});
+
+		expect(snap.graph.nodes.map((node) => [node.id, node.status])).toEqual([
+			["phase:analyze", "planned"],
+			["phase:implement", "planned"],
+			["phase:review", "planned"],
+		]);
+		expect(snap.graph.edges.map((edge) => [edge.from, edge.to, edge.status])).toEqual([
+			["phase:analyze", "phase:implement", "planned"],
+			["phase:implement", "phase:review", "planned"],
+		]);
 	});
 
 	it("adds agent on workflow.agent_started event", () => {
@@ -32,6 +54,10 @@ describe("SnapshotBuilder", () => {
 		expect(snap.agents[0].phase).toBe("scan");
 		expect(snap.agentCount).toBe(1);
 		expect(snap.runningCount).toBe(1);
+		expect(snap.graph.nodes).toContainEqual(
+			expect.objectContaining({ id: "agent:1", kind: "agent", label: "researcher", status: "running" }),
+		);
+		expect(snap.graph.cursorNodeId).toBe("agent:1");
 	});
 
 	it("marks agent done on workflow.agent_completed with result", () => {
@@ -47,6 +73,7 @@ describe("SnapshotBuilder", () => {
 		expect(snap.agents[0].resultPreview).toContain("42");
 		expect(snap.runningCount).toBe(0);
 		expect(snap.doneCount).toBe(1);
+		expect(snap.graph.nodes.find((node) => node.id === "agent:1")?.status).toBe("done");
 	});
 
 	it("marks agent error on workflow.agent_completed with null result", () => {
@@ -72,6 +99,39 @@ describe("SnapshotBuilder", () => {
 		const snap = builder.get("T-0001")!;
 		expect(snap.currentPhase).toBe("Research");
 		expect(snap.phases).toContain("Research");
+		expect(snap.graph.nodes).toContainEqual(
+			expect.objectContaining({ id: "phase:research", kind: "phase", label: "Research", status: "running" }),
+		);
+		expect(snap.graph.cursorNodeId).toBe("phase:research");
+	});
+
+	it("adds warning human gate nodes and marks them resolved", () => {
+		const events = new EventBus();
+		const builder = new SnapshotBuilder(events);
+		builder.init("T-0001", { name: "test", description: "" });
+
+		events.emit("workflow.phase", { taskId: "T-0001", phase: "Review" }, "T-0001");
+		events.emit(
+			"task.needs_human",
+			{ taskId: "T-0001", requestId: "R-1", request: { title: "Approve merge?" } },
+			"T-0001",
+		);
+
+		let snap = builder.get("T-0001")!;
+		expect(snap.graph.nodes).toContainEqual(
+			expect.objectContaining({ id: "human:r-1", kind: "human", label: "Approve merge?", status: "warning" }),
+		);
+		expect(snap.graph.edges).toContainEqual(
+			expect.objectContaining({ from: "phase:review", to: "human:r-1", label: "needs_human", status: "warning" }),
+		);
+
+		events.emit(
+			"task.human_resolved",
+			{ taskId: "T-0001", requestId: "R-1", response: { decision: "approve" } },
+			"T-0001",
+		);
+		snap = builder.get("T-0001")!;
+		expect(snap.graph.nodes.find((node) => node.id === "human:r-1")?.status).toBe("done");
 	});
 
 	it("tracks multiple agents with different statuses", () => {

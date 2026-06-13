@@ -158,6 +158,12 @@ export function createApp(ctx: AppContext): Hono {
 		return c.json({ snapshot });
 	});
 
+	app.get("/tasks/:id/graph", (c) => {
+		const snapshot = ctx.taskManager.getSnapshot(c.req.param("id"));
+		if (!snapshot) return c.json({ error: "Not found" }, 404);
+		return c.json({ graph: snapshot.graph });
+	});
+
 	app.get("/tasks/:id/worktrees", (c) => {
 		const taskId = c.req.param("id");
 		if (!ctx.taskManager.get(taskId)) return c.json({ error: "Task not found" }, 404);
@@ -227,7 +233,11 @@ export function createApp(ctx: AppContext): Hono {
 		const sessions = labels.map((label) => {
 			const labelDir = join(subagentsDir, label);
 			const files = readdirSync(labelDir).filter((f) => f.endsWith(".jsonl"));
-			return { label, files };
+			return {
+				label,
+				files,
+				paths: files.map((file) => join(labelDir, file)),
+			};
 		});
 		return c.json({ sessions });
 	});
@@ -257,7 +267,7 @@ export function createApp(ctx: AppContext): Hono {
 				}
 			})
 			.filter(Boolean);
-		return c.json({ label, entries, file: files[files.length - 1] });
+		return c.json({ label, entries, file: files[files.length - 1], path: sessionFile });
 	});
 
 	return app;

@@ -503,6 +503,12 @@ return 'done'`,
 			expect(snap!.runningCount).toBe(0);
 			expect(snap!.phases).toContain("Research");
 			expect(snap!.phases).toContain("Build");
+			expect(snap!.graph.nodes).toContainEqual(
+				expect.objectContaining({ id: "phase:research", kind: "phase", status: "done" }),
+			);
+			expect(snap!.graph.nodes).toContainEqual(
+				expect.objectContaining({ id: "agent:2", kind: "agent", label: "developer", status: "done" }),
+			);
 		} finally {
 			ctx.cleanup();
 		}
@@ -525,6 +531,16 @@ return await agent('work', { label: 'worker' })`,
 			const body = await res.json();
 			expect(body.snapshot.name).toBe("api-test");
 			expect(body.snapshot.agents).toHaveLength(1);
+			expect(body.snapshot.graph.nodes).toContainEqual(
+				expect.objectContaining({ id: "agent:1", kind: "agent", label: "worker", status: "done" }),
+			);
+
+			const graphRes = await ctx.app.request(`/tasks/${task.task_id}/graph`);
+			expect(graphRes.status).toBe(200);
+			const graphBody = await graphRes.json();
+			expect(graphBody.graph.nodes).toContainEqual(
+				expect.objectContaining({ id: "agent:1", kind: "agent", label: "worker", status: "done" }),
+			);
 		} finally {
 			ctx.cleanup();
 		}
@@ -536,6 +552,8 @@ return await agent('work', { label: 'worker' })`,
 		try {
 			const res = await ctx.app.request("/tasks/T-9999/snapshot");
 			expect(res.status).toBe(404);
+			const graphRes = await ctx.app.request("/tasks/T-9999/graph");
+			expect(graphRes.status).toBe(404);
 		} finally {
 			ctx.cleanup();
 		}
@@ -795,6 +813,12 @@ return 'done'`,
 			const body = await res.json();
 			expect(body.sessions).toHaveLength(2);
 			expect(body.sessions.map((s: { label: string }) => s.label).sort()).toEqual(["alpha", "beta"]);
+			for (const session of body.sessions as Array<{ files: string[]; paths: string[] }>) {
+				expect(session.files).toHaveLength(1);
+				expect(session.paths).toHaveLength(1);
+				expect(session.paths[0]).toContain(session.files[0]);
+				expect(session.paths[0]).toContain("debug/subagents");
+			}
 		} finally {
 			ctx.cleanup();
 		}
@@ -816,6 +840,8 @@ return await agent('work', { label: 'worker' })`,
 			expect(res.status).toBe(200);
 			const body = await res.json();
 			expect(body.label).toBe("worker");
+			expect(body.path).toContain(body.file);
+			expect(body.path).toContain("debug/subagents/worker");
 			expect(body.entries).toBeDefined();
 			expect(body.entries.length).toBeGreaterThanOrEqual(1);
 		} finally {
