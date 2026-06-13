@@ -20,6 +20,7 @@
 		"eval:author": "tsx eval/workflow-author/run.ts",
 		"eval:workflow-author": "tsx eval/workflow-author/run.ts",
 		"live:accept": "tsx scripts/live-acceptance.ts",
+		"smoke:pi-kanade": "tsx scripts/smoke-pi-kanade.ts",
 		"lint": "biome check src/ scripts/",
 		"lint:fix": "biome check --write src/",
 		"format": "biome format --write src/",
