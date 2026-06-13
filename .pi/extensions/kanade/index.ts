@@ -211,6 +211,7 @@ const MAX_VISIBLE_TASKS = 10;
 const MAX_VISIBLE_NARROW_TASKS = 5;
 const MAX_VISIBLE_AGENT_EVENTS = 3;
 const ESC = String.fromCharCode(27);
+const CLEAR_CELL = "\u00A0";
 const ANSI_SGR_PREFIX = new RegExp(`^${ESC}\\[[0-9;]*m`);
 const ANSI_SGR_GLOBAL = new RegExp(`${ESC}\\[[0-9;]*m`, "g");
 
@@ -795,7 +796,6 @@ class KanadePanel implements Component {
 			const i = TABS.indexOf(this.activeTab);
 			this.activeTab = TABS[(i + 1) % TABS.length];
 			this.invalidateAndRender();
-			this.scheduleSelectedDetailLoad(0, this.activeTab === "Agent");
 			return;
 		}
 		if (isKey(data, "return", "\r", "\n") || isKey(data, "enter", "\r", "\n")) {
@@ -1787,7 +1787,7 @@ function box(body: string[], width: number, title: string, theme: Theme): string
 
 function padAnsi(text: string, width: number): string {
 	const clipped = truncateAnsi(text, width);
-	return clipped + " ".repeat(Math.max(0, width - visibleWidth(clipped)));
+	return clipped + CLEAR_CELL.repeat(Math.max(0, width - visibleWidth(clipped)));
 }
 
 function truncateAnsi(text: string, maxWidth: number, suffix = "…"): string {
