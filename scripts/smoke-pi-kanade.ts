@@ -241,6 +241,44 @@ function mockFetch(url: string | URL | Request, init?: RequestInit): Promise<Res
 	if (/^\/tasks\/T-0005\/sessions$/.test(path)) return json({ sessions: [] });
 	if (path === "/config" && method === "GET") return json(MOCK_CONFIG);
 
+	// SSE event replay for tasks
+	if (/^\/tasks\/T-0001\/events$/.test(path)) {
+		const now = Date.now();
+		const sse = [
+			`event: task.created\nid: 1\ndata: ${JSON.stringify({ id: 1, type: "task.created", taskId: "T-0001", data: { workflowPath: "/tmp/workflow.js" }, ts: now - 60000 })}\n\n`,
+			`event: task.running\nid: 2\ndata: ${JSON.stringify({ id: 2, type: "task.running", taskId: "T-0001", data: {}, ts: now - 30000 })}\n\n`,
+			`event: workflow.phase\nid: 3\ndata: ${JSON.stringify({ id: 3, type: "workflow.phase", taskId: "T-0001", data: { phase: "implement" }, ts: now - 25000 })}\n\n`,
+			`event: workflow.agent_started\nid: 4\ndata: ${JSON.stringify({ id: 4, type: "workflow.agent_started", taskId: "T-0001", data: { label: "implement-agent" }, ts: now - 20000 })}\n\n`,
+		].join("");
+		return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+	}
+	if (/^\/tasks\/T-0002\/events$/.test(path)) {
+		const now = Date.now();
+		const sse = [
+			`event: task.created\nid: 1\ndata: ${JSON.stringify({ id: 1, type: "task.created", taskId: "T-0002", data: {}, ts: now - 120000 })}\n\n`,
+			`event: task.failed\nid: 2\ndata: ${JSON.stringify({ id: 2, type: "task.failed", taskId: "T-0002", data: { error: "boom" }, ts: now - 30000 })}\n\n`,
+		].join("");
+		return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+	}
+	if (/^\/tasks\/T-0003\/events$/.test(path)) {
+		const now = Date.now();
+		const sse = [
+			`event: task.created\nid: 1\ndata: ${JSON.stringify({ id: 1, type: "task.created", taskId: "T-0003", data: {}, ts: now - 240000 })}\n\n`,
+			`event: task.merged\nid: 2\ndata: ${JSON.stringify({ id: 2, type: "task.merged", taskId: "T-0003", data: { mergeCommit: "abc123" }, ts: now - 180000 })}\n\n`,
+		].join("");
+		return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+	}
+	if (/^\/tasks\/T-0004\/events$/.test(path)) {
+		const now = Date.now();
+		const sse = [
+			`event: task.needs_human\nid: 1\ndata: ${JSON.stringify({ id: 1, type: "task.needs_human", taskId: "T-0004", data: { request: { title: "Approve deployment?" } }, ts: now - 50000 })}\n\n`,
+		].join("");
+		return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+	}
+	if (/^\/tasks\/T-0005\/events$/.test(path)) {
+		return new Response("", { status: 200, headers: { "content-type": "text/event-stream" } });
+	}
+
 	// Task-detail sub-requests that return errors (for test 5)
 	if (/^\/tasks\/T-0002/.test(path)) {
 		if (/\/(task|script|worktrees|sessions)$/.test(path)) return json({ error: "not found" }, 500);
@@ -779,6 +817,174 @@ function assert(label: string, condition: boolean, detail?: string) {
 	// Verify review content is present — in narrow mode the detail shows task info
 	// We just verify no raw control chars leaked and the panel rendered successfully
 	assert("panel rendered for blocked task", text.length > 100, `output too short: ${text.length}`);
+}
+
+// ---------- Test 15: Events tab shows server events ----------
+{
+	console.log("\nTest 15: Events tab shows server events from SSE replay");
+	customCalls.length = 0;
+	const panel = await createPanel();
+	await delay(300);
+	// Select T-0001 and navigate to Events tab (Tab once from Map)
+	panel.handleInput("/");
+	for (const ch of "T-0001") panel.handleInput(ch);
+	panel.handleInput("\r");
+	await delay(150);
+	// Dismiss action menu
+	const actionCall = customCalls.at(-1);
+	if (actionCall) {
+		const overlayComp = actionCall.component as { handleInput?: (d: string) => void };
+		overlayComp?.handleInput?.("\x1b");
+		actionCall.resolve(null);
+	}
+	await delay(200);
+	// Navigate to Events tab
+	panel.handleInput("\t"); // Map -> Agent
+	panel.handleInput("\t"); // Agent -> Events
+	await delay(300);
+	// Let detail load with events
+	await delay(500);
+	const output = panel.render(120);
+	const text = strip(output.join("\n"));
+	assert("Events tab selected", text.includes("[Events]"), `output: ${text.slice(0, 500)}`);
+	assert("shows event type task.created", text.includes("task.created"), `output: ${text.slice(0, 800)}`);
+	assert("shows event type task.running", text.includes("task.running"), `output: ${text.slice(0, 800)}`);
+	assert("shows workflow.phase event", text.includes("workflow.phase"), `output: ${text.slice(0, 800)}`);
+	assert(
+		"shows event time stamps",
+		/\d{2}:\d{2}:\d{2}/.test(text) || text.includes("ago"),
+		`no timestamps in: ${text.slice(0, 500)}`,
+	);
+}
+
+// ---------- Test 16: Events tab for empty events ----------
+{
+	console.log("\nTest 16: Events tab for task with no events");
+	customCalls.length = 0;
+	const panel = await createPanel();
+	await delay(300);
+	panel.handleInput("/");
+	for (const ch of "T-0005") panel.handleInput(ch);
+	panel.handleInput("\r");
+	await delay(150);
+	const actionCall = customCalls.at(-1);
+	if (actionCall) {
+		const overlayComp = actionCall.component as { handleInput?: (d: string) => void };
+		overlayComp?.handleInput?.("\x1b");
+		actionCall.resolve(null);
+	}
+	await delay(200);
+	panel.handleInput("\t");
+	panel.handleInput("\t");
+	await delay(500);
+	const output = panel.render(120);
+	const text = strip(output.join("\n"));
+	assert(
+		"empty events shows status message",
+		text.includes("No server events") || text.includes("Status:"),
+		`output: ${text.slice(0, 500)}`,
+	);
+}
+
+// ---------- Test 17: Agent Detail shows timing fields ----------
+{
+	console.log("\nTest 17: Agent Detail shows timing fields");
+	customCalls.length = 0;
+	const panel = await createPanel();
+	await delay(300);
+	// Select T-0001 (running task) and open agent detail
+	panel.handleInput("/");
+	for (const ch of "T-0001") panel.handleInput(ch);
+	panel.handleInput("\r");
+	await delay(150);
+	const actionCall = customCalls.at(-1);
+	if (actionCall) {
+		const overlayComp = actionCall.component as { handleInput?: (d: string) => void };
+		overlayComp?.handleInput?.("\x1b");
+		actionCall.resolve(null);
+	}
+	await delay(150);
+	// Open Agent Detail overlay
+	customCalls.length = 0;
+	panel.handleInput("f");
+	await delay(800);
+	const detailEntry = customCalls.at(-1);
+	if (!detailEntry) {
+		assert("Agent Detail overlay opened for timing", false, "ui.custom not called");
+	} else {
+		const detailComp = detailEntry.component as { render(w: number): string[] };
+		await delay(500);
+		const detailText = strip(detailComp.render(100).join("\n"));
+		assert("shows started timing", detailText.includes("started"), `output: ${detailText.slice(0, 500)}`);
+		assert("shows elapsed timing", detailText.includes("elapsed"), `output: ${detailText.slice(0, 500)}`);
+		assert("shows last activity", detailText.includes("last activity"), `output: ${detailText.slice(0, 500)}`);
+		// Clean up
+		(detailComp as { handleInput?: (d: string) => void }).handleInput?.("\x1b");
+		detailEntry.resolve(undefined);
+	}
+}
+
+// ---------- Test 18: No braille spinner characters in output ----------
+{
+	console.log("\nTest 18: no braille spinner characters in rendered output");
+	const braillePattern = /[\u2800-\u28FF]/;
+	const panel = await createPanel();
+	await delay(300);
+	const wideOutput = panel.render(120);
+	const wideText = strip(wideOutput.join("\n"));
+	assert("no braille in wide render", !braillePattern.test(wideText), `found braille in: ${wideText.slice(0, 300)}`);
+	const narrowOutput = panel.render(80);
+	const narrowText = strip(narrowOutput.join("\n"));
+	assert(
+		"no braille in narrow render",
+		!braillePattern.test(narrowText),
+		`found braille in: ${narrowText.slice(0, 300)}`,
+	);
+	// Also check agent detail overlay
+	customCalls.length = 0;
+	const cmd = commands.find((c) => c.name === "kanade");
+	const cmdCtx = createFakeContext();
+	void cmd.handler("", cmdCtx);
+	await delay(250);
+	const freshPanel = customCalls.at(-1)?.component as {
+		render(w: number): string[];
+		handleInput(d: string): void;
+	};
+	if (freshPanel) {
+		freshPanel.handleInput("/");
+		for (const ch of "T-0001") freshPanel.handleInput(ch);
+		freshPanel.handleInput("\r");
+		await delay(150);
+		const ac = customCalls.at(-1);
+		if (ac) {
+			(ac.component as { handleInput?: (d: string) => void })?.handleInput?.("\x1b");
+			ac.resolve(null);
+		}
+		await delay(150);
+		customCalls.length = 0;
+		freshPanel.handleInput("f");
+		await delay(800);
+		const de = customCalls.at(-1);
+		if (de) {
+			const dc = de.component as { render(w: number): string[] };
+			await delay(500);
+			const agentText = strip(dc.render(100).join("\n"));
+			assert("no braille in agent detail", !braillePattern.test(agentText), "found braille in agent detail");
+			(dc as { handleInput?: (d: string) => void }).handleInput?.("\x1b");
+			de.resolve(undefined);
+		}
+	}
+}
+
+// ---------- Test 19: Footer status has no braille ----------
+{
+	console.log("\nTest 19: footer status text uses static labels");
+	const panel = await createPanel();
+	const output = panel.render(120);
+	const text = strip(output.join("\n"));
+	const braillePattern = /[\u2800-\u28FF]/;
+	assert("header line has no braille", !braillePattern.test(text.split("\n")[0] ?? ""), "found braille in header");
+	assert("header shows 'running' text", text.includes("running"), `missing running label in: ${text.slice(0, 300)}`);
 }
 
 // ---------------------------------------------------------------------------

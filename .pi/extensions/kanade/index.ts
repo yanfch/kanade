@@ -6,6 +6,26 @@ type Theme = ExtensionCommandContext["ui"]["theme"];
 type Ui = ExtensionCommandContext["ui"];
 type TuiHandle = { requestRender(): void };
 
+type ServerEvent = { id: number; type: string; taskId?: string; data: unknown; ts: number };
+const TASK_EVENT_TYPES = [
+	"task.created",
+	"task.running",
+	"task.finished",
+	"task.failed",
+	"task.aborted",
+	"task.needs_human",
+	"task.human_resolved",
+	"task.merged",
+	"task.rejected",
+	"task.script_generated",
+	"workflow.phase",
+	"workflow.agent_started",
+	"workflow.agent_completed",
+	"workflow.log",
+];
+type TaskEvent = { time: string; type: string; summary: string; ts: number };
+type AgentTiming = { startedAt?: number; elapsedMs?: number; lastActivityAt?: number; idleMs?: number };
+
 type Component = {
 	render(width: number): string[];
 	handleInput?(data: string): void;
@@ -136,6 +156,7 @@ type SessionEntry = {
 
 type SessionEvent = {
 	time: string;
+	rawTs?: number;
 	label: string;
 	summary: string;
 	detail?: string;
@@ -197,6 +218,8 @@ type TaskDetail = {
 	sessions?: SessionListItem[];
 	sessionLabel?: string;
 	sessionEvents?: SessionEvent[];
+	taskEvents?: TaskEvent[];
+	timing?: AgentTiming;
 	review?: ReviewSummary | null;
 };
 
@@ -234,7 +257,7 @@ type ConfirmDialog = {
 	onConfirm: () => Promise<void>;
 };
 
-const KANADE_SPINNER = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
+const KANADE_SPINNER: readonly string[] = [];
 const DEFAULT_BASE_URL = "http://127.0.0.1:7777";
 const TABS: readonly Tab[] = ["Map", "Agent", "Events", "Worktree", "Usage", "Result", "Review", "Settings"];
 const PANEL_BODY_ROWS = 32;
@@ -243,6 +266,7 @@ const MAX_VISIBLE_NARROW_TASKS = 5;
 const MAX_VISIBLE_AGENT_EVENTS = 3;
 const ESC = String.fromCharCode(27);
 const CLEAR_CELL = "\u00A0";
+const BRaille_PATTERN = /[⣾⣽⣻⢿⡿⣟⣯⣷]/;
 const ANSI_SGR_PREFIX = new RegExp(`^${ESC}\\[[0-9;]*m`);
 const ANSI_SGR_GLOBAL = new RegExp(`${ESC}\\[[0-9;]*m`, "g");
 
@@ -328,6 +352,13 @@ async function fetchTaskDetail(taskId: string, includeSession = false): Promise<
 	} else {
 		errors.push(`task: ${taskResult.reason}`);
 	}
+
+	// Fetch task events (SSE replay) — best effort
+	try {
+		detail.taskEvents = await fetchTaskEvents(taskId);
+	} catch {
+		// non-critical
+	}
 	if (snapshotResult.status === "fulfilled") detail.snapshot = snapshotResult.value.snapshot;
 	else detail.snapshot = null;
 	if (scriptResult.status === "fulfilled") {
@@ -356,8 +387,141 @@ async function fetchTaskDetail(taskId: string, includeSession = false): Promise<
 		}
 	}
 
+	// Compute timing from available sources
+	detail.timing = computeAgentTiming(detail);
+
 	if (errors.length > 0) detail.error = errors.join("; ");
 	return detail;
+}
+
+async function fetchTaskEvents(taskId: string, timeoutMs = 4000): Promise<TaskEvent[]> {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), timeoutMs);
+	try {
+		const res = await fetch(`${kanadeBaseUrl()}/tasks/${encodeURIComponent(taskId)}/events`, {
+			signal: controller.signal,
+		headers: { Accept: "text/event-stream" },
+		});
+		if (!res.ok || !res.body) return [];
+		return await collectSSEEvents(res.body, timer);
+	} catch {
+		return [];
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+async function collectSSEEvents(
+	body: ReadableStream<Uint8Array>,
+	timer: ReturnType<typeof setTimeout>,
+): Promise<TaskEvent[]> {
+	const events: TaskEvent[] = [];
+	const reader = body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = "";
+	let currentData = "";
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			buffer += decoder.decode(value, { stream: true });
+			const lines = buffer.split("\n");
+			buffer = lines.pop() ?? "";
+			for (const line of lines) {
+				if (line.startsWith("data:")) {
+					currentData = line.slice(5).trim();
+					continue;
+				}
+				if (line.startsWith(":") || line.startsWith("event:") || line.startsWith("id:")) continue;
+				if (line.trim() === "" && currentData) {
+					pushParsedEvent(events, currentData);
+					currentData = "";
+				}
+			}
+		}
+		if (currentData) pushParsedEvent(events, currentData);
+	} catch {
+		// Stream may abort; return whatever we collected
+	} finally {
+		reader.releaseLock();
+		clearTimeout(timer);
+	}
+	return events;
+}
+
+function pushParsedEvent(events: TaskEvent[], rawData: string): void {
+	try {
+		const parsed = JSON.parse(rawData) as ServerEvent;
+		if (TASK_EVENT_TYPES.includes(parsed.type)) {
+			events.push({
+				time: formatTime(parsed.ts),
+				type: parsed.type,
+				ts: parsed.ts,
+				summary: summarizeTaskEvent(parsed.type, parsed.data),
+			});
+		}
+	} catch {
+		// skip malformed event
+	}
+}
+
+function summarizeTaskEvent(type: string, data: unknown): string {
+	const d = (typeof data === "object" && data !== null ? data : {}) as Record<string, unknown>;
+	switch (type) {
+		case "task.created":
+			return sanitizeText(`created${d.workflowPath ? ` · ${d.workflowPath}` : ""}`);
+		case "task.running":
+			return "started";
+		case "task.finished":
+			return "finished";
+		case "task.failed":
+			return sanitizeText(`failed${d.error ? ` · ${String(d.error).slice(0, 80)}` : ""}`);
+		case "task.aborted":
+			return "aborted";
+		case "task.needs_human":
+			return sanitizeText(`needs human${d.request ? ` · ${String((d.request as Record<string, unknown>)?.title ?? "").slice(0, 60)}` : ""}`);
+		case "task.human_resolved":
+			return "human resolved";
+		case "task.merged":
+			return sanitizeText(`merged${d.mergeCommit ? ` · ${d.mergeCommit}` : ""}`);
+		case "task.rejected":
+			return "rejected";
+		case "task.script_generated":
+			return "script generated";
+		case "workflow.phase":
+			return sanitizeText(`phase: ${d.phase ?? ""}`);
+		case "workflow.agent_started":
+			return sanitizeText(`agent started${d.label ? ` · ${d.label}` : ""}`);
+		case "workflow.agent_completed":
+			return sanitizeText(`agent done${d.label ? ` · ${d.label}` : ""}${d.status ? ` · ${d.status}` : ""}`);
+		case "workflow.log":
+			return sanitizeText(truncatePlain(String(d.message ?? ""), 100));
+		default:
+			return type;
+	}
+}
+
+function computeAgentTiming(detail: TaskDetail): AgentTiming {
+	const task = detail.task;
+	const sessionEvents = detail.sessionEvents ?? [];
+	const taskEvents = detail.taskEvents ?? [];
+	const startedAt = task?.started_at ?? task?.created_at;
+	const elapsedMs = task?.finished_at && startedAt ? task.finished_at - startedAt : startedAt ? Date.now() - startedAt : undefined;
+	const lastActivityTs = findLastActivityTs(sessionEvents, taskEvents);
+	const lastActivityAt = lastActivityTs ?? startedAt;
+	const idleMs = lastActivityAt ? Date.now() - lastActivityAt : undefined;
+	return { startedAt, elapsedMs, lastActivityAt, idleMs };
+}
+
+function findLastActivityTs(sessionEvents: SessionEvent[], taskEvents: TaskEvent[]): number | undefined {
+	let latest = 0;
+	for (const ev of taskEvents) {
+		if (ev.ts > latest) latest = ev.ts;
+	}
+	for (const ev of sessionEvents) {
+		if (ev.rawTs && ev.rawTs > latest) latest = ev.rawTs;
+	}
+	return latest > 0 ? latest : undefined;
 }
 
 function parseWorkflowPlan(script: string): WorkflowPlanStep[] {
@@ -410,8 +574,9 @@ function summarizeSessionEntries(entries: SessionEntry[]): SessionEvent[] {
 	const events: SessionEvent[] = [];
 	for (const entry of entries) {
 		const time = formatTime(entry.timestamp);
+		const rawTs = typeof entry.timestamp === "number" ? entry.timestamp : undefined;
 		if (entry.type === "model_change") {
-			events.push({ time, label: "model", summary: `${entry.provider ?? "provider"}/${entry.modelId ?? "model"}` });
+			events.push({ time, rawTs, label: "model", summary: `${entry.provider ?? "provider"}/${entry.modelId ?? "model"}` });
 			continue;
 		}
 		if (entry.type !== "message") continue;
@@ -420,23 +585,24 @@ function summarizeSessionEntries(entries: SessionEntry[]): SessionEvent[] {
 		for (const part of message.content) {
 			const type = String(part.type ?? "");
 			if (type === "thinking") {
-				events.push({ time, label: "think", summary: firstLine(String(part.thinking ?? "thinking"), 180) });
+				events.push({ time, rawTs, label: "think", summary: firstLine(String(part.thinking ?? "thinking"), 180) });
 			} else if (type === "text") {
 				const text = firstLine(String(part.text ?? ""), 180);
-				if (text) events.push({ time, label: message.role === "user" ? "user" : "text", summary: text });
+				if (text) events.push({ time, rawTs, label: message.role === "user" ? "user" : "text", summary: text });
 			} else if (type === "toolCall") {
 				const name = String(part.name ?? "tool");
-				events.push({ time, label: toolLabel(name), summary: summarizeToolCall(name, part), state: "running" });
+				events.push({ time, rawTs, label: toolLabel(name), summary: summarizeToolCall(name, part), state: "running" });
 			} else if (type === "toolResult") {
 				const name = String(part.toolName ?? "tool");
 				events.push({
 					time,
+					rawTs,
 					label: toolLabel(name),
 					summary: summarizeToolResult(name, part),
 					state: part.isError ? "error" : "done",
 				});
 			} else if (type === "structured_output") {
-				events.push({ time, label: "out", summary: "structured output" });
+				events.push({ time, rawTs, label: "out", summary: "structured output" });
 			}
 		}
 	}
@@ -622,6 +788,16 @@ class AgentDetailOverlay implements Component {
 		} else {
 			body.push(this.theme.fg("dim", "No agent snapshot yet."));
 		}
+		// Timing fields
+		const timing = this.detail?.timing;
+		if (timing) {
+			const parts: string[] = [];
+			if (timing.startedAt) parts.push(`started ${relativeTime(timing.startedAt)}`);
+			if (typeof timing.elapsedMs === "number") parts.push(`elapsed ${formatDuration(timing.elapsedMs)}`);
+			if (timing.lastActivityAt) parts.push(`last activity ${relativeTime(timing.lastActivityAt)}`);
+			if (typeof timing.idleMs === "number" && timing.idleMs > 5000) parts.push(`idle ${formatDuration(timing.idleMs)}`);
+			if (parts.length > 0) body.push(this.theme.fg("dim", parts.join(" · ")));
+		}
 		const sessions = this.detail?.sessions ?? [];
 		if (this.detail?.sessionLabel) body.push(this.theme.fg("dim", `Session: ${this.detail.sessionLabel}`));
 		else if (sessions.length > 0)
@@ -633,7 +809,7 @@ class AgentDetailOverlay implements Component {
 		const events = this.detail?.sessionEvents ?? [];
 		if (events.length === 0) body.push(this.theme.fg("dim", "No persisted session events yet."));
 		for (const event of events.slice(-20)) {
-			const state = event.state === "running" ? "⣾" : event.state === "error" ? "!" : "·";
+			const state = event.state === "running" ? "active" : event.state === "error" ? "!" : "·";
 			body.push(truncateAnsi(`${event.time} ${state} ${eventLabel(event)} ${event.summary}`, contentWidth));
 			if (event.detail) body.push(this.theme.fg("dim", truncatePlain(`    ${event.detail}`, contentWidth)));
 		}
@@ -736,7 +912,7 @@ class KanadePanel implements Component {
 		body.push(rule(innerWidth, this.theme));
 
 		if (this.loading) {
-			body.push(`${this.spin()} Loading Kanade tasks...`);
+			body.push(`${this.color("dim", "Loading")} Kanade tasks...`);
 		} else if (!this.overview.connected) {
 			body.push(`${this.color("error", "✖ offline")} ${this.color("muted", this.overview.error ?? "unknown error")}`);
 			body.push(this.color("dim", `URL: ${this.overview.baseUrl}`));
@@ -1256,7 +1432,7 @@ class KanadePanel implements Component {
 		);
 		lines.push(this.renderTabs(width));
 		lines.push("");
-		if (detail?.loading) lines.push(`${this.spin()} ${this.color("dim", "loading task detail...")}`);
+		if (detail?.loading) lines.push(`${this.color("dim", "Loading")} task detail...`);
 		if (detail?.error) lines.push(this.color("warning", truncatePlain(detail.error, width)));
 		if (this.activeTab === "Map") lines.push(...this.mapLines(task, detail, width));
 		else if (this.activeTab === "Agent") lines.push(...this.agentLines(task, detail, width));
@@ -1287,7 +1463,7 @@ class KanadePanel implements Component {
 				`${this.color("success", "✓")} 1 Workflow prepared`,
 				this.color("dim", "  │"),
 				this.color("dim", "  ▼"),
-				`${this.spin()} 2 Runtime executing`,
+				`${this.color("accent", "active")} 2 Runtime executing`,
 				this.color("dim", "    Detailed graph events will appear as Kanade emits them."),
 			];
 		}
@@ -1344,7 +1520,7 @@ class KanadePanel implements Component {
 			const icon = hasError
 				? this.color("error", "✖")
 				: isCurrent
-					? this.spin()
+					? this.color("accent", "current")
 					: isDone || task.status === "finished"
 						? this.color("success", "✓")
 						: this.color("dim", "○");
@@ -1356,7 +1532,7 @@ class KanadePanel implements Component {
 				const agentStatus = agent?.status ?? (isDone ? "done" : isCurrent ? "running" : "planned");
 				const agentIcon =
 					agentStatus === "running"
-						? this.spin()
+						? this.color("accent", "running")
 						: agentStatus === "error"
 							? this.color("error", "✖")
 							: agentStatus === "done"
@@ -1385,7 +1561,7 @@ class KanadePanel implements Component {
 			);
 			const isCurrent = snapshot.currentPhase === phase || phaseAgents.some((agent) => agent.status === "running");
 			const hasError = phaseAgents.some((agent) => agent.status === "error");
-			const icon = hasError ? this.color("error", "✖") : isCurrent ? this.spin() : this.color("success", "✓");
+			const icon = hasError ? this.color("error", "✖") : isCurrent ? this.color("accent", "current") : this.color("success", "✓");
 			const title = isCurrent ? this.color("accent", phase) : phase;
 			lines.push(`${icon} ${index + 1} ${truncatePlain(title, width - 6)}`);
 			const summary = summarizePhase(phaseAgents);
@@ -1431,7 +1607,7 @@ class KanadePanel implements Component {
 	}
 
 	private graphNodeIcon(node: WorkflowGraphNode, isCursor: boolean): string {
-		if (node.status === "running" || isCursor) return this.spin();
+		if (node.status === "running" || isCursor) return this.color("accent", "current");
 		if (node.status === "done") return this.color("success", "✓");
 		if (node.status === "warning") return this.color("warning", "?");
 		if (node.status === "error") return this.color("error", "✖");
@@ -1446,7 +1622,7 @@ class KanadePanel implements Component {
 		if (activeAgent) {
 			const icon =
 				activeAgent.status === "running"
-					? this.spin()
+					? this.color("accent", "running")
 					: activeAgent.status === "error"
 						? this.color("error", "✖")
 						: this.color("success", "✓");
@@ -1478,7 +1654,7 @@ class KanadePanel implements Component {
 		for (const event of events.slice(-MAX_VISIBLE_AGENT_EVENTS)) {
 			const label =
 				event.state === "running"
-					? `${this.spinnerFrame()} ${eventLabel(event)}`
+					? `running ${eventLabel(event)}`
 					: `${event.state === "error" ? "!" : "·"} ${eventLabel(event)}`;
 			const labelStyled =
 				event.state === "error"
@@ -1496,13 +1672,27 @@ class KanadePanel implements Component {
 
 	private eventLines(task: KanadeTask, detail: TaskDetail | undefined, width: number): string[] {
 		const lines = [this.color("muted", "Events")];
+		const taskEvents = detail?.taskEvents ?? [];
 		const logs = detail?.snapshot?.logs ?? [];
-		if (logs.length === 0) {
-			lines.push(this.color("dim", "Task SSE replay will be added after graph/live event support."));
-			lines.push(this.color("dim", `Current status: ${task.status}`));
+		if (taskEvents.length === 0 && logs.length === 0) {
+			lines.push(this.color("dim", `Status: ${task.status} · No server events yet.`));
+			if (detail?.loading) lines.push(this.color("dim", "Loading events..."));
 			return lines;
 		}
-		for (const log of logs.slice(-14)) lines.push(this.color("dim", truncatePlain(log, width)));
+		if (taskEvents.length > 0) {
+			for (const event of taskEvents.slice(-14)) {
+				const icon = event.type.includes("failed") || event.type.includes("error")
+					? this.color("error", "!")
+					: event.type.includes("finished") || event.type.includes("merged")
+					? this.color("success", "✓")
+					: event.type.includes("running") || event.type.includes("started")
+					? this.color("accent", "active")
+					: this.color("dim", "·");
+				lines.push(truncateAnsi(`${event.time} ${icon} ${event.type} ${event.summary}`, width));
+			}
+		} else {
+			for (const log of logs.slice(-14)) lines.push(this.color("dim", truncatePlain(log, width)));
+		}
 		return lines;
 	}
 
@@ -1770,7 +1960,7 @@ class KanadePanel implements Component {
 	}
 
 	private statusIcon(status: string): string {
-		if (status === "running") return this.spin();
+		if (status === "running") return this.color("accent", "running");
 		if (status === "needs_human") return this.color("warning", "?");
 		if (status === "finished") return this.color("success", "✓");
 		if (status === "failed") return this.color("error", "✖");
@@ -1779,7 +1969,7 @@ class KanadePanel implements Component {
 	}
 
 	private runningToken(): string {
-		return `${this.color("accent", this.spinnerFrame())} `;
+		return `${this.color("accent", "running")} `;
 	}
 
 	private tickSpinner(): void {
@@ -1791,7 +1981,7 @@ class KanadePanel implements Component {
 	}
 
 	private spinnerFrame(): string {
-		return KANADE_SPINNER[this.spinnerIndex % KANADE_SPINNER.length];
+		return "running";
 	}
 
 	private color(kind: "accent" | "success" | "warning" | "error" | "muted" | "dim", text: string): string {
@@ -1926,6 +2116,17 @@ function relativeTime(ts?: number | null): string {
 	const hours = Math.floor(minutes / 60);
 	if (hours < 24) return `${hours}h ago`;
 	return `${Math.floor(hours / 24)}d ago`;
+}
+
+function formatDuration(ms: number): string {
+	const seconds = Math.max(0, Math.floor(ms / 1000));
+	if (seconds < 60) return `${seconds}s`;
+	const minutes = Math.floor(seconds / 60);
+	const remainSec = seconds % 60;
+	if (minutes < 60) return `${minutes}m${remainSec}s`;
+	const hours = Math.floor(minutes / 60);
+	const remainMin = minutes % 60;
+	return `${hours}h${remainMin}m`;
 }
 
 function latestSessionModel(events: SessionEvent[]): string | undefined {
@@ -2147,7 +2348,7 @@ async function updateFooterStatus(ctx: { ui: Ui }): Promise<void> {
 	}
 	ctx.ui.setStatus(
 		"kanade",
-		`${ctx.ui.theme.fg("success", "K: ●")} ${ctx.ui.theme.fg("dim", `⣾${counts.running} ?${counts.needsHuman} ✖${counts.failed}`)}`,
+		`${ctx.ui.theme.fg("success", "K: ●")} ${ctx.ui.theme.fg("dim", `${counts.running} running · ${counts.needsHuman} waiting · ${counts.failed} failed`)}`,
 	);
 }
 
