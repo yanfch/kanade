@@ -240,6 +240,24 @@ function mockFetch(url: string | URL | Request, init?: RequestInit): Promise<Res
 	if (/^\/tasks\/T-0005\/worktrees$/.test(path)) return json({ worktrees: [] });
 	if (/^\/tasks\/T-0005\/sessions$/.test(path)) return json({ sessions: [] });
 	if (path === "/config" && method === "GET") return json(MOCK_CONFIG);
+	if (path === "/config" && method === "PATCH") {
+		let body: Record<string, unknown> = {};
+		try {
+			body = JSON.parse((init?.body as string) ?? "{}");
+		} catch {}
+		// Apply patch to mock config
+		for (const [key, value] of Object.entries(body)) {
+			const parts = key.split(".");
+			let target: Record<string, unknown> = MOCK_CONFIG;
+			for (let i = 0; i < parts.length - 1; i++) {
+				const part = parts[i]!;
+				if (typeof target[part] !== "object" || target[part] === null) target[part] = {};
+				target = target[part] as Record<string, unknown>;
+			}
+			target[parts[parts.length - 1]!] = value;
+		}
+		return json({ ok: true, config: MOCK_CONFIG });
+	}
 
 	// SSE event replay for tasks
 	if (/^\/tasks\/T-0001\/events$/.test(path)) {
@@ -351,7 +369,7 @@ function createFakeApi() {
 	};
 }
 
-function createFakeContext(overrides?: { mode?: string }) {
+function createFakeContext(overrides?: { mode?: string; confirmResult?: boolean }) {
 	const theme = {
 		fg: (_kind: string, text: string) => text,
 	};
@@ -396,7 +414,7 @@ function createFakeContext(overrides?: { mode?: string }) {
 			getToolsExpanded: () => false,
 			setToolsExpanded: () => {},
 			select: async () => undefined,
-			confirm: async () => false,
+			confirm: async () => overrides?.confirmResult ?? false,
 			input: async () => undefined,
 			onTerminalInput: () => () => {},
 		},
@@ -445,11 +463,11 @@ async function delay(ms: number) {
 }
 
 /** Create a KanadePanel via the registered /kanade command and return it. */
-async function createPanel() {
+async function createPanel(confirmResult?: boolean) {
 	const cmd = commands.find((c) => c.name === "kanade");
 	if (!cmd) throw new Error("kanade command not registered");
 	// Fire the handler; it will call ui.custom internally
-	const cmdCtx = createFakeContext();
+	const cmdCtx = createFakeContext(confirmResult !== undefined ? { confirmResult } : undefined);
 	void cmd.handler("", cmdCtx);
 	// Let the async handler reach ui.custom and the panel constructor + refresh settle
 	await delay(250);
@@ -1007,6 +1025,187 @@ function assert(label: string, condition: boolean, detail?: string) {
 	const braillePattern = /[\u2800-\u28FF]/;
 	assert("header line has no braille", !braillePattern.test(text.split("\n")[0] ?? ""), "found braille in header");
 	assert("header shows 'running' text", text.includes("running"), `missing running label in: ${text.slice(0, 300)}`);
+}
+
+// ---------- Test 20: Settings overlay shows editable field labels ----------
+{
+	console.log("\nTest 20: Settings overlay shows editable field labels and current values");
+	const savedConfig = structuredClone(MOCK_CONFIG);
+	customCalls.length = 0;
+	const panel = await createPanel();
+	panel.handleInput("s");
+	await delay(200);
+	const settingsCall = customCalls.at(-1);
+	if (!settingsCall) {
+		assert("settings overlay opened for edit test", false);
+	} else {
+		const comp = settingsCall.component as { render(w: number): string[] };
+		const text = strip(comp.render(90).join("\n"));
+		assert("shows Max Concurrent Tasks label", text.includes("Max Concurrent Tasks"), `output: ${text.slice(0, 500)}`);
+		assert("shows Concurrency label", text.includes("Concurrency"), `output: ${text.slice(0, 500)}`);
+		assert("shows Isolation Mode label", text.includes("Isolation Mode"), `output: ${text.slice(0, 500)}`);
+		assert("shows Persist Subagents label", text.includes("Persist Subagents"), `output: ${text.slice(0, 500)}`);
+		assert("shows Cleanup Enabled label", text.includes("Cleanup Enabled"), `output: ${text.slice(0, 500)}`);
+		assert(
+			"shows current boolean value",
+			text.includes("false") || text.includes("true"),
+			`output: ${text.slice(0, 500)}`,
+		);
+		assert("shows select hint", text.includes("select"), `output: ${text.slice(0, 500)}`);
+		(comp as { handleInput?: (d: string) => void }).handleInput?.("\x1b");
+		settingsCall.resolve(undefined);
+	}
+	Object.assign(MOCK_CONFIG, savedConfig);
+}
+
+// ---------- Test 21: Settings toggle boolean ----------
+{
+	console.log("\nTest 21: Settings toggle boolean via Enter");
+	const savedConfig = structuredClone(MOCK_CONFIG);
+	customCalls.length = 0;
+	const panel = await createPanel(true); // confirmResult = true
+	panel.handleInput("s");
+	await delay(200);
+	const settingsCall = customCalls.at(-1);
+	if (!settingsCall) {
+		assert("settings overlay opened for toggle test", false);
+	} else {
+		const comp = settingsCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
+		// Navigate to Persist Subagents (index 4, boolean field)
+		for (let i = 0; i < 4; i++) comp.handleInput?.("\x1b[B"); // down arrow
+		await delay(50);
+		comp.handleInput?.("\r"); // Enter to toggle
+		await delay(200);
+		const text = strip(comp.render(90).join("\n"));
+		assert(
+			"shows saved confirmation after toggle",
+			text.includes("Saved") || text.includes("persistSubagents"),
+			`output: ${text.slice(0, 500)}`,
+		);
+		assert(
+			"PATCH was called",
+			fetchCalls.some((c) => c.includes("PATCH") && c.includes("/config")),
+			`calls: ${fetchCalls.join(", ")}`,
+		);
+		comp.handleInput?.("\x1b");
+		settingsCall.resolve(undefined);
+	}
+	Object.assign(MOCK_CONFIG, savedConfig);
+}
+
+// ---------- Test 22: Settings number edit mode ----------
+{
+	console.log("\nTest 22: Settings number edit mode via Enter");
+	const savedConfig = structuredClone(MOCK_CONFIG);
+	customCalls.length = 0;
+	fetchCalls.length = 0;
+	const panel = await createPanel();
+	panel.handleInput("s");
+	await delay(200);
+	const settingsCall = customCalls.at(-1);
+	if (!settingsCall) {
+		assert("settings overlay opened for number edit", false);
+	} else {
+		const comp = settingsCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
+		// First field is Max Concurrent Tasks (index 0, number)
+		comp.handleInput?.("\r"); // Enter to start edit
+		await delay(50);
+		let text = strip(comp.render(90).join("\n"));
+		assert(
+			"shows edit mode indicator",
+			text.includes("Editing") || text.includes("▏"),
+			`output: ${text.slice(0, 500)}`,
+		);
+		// Type a new value
+		for (const ch of "5") comp.handleInput?.(ch);
+		comp.handleInput?.("\r"); // Enter to save
+		await delay(200);
+		text = strip(comp.render(90).join("\n"));
+		assert(
+			"shows saved after number edit",
+			text.includes("Saved") || text.includes("maxConcurrentTasks"),
+			`output: ${text.slice(0, 500)}`,
+		);
+		assert(
+			"PATCH was called for number",
+			fetchCalls.some((c) => c.includes("PATCH")),
+			`calls: ${fetchCalls.join(", ")}`,
+		);
+		comp.handleInput?.("\x1b");
+		settingsCall.resolve(undefined);
+	}
+	Object.assign(MOCK_CONFIG, savedConfig);
+}
+
+// ---------- Test 23: Settings dangerous field requires confirmation ----------
+{
+	console.log("\nTest 23: Settings dangerous cleanup field requires confirmation");
+	const savedConfig = structuredClone(MOCK_CONFIG);
+	customCalls.length = 0;
+	fetchCalls.length = 0;
+	// confirmResult = false means the confirmation dialog will be rejected
+	const panel = await createPanel(false);
+	panel.handleInput("s");
+	await delay(200);
+	const settingsCall = customCalls.at(-1);
+	if (!settingsCall) {
+		assert("settings overlay opened for dangerous test", false);
+	} else {
+		const comp = settingsCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
+		// Navigate to Cleanup Enabled (index 6, boolean, dangerous)
+		for (let i = 0; i < 6; i++) comp.handleInput?.("\x1b[B"); // down arrow
+		await delay(50);
+		comp.handleInput?.("\r"); // Enter to toggle
+		await delay(300);
+		const text = strip(comp.render(90).join("\n"));
+		assert(
+			"shows cancelled notice for rejected dangerous toggle",
+			text.includes("Cancelled"),
+			`output: ${text.slice(0, 500)}`,
+		);
+		assert(
+			"PATCH not called when confirm rejected",
+			!fetchCalls.some((c) => c.includes("PATCH")),
+			`calls: ${fetchCalls.join(", ")}`,
+		);
+		comp.handleInput?.("\x1b");
+		settingsCall.resolve(undefined);
+	}
+	Object.assign(MOCK_CONFIG, savedConfig);
+}
+
+// ---------- Test 24: Settings Esc in edit mode cancels ----------
+{
+	console.log("\nTest 24: Settings Esc in edit mode cancels without saving");
+	const savedConfig = structuredClone(MOCK_CONFIG);
+	customCalls.length = 0;
+	fetchCalls.length = 0;
+	const panel = await createPanel();
+	panel.handleInput("s");
+	await delay(200);
+	const settingsCall = customCalls.at(-1);
+	if (!settingsCall) {
+		assert("settings overlay opened for cancel test", false);
+	} else {
+		const comp = settingsCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
+		// First field (number), enter edit mode
+		comp.handleInput?.("\r");
+		await delay(50);
+		// Type some chars then cancel
+		for (const ch of "999") comp.handleInput?.(ch);
+		comp.handleInput?.("\x1b"); // Esc to cancel
+		await delay(100);
+		const text = strip(comp.render(90).join("\n"));
+		assert(
+			"PATCH not called when edit cancelled",
+			!fetchCalls.some((c) => c.includes("PATCH")),
+			`calls: ${fetchCalls.join(", ")}`,
+		);
+		assert("back to normal mode (select hint visible)", text.includes("select"), `output: ${text.slice(0, 500)}`);
+		comp.handleInput?.("\x1b");
+		settingsCall.resolve(undefined);
+	}
+	Object.assign(MOCK_CONFIG, savedConfig);
 }
 
 // ---------------------------------------------------------------------------
