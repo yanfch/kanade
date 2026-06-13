@@ -256,10 +256,19 @@ describe("GET /tasks", () => {
 	});
 	it("list returns no git-derived fields while review returns them", async () => {
 		const { store, app } = setup();
+		const branchName = "kanade/TL-struct-test";
+		const tmpDir = "/tmp/wt-struct-test";
+		const cleanupGitFixture = () => {
+			execFileSync("git", ["worktree", "remove", tmpDir, "--force"], { encoding: "utf8", stdio: "ignore" });
+			execFileSync("git", ["branch", "-D", branchName], { encoding: "utf8", stdio: "ignore" });
+		};
 		try {
+			try {
+				cleanupGitFixture();
+			} catch {
+				// ignore stale fixture cleanup failures
+			}
 			const now = Date.now();
-			const branchName = "kanade/TL-struct-test";
-			const tmpDir = "/tmp/wt-struct-test";
 
 			// Create a real branch with a commit
 			execFileSync("git", ["branch", branchName], { encoding: "utf8" });
@@ -337,11 +346,12 @@ describe("GET /tasks", () => {
 			expect(reviewRes.status).toBe(200);
 			expect(reviewBody.worktree.has_changes).toBe(true);
 			expect(reviewBody.worktree.commit_count).toBeGreaterThan(0);
-
-			// Cleanup
-			execFileSync("git", ["worktree", "remove", tmpDir, "--force"], { encoding: "utf8" });
-			execFileSync("git", ["branch", "-D", branchName], { encoding: "utf8" });
 		} finally {
+			try {
+				cleanupGitFixture();
+			} catch {
+				// ignore fixture cleanup failures
+			}
 			store.close();
 		}
 	});
