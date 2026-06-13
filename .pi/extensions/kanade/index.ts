@@ -199,6 +199,7 @@ const DEFAULT_BASE_URL = "http://127.0.0.1:7777";
 const TABS: readonly Tab[] = ["Map", "Agent", "Events", "Worktree", "Usage", "Result"];
 const PANEL_BODY_ROWS = 32;
 const MAX_VISIBLE_TASKS = 10;
+const MAX_VISIBLE_NARROW_TASKS = 5;
 const MAX_VISIBLE_AGENT_EVENTS = 3;
 const ESC = String.fromCharCode(27);
 const ANSI_SGR_PREFIX = new RegExp(`^${ESC}\\[[0-9;]*m`);
@@ -618,6 +619,7 @@ class KanadePanel implements Component {
 	private selected = 0;
 	private searchQuery = "";
 	private searchMode = false;
+	private taskLimit = MAX_VISIBLE_TASKS;
 	private loading = true;
 	private activeTab: Tab = "Map";
 	private details = new Map<string, TaskDetail>();
@@ -1075,6 +1077,7 @@ class KanadePanel implements Component {
 	}
 
 	private renderWide(body: string[], width: number): void {
+		this.taskLimit = MAX_VISIBLE_TASKS;
 		const leftWidth = Math.min(40, Math.max(30, Math.floor(width * 0.38)));
 		const rightWidth = width - leftWidth - 3;
 		const taskLines = this.taskLines(leftWidth);
@@ -1090,6 +1093,7 @@ class KanadePanel implements Component {
 	}
 
 	private renderNarrow(body: string[], width: number): void {
+		this.taskLimit = MAX_VISIBLE_NARROW_TASKS;
 		const taskLines = this.taskLines(width);
 		const detailLines = this.detailLines(width);
 		if (this.actionMenu || this.confirmDialog) {
@@ -1464,7 +1468,7 @@ class KanadePanel implements Component {
 					return haystack.includes(query);
 				})
 			: this.overview.tasks;
-		return { tasks: tasks.slice(0, MAX_VISIBLE_TASKS), total: tasks.length, query };
+		return { tasks: tasks.slice(0, this.taskLimit), total: tasks.length, query };
 	}
 
 	private scheduleSelectedDetailLoad(delayMs = 180, includeSession = this.activeTab === "Agent"): void {
