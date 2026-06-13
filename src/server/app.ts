@@ -2,7 +2,13 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { type KanadeConfig, maskConfig, validateConfigPatch, writeConfigPatch } from "../config/config.ts";
+import {
+	type KanadeConfig,
+	maskConfig,
+	validateConfigPatch,
+	writeConfigPatch,
+	writeConfigReplace,
+} from "../config/config.ts";
 import type { TaskStatus } from "../store/index.ts";
 import { AppError } from "./errors.ts";
 import type { EventBus, ServerEvent } from "./event-bus.ts";
@@ -235,8 +241,10 @@ export function createApp(ctx: AppContext): Hono {
 			return c.json({ error: "Validation failed", errors: validation.errors }, 400);
 		}
 		try {
-			ctx.config = writeConfigPatch(ctx.config, validation.sanitized);
-			return c.json({ ok: true, config: maskConfig(ctx.config), requires_restart: validation.requiresRestart });
+			const newConfig = writeConfigPatch(ctx.config, validation.sanitized);
+			ctx.config = newConfig;
+			ctx.taskManager.updateConfig(newConfig);
+			return c.json({ ok: true, config: maskConfig(newConfig), requires_restart: validation.requiresRestart });
 		} catch (err) {
 			return c.json({ error: `Failed to write config: ${err instanceof Error ? err.message : String(err)}` }, 500);
 		}
@@ -250,8 +258,10 @@ export function createApp(ctx: AppContext): Hono {
 			return c.json({ error: "Validation failed", errors: validation.errors }, 400);
 		}
 		try {
-			ctx.config = writeConfigPatch(ctx.config, validation.sanitized);
-			return c.json({ ok: true, config: maskConfig(ctx.config), requires_restart: validation.requiresRestart });
+			const newConfig = writeConfigReplace(ctx.config, validation.sanitized);
+			ctx.config = newConfig;
+			ctx.taskManager.updateConfig(newConfig);
+			return c.json({ ok: true, config: maskConfig(newConfig), requires_restart: validation.requiresRestart });
 		} catch (err) {
 			return c.json({ error: `Failed to write config: ${err instanceof Error ? err.message : String(err)}` }, 500);
 		}

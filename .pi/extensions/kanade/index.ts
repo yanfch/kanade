@@ -172,10 +172,17 @@ type ReviewSummary = {
 	finished_at?: number | null;
 };
 
-// Sanitize multiline text for safe rendering
+// Sanitize text for safe single-line rendering: strip control chars and collapse whitespace
 function sanitizeText(text: unknown): string {
 	if (typeof text !== "string") return String(text ?? "");
-	return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "").trim();
+	return Array.from(text)
+		.filter((char) => {
+			const code = char.charCodeAt(0);
+			return code >= 32 || code === 9 || code === 10 || code === 13;
+		})
+		.join("")
+		.replace(/\s+/g, " ")
+		.trim();
 }
 
 type TaskDetail = {
@@ -322,14 +329,15 @@ async function fetchOverview(): Promise<KanadeOverview> {
 
 async function fetchTaskDetail(taskId: string, includeSession = false): Promise<TaskDetail> {
 	const detail: TaskDetail = { loading: false, loadedAt: Date.now() };
-	const [taskResult, snapshotResult, scriptResult, worktreesResult, sessionsResult, reviewResult] = await Promise.allSettled([
-		getJson<{ task: KanadeTask; usage?: UsageSummary | null }>(`/tasks/${encodeURIComponent(taskId)}`),
-		getJson<{ snapshot: WorkflowSnapshot }>(`/tasks/${encodeURIComponent(taskId)}/snapshot`),
-		getJson<{ script: string }>(`/tasks/${encodeURIComponent(taskId)}/script`),
-		getJson<{ worktrees: WorktreeRow[] }>(`/tasks/${encodeURIComponent(taskId)}/worktrees`),
-		getJson<{ sessions: SessionListItem[] }>(`/tasks/${encodeURIComponent(taskId)}/sessions`),
-		getJson<ReviewSummary>(`/tasks/${encodeURIComponent(taskId)}/review`),
-	]);
+	const [taskResult, snapshotResult, scriptResult, worktreesResult, sessionsResult, reviewResult] =
+		await Promise.allSettled([
+			getJson<{ task: KanadeTask; usage?: UsageSummary | null }>(`/tasks/${encodeURIComponent(taskId)}`),
+			getJson<{ snapshot: WorkflowSnapshot }>(`/tasks/${encodeURIComponent(taskId)}/snapshot`),
+			getJson<{ script: string }>(`/tasks/${encodeURIComponent(taskId)}/script`),
+			getJson<{ worktrees: WorktreeRow[] }>(`/tasks/${encodeURIComponent(taskId)}/worktrees`),
+			getJson<{ sessions: SessionListItem[] }>(`/tasks/${encodeURIComponent(taskId)}/sessions`),
+			getJson<ReviewSummary>(`/tasks/${encodeURIComponent(taskId)}/review`),
+		]);
 
 	const errors: string[] = [];
 	if (taskResult.status === "fulfilled") {
@@ -940,7 +948,8 @@ class KanadePanel implements Component {
 		const review = detail?.review;
 		const isMerged = review?.state === "merged" || task.worktree_summary?.status === "merged";
 		const isNoChanges = review?.state === "no_changes";
-		if (!isMerged && !isNoChanges && isTaskMergeable(task, review)) items.push({ key: "merge", label: "Merge task", danger: true });
+		if (!isMerged && !isNoChanges && isTaskMergeable(task, review))
+			items.push({ key: "merge", label: "Merge task", danger: true });
 		if (task.status === "failed" || task.status === "aborted") {
 			items.push({ key: "recovery", label: "Open recovery view" });
 			items.push({ key: "iterate", label: "Iterate with instructions" });
@@ -1313,7 +1322,7 @@ class KanadePanel implements Component {
 		if (task.status === "failed" || task.status === "aborted") {
 			return [
 				`${this.color("error", "✖")} Workflow stopped`,
-				this.color("dim", `    ${truncatePlain(task.error ?? "No error recorded", width - 4)}`),
+				this.color("dim", `    ${sanitizeText(truncatePlain(task.error ?? "No error recorded", width - 4))}`),
 				this.color("warning", "    Recommended: inspect agent history/worktree, iterate, or keep."),
 			];
 		}
@@ -1522,7 +1531,7 @@ class KanadePanel implements Component {
 		const summary = task.worktree_summary;
 		if (isRecovery) {
 			lines.push(`${this.color("error", "✖")} ${task.id} ${taskTitle(task, width - 10)}`);
-			lines.push(this.color("dim", `Failure: ${truncatePlain(task.error ?? "unknown", width - 9)}`));
+			lines.push(this.color("dim", `Failure: ${sanitizeText(truncatePlain(task.error ?? "unknown", width - 9))}`));
 			lines.push("");
 		}
 		if (summary) {
@@ -1593,15 +1602,22 @@ class KanadePanel implements Component {
 		return lines;
 	}
 
-	private reviewLines(task: KanadeTask, detail: TaskDetail | undefined, width: number): string[] {
+	private reviewLines(_task: KanadeTask, detail: TaskDetail | undefined, width: number): string[] {
 		const review = detail?.review;
 		if (!review) return [this.color("muted", "Review"), this.color("dim", "Loading review summary...")];
 
 		const lines: string[] = [];
 		const stateLabel = reviewStateLabel(review.state);
-		const stateColor = review.state === "ready" ? "success" : review.state === "merged" ? "accent" : review.state === "blocked" || review.state === "checks_failed" ? "error" : "warning";
+		const stateColor =
+			review.state === "ready"
+				? "success"
+				: review.state === "merged"
+					? "accent"
+					: review.state === "blocked" || review.state === "checks_failed"
+						? "error"
+						: "warning";
 		lines.push(`${this.color("muted", "Merge Readiness")}  ${this.color(stateColor, stateLabel)}`);
-		lines.push(this.color("dim", truncatePlain(review.recommendation, width)));
+		lines.push(this.color("dim", sanitizeText(truncatePlain(review.recommendation, width))));
 		lines.push(rule(width, this.theme));
 
 		// Checklist
@@ -1626,9 +1642,13 @@ class KanadePanel implements Component {
 		if (reviewData) {
 			lines.push("");
 			const agents = reviewData.agents ?? {};
-			lines.push(this.color("dim", `Agents: ${agents.total ?? 0} total, ${agents.done ?? 0} done, ${agents.failed ?? 0} failed`));
+			lines.push(
+				this.color("dim", `Agents: ${agents.total ?? 0} total, ${agents.done ?? 0} done, ${agents.failed ?? 0} failed`),
+			);
 			const phases = reviewData.phases ?? {};
-			lines.push(this.color("dim", `Phases: ${phases.completed ?? 0} completed, ${phases.in_progress ?? 0} in progress`));
+			lines.push(
+				this.color("dim", `Phases: ${phases.completed ?? 0} completed, ${phases.in_progress ?? 0} in progress`),
+			);
 			const gates = reviewData.human_gates ?? {};
 			lines.push(this.color("dim", `Human gates: ${gates.resolved ?? 0} resolved, ${gates.pending ?? 0} pending`));
 		}
@@ -1636,7 +1656,7 @@ class KanadePanel implements Component {
 		return lines;
 	}
 
-	private settingsLines(width: number): string[] {
+	private settingsLines(_width: number): string[] {
 		return [this.color("muted", "Settings"), this.color("dim", "Loading config...")];
 	}
 
@@ -1647,7 +1667,9 @@ class KanadePanel implements Component {
 		try {
 			const config = await getJson<Record<string, unknown>>("/config");
 			const lines: string[] = [this.color("muted", "Kanade Settings"), ""];
-			lines.push(this.color("dim", `Config: ${String((config.paths as Record<string, unknown>)?.configFile ?? "unknown")}`));
+			lines.push(
+				this.color("dim", `Config: ${String((config.paths as Record<string, unknown>)?.configFile ?? "unknown")}`),
+			);
 			lines.push(rule(60, this.theme));
 
 			// Show important sections
@@ -1670,7 +1692,10 @@ class KanadePanel implements Component {
 						if (isKey(data, "escape", "\x1b") || isKey(data, "ctrl+c") || data === "q") done();
 					},
 				}),
-				{ overlay: true, overlayOptions: { anchor: "top-center", offsetY: 3, width: "80%", minWidth: 80, maxHeight: "80%" } },
+				{
+					overlay: true,
+					overlayOptions: { anchor: "top-center", offsetY: 3, width: "80%", minWidth: 80, maxHeight: "80%" },
+				},
 			);
 		} catch (error) {
 			this.lastNotice = { kind: "error", text: error instanceof Error ? error.message : String(error) };
@@ -1886,12 +1911,10 @@ function checkLabel(key: string): string {
 
 function isTaskMergeable(task: KanadeTask, review?: ReviewSummary | null): boolean {
 	if (task.status !== "finished") return false;
-	// If we have review data, use it
+	// If we have review data, use it — no fallback to worktree_summary
 	if (review) return review.mergeable === true;
-	// Fallback to worktree summary check
-	const summary = task.worktree_summary;
-	if (!summary) return true;
-	return summary.status === "active" || summary.status === "inactive";
+	// Without review data, cannot determine mergeability safely
+	return false;
 }
 
 function worktreeChangeLabel(summary: WorktreeSummary): string {

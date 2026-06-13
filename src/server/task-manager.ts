@@ -131,12 +131,12 @@ function composeGeneratedUsage(
 export class TaskManager {
 	private nextTaskSeq = 1;
 	private readonly controllers = new Map<string, AbortController>();
-	private readonly workflowStore: WorkflowStore;
+	private workflowStore: WorkflowStore;
 	private readonly author: WorkflowAuthor;
 	private readonly usingImplicitStubAuthor: boolean;
-	private readonly isolation: IsolationManager;
+	private isolation: IsolationManager;
 	/** Exposed for CleanupScheduler access. */
-	readonly isolationManager: IsolationManager;
+	isolationManager: IsolationManager;
 
 	// Daily cost tracking
 	private dailyCostDate = new Date().toISOString().slice(0, 10);
@@ -148,7 +148,7 @@ export class TaskManager {
 	private readonly createSession?: (options: CreateAgentSessionOptions) => Promise<CreateAgentSessionResult>;
 
 	constructor(
-		private readonly config: KanadeConfig,
+		private config: KanadeConfig,
 		private readonly store: StateStore,
 		private readonly events: EventBus,
 		private readonly humanGate: HumanGate,
@@ -177,6 +177,26 @@ export class TaskManager {
 		this.tracer = tracing?.tracer ?? ({ startSpan: () => noopSpan } as unknown as Tracer);
 		this.isolationManager = this.isolation;
 		this.snapshotBuilder = new SnapshotBuilder(events);
+	}
+
+	/** Update the live config reference (used by PATCH/PUT /config). */
+	updateConfig(newConfig: KanadeConfig): void {
+		this.config = newConfig;
+		this.workflowStore = new WorkflowStore(newConfig.paths.workflowsDir);
+		this.isolation = new IsolationManager(
+			this.store,
+			{
+				defaultBaseBranch: newConfig.isolation.defaultBaseBranch,
+				defaultBaseRepo: newConfig.isolation.defaultBaseRepo,
+				worktreeBaseDir: newConfig.isolation.worktreeBaseDir,
+				branchPrefix: newConfig.isolation.branchPrefix,
+				autoCleanupOnReject: newConfig.isolation.autoCleanupOnReject,
+				autoCleanupOnApprove: newConfig.isolation.autoCleanupOnApprove,
+				autoCleanupOnAbort: newConfig.isolation.autoCleanupOnAbort,
+			},
+			newConfig.merge,
+		);
+		this.isolationManager = this.isolation;
 	}
 
 	async generateWorkflow(prompt: string, options?: TaskOptions): Promise<GenerateWorkflowResult> {
@@ -474,15 +494,11 @@ export class TaskManager {
 			// Finished — check merge readiness
 			checks.task_finished = true;
 
-			// Worktree existence
+			// Worktree existence + changes (determines no_changes vs ready vs checks_failed)
 			const hasWorktree = worktreeSummary.status !== "none";
-			checks.worktree_exists = hasWorktree;
-			if (!hasWorktree) blockers.push("No worktree found");
-
-			// Has changes
 			const hasChanges = worktreeSummary.has_changes === true;
+			checks.worktree_exists = hasWorktree;
 			checks.has_changes = hasChanges;
-			if (!hasChanges) blockers.push("No changes detected in worktree");
 
 			// No agent errors
 			const noErrors = agentFailed === 0;
@@ -499,11 +515,14 @@ export class TaskManager {
 			checks.human_gates_resolved = gatesResolved;
 			if (!gatesResolved) blockers.push(`${humanPending} human gate(s) unresolved`);
 
-			// Final state
-			if (blockers.length > 0) {
-				state = "checks_failed";
-			} else if (!hasWorktree || !hasChanges) {
+			// Final state — no_changes is a distinct category (nothing to merge),
+			// not a "check failure". Only push blockers for actionable failures.
+			if (!hasWorktree || !hasChanges) {
 				state = "no_changes";
+				if (!hasWorktree) blockers.push("No worktree found");
+				if (!hasChanges) blockers.push("No changes detected in worktree");
+			} else if (blockers.length > 0) {
+				state = "checks_failed";
 			} else {
 				state = "ready";
 			}
@@ -516,7 +535,12 @@ export class TaskManager {
 			status: task.status,
 			state,
 			mergeable: state === "ready",
-			recommendation: state === "ready" ? "Task is ready for merge review" : state === "merged" ? "Already merged" : `Not ready: ${state}`,
+			recommendation:
+				state === "ready"
+					? "Task is ready for merge review"
+					: state === "merged"
+						? "Already merged"
+						: `Not ready: ${state}`,
 			blockers,
 			checks,
 			workflow: {
@@ -767,6 +791,26 @@ export class TaskManager {
 		if (!task) return { success: false, error: `Task not found: ${taskId}` };
 		if (task.status !== "finished")
 			return { success: false, error: `Task must be finished before merge (current: ${task.status})` };
+
+		// Enforce review gating unless explicitly allowed to skip
+		if (!this.config.merge.allowSkipReview) {
+			const review = this.getReview(taskId);
+			if (review) {
+				if (review.state === "merged") {
+					return { success: false, error: "Task is already merged" };
+				}
+				if (review.state === "no_changes") {
+					return { success: false, error: "No changes to merge" };
+				}
+				if (review.state !== "ready") {
+					const blockers = Array.isArray(review.blockers) ? review.blockers.join("; ") : "unknown";
+					return {
+						success: false,
+						error: `Review not ready (state: ${review.state}). Blockers: ${blockers}`,
+					};
+				}
+			}
+		}
 
 		const result = await this.isolation.merge(taskId);
 		if (result.success) {

@@ -222,7 +222,7 @@ describe("maskConfig", () => {
 	it("masks authPath when non-null", () => {
 		const { maskConfig } = require("./config.ts");
 		const config = loadConfig();
-		(config as any).models.authPath = "/tmp/secret.json";
+		config.models.authPath = "/tmp/secret.json";
 		const masked = maskConfig(config);
 		expect(masked.models.authPath).toBe("<configured>");
 	});
@@ -240,5 +240,26 @@ describe("maskConfig", () => {
 		const masked = maskConfig(config);
 		expect(masked.paths.root).toBe(config.paths.root);
 		expect(masked.paths.configFile).toBe(config.paths.configFile);
+	});
+
+	it("rejects null for top-level sections", () => {
+		const { validateConfigPatch } = require("./config.ts");
+		const result = validateConfigPatch({ defaults: null });
+		expect(result.valid).toBe(false);
+		expect(result.errors[0]).toContain("null");
+	});
+
+	it("rejects unknown nested keys in sections", () => {
+		const { validateConfigPatch } = require("./config.ts");
+		const result = validateConfigPatch({ defaults: { unknownKey: 42 } });
+		expect(result.valid).toBe(false);
+		expect(result.errors[0]).toContain("Unknown nested");
+	});
+
+	it("accepts known nested keys in sections", () => {
+		const { validateConfigPatch } = require("./config.ts");
+		const result = validateConfigPatch({ defaults: { concurrency: 4 }, merge: { allowSkipReview: true } });
+		expect(result.valid).toBe(true);
+		expect(result.errors).toEqual([]);
 	});
 });

@@ -364,14 +364,59 @@ const EDITABLE_TOP_KEYS = new Set([
 	"announcers",
 ]);
 
+/** Known nested keys per editable top-level section. */
+const NESTED_KEY_WHITELIST: Record<string, Set<string>> = {
+	defaults: new Set([
+		"authorModel",
+		"agentModel",
+		"roleModels",
+		"tokenBudget",
+		"costBudget",
+		"dailyCostBudget",
+		"taskIdPrefix",
+		"agentTimeoutMs",
+		"concurrency",
+		"maxConcurrentTasks",
+	]),
+	isolation: new Set([
+		"defaultMode",
+		"defaultBaseBranch",
+		"defaultBaseRepo",
+		"worktreeBaseDir",
+		"branchPrefix",
+		"autoCleanupOnReject",
+		"autoCleanupOnApprove",
+		"autoCleanupOnAbort",
+		"staleAfterDays",
+		"maxConcurrent",
+		"prepareCommands",
+	]),
+	merge: new Set([
+		"targetBranch",
+		"useNoFf",
+		"requireCleanLint",
+		"requireCleanTest",
+		"deleteBranchAfterMerge",
+		"allowSkipReview",
+	]),
+	tracing: new Set(["enabled", "serviceName", "exporter", "exporters", "sampling", "captureContent"]),
+	models: new Set([
+		"mode",
+		"piAgentDir",
+		"agentDir",
+		"authPath",
+		"modelsPath",
+		"inheritPiSettings",
+		"disableSubagentCompaction",
+	]),
+	network: new Set(["httpProxy", "httpsProxy", "allProxy", "noProxy", "httpIdleTimeoutMs"]),
+	debug: new Set(["persistSubagents", "persistFilter", "dumpArtifacts"]),
+	cleanup: new Set(["enabled", "schedule", "journalRetentionDays", "traceRetentionDays"]),
+	liveAcceptance: new Set(["prepare", "checks", "timeoutMs", "pollMs"]),
+};
+
 /** Nested field paths that must NOT be modified at runtime. */
-const BLOCKED_PATHS = new Set([
-	"paths",
-	"server",
-	"models.mode",
-	"models.agentDir",
-	"models.piAgentDir",
-]);
+const BLOCKED_PATHS = new Set(["paths", "server", "models.mode", "models.agentDir", "models.piAgentDir"]);
 
 export interface ConfigValidationResult {
 	valid: boolean;
@@ -396,7 +441,7 @@ export function validateConfigPatch(patch: Record<string, unknown>): ConfigValid
 		}
 		if (value === undefined) continue;
 		if (value === null) {
-			sanitized[key] = value;
+			errors.push(`"${key}" cannot be null`);
 			continue;
 		}
 		if (typeof value !== "object" || Array.isArray(value)) {
@@ -408,14 +453,19 @@ export function validateConfigPatch(patch: Record<string, unknown>): ConfigValid
 			errors.push(`"${key}" must be an object`);
 			continue;
 		}
-		// Check nested blocked fields
+		// Check nested blocked fields and validate against whitelist
 		const nested = value as Record<string, unknown>;
 		const cleanNested: Record<string, unknown> = {};
+		const allowedKeys = NESTED_KEY_WHITELIST[key];
 		for (const [nestedKey, nestedValue] of Object.entries(nested)) {
 			const path = `${key}.${nestedKey}`;
 			if (BLOCKED_PATHS.has(path)) {
 				errors.push(`Blocked field: "${path}" (read-only)`);
 				requiresRestart.push(path);
+				continue;
+			}
+			if (allowedKeys && !allowedKeys.has(nestedKey)) {
+				errors.push(`Unknown nested key: "${path}"`);
 				continue;
 			}
 			cleanNested[nestedKey] = nestedValue;
@@ -449,13 +499,10 @@ export function maskConfig(config: KanadeConfig): Record<string, unknown> {
 }
 
 /**
- * Write a partial config patch to config.yml (atomic replace).
+ * Write a partial config patch to config.yml (atomic merge).
  * Returns the new merged config after reload.
  */
-export function writeConfigPatch(
-	currentConfig: KanadeConfig,
-	patch: Partial<KanadeConfig>,
-): KanadeConfig {
+export function writeConfigPatch(currentConfig: KanadeConfig, patch: Partial<KanadeConfig>): KanadeConfig {
 	const configPath = currentConfig.paths.configFile;
 
 	// Read existing YAML
@@ -471,16 +518,48 @@ export function writeConfigPatch(
 	// Deep merge patch into existing
 	const merged = deepMerge(existingYaml, patch as Record<string, unknown>);
 
-	// Atomic write: write to temp file, then rename
-	const tmpPath = `${configPath}.tmp.${process.pid}`;
-	const yaml = YAML.stringify(merged, { indent: 2 });
-	writeFileSync(tmpPath, yaml, "utf8");
-
-	// Rename is atomic on the same filesystem
-	renameSync(tmpPath, configPath);
-
-	// Reload and return
+	atomicWriteYaml(configPath, merged);
 	return loadConfig();
+}
+
+/**
+ * Full replacement write for PUT /config.
+ * Preserves blocked paths from the existing config; replaces everything else.
+ * Returns the new config after reload.
+ */
+export function writeConfigReplace(currentConfig: KanadeConfig, replacement: Partial<KanadeConfig>): KanadeConfig {
+	const configPath = currentConfig.paths.configFile;
+
+	// Read existing YAML to preserve blocked paths
+	let existingYaml: Record<string, unknown> = {};
+	if (existsSync(configPath)) {
+		try {
+			existingYaml = YAML.parse(readFileSync(configPath, "utf8")) ?? {};
+		} catch {
+			existingYaml = {};
+		}
+	}
+
+	// Preserve blocked top-level keys (paths, server) from existing
+	const preserved: Record<string, unknown> = {};
+	for (const blocked of ["paths", "server"]) {
+		if (existingYaml[blocked] !== undefined) {
+			preserved[blocked] = existingYaml[blocked];
+		}
+	}
+
+	// Replacement = preserved blocked keys + new editable content
+	const merged = { ...preserved, ...replacement };
+
+	atomicWriteYaml(configPath, merged);
+	return loadConfig();
+}
+
+function atomicWriteYaml(configPath: string, data: Record<string, unknown>): void {
+	const tmpPath = `${configPath}.tmp.${process.pid}`;
+	const yaml = YAML.stringify(data, { indent: 2 });
+	writeFileSync(tmpPath, yaml, "utf8");
+	renameSync(tmpPath, configPath);
 }
 
 export function loadConfig(): KanadeConfig {
