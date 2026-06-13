@@ -186,4 +186,163 @@ describe("SnapshotBuilder", () => {
 		builder.remove("T-0001");
 		expect(builder.get("T-0001")).toBeNull();
 	});
+
+	// ── Terminal status graph cleanup ───────────────────────────────────────
+
+	it("task.finished finalizes running phase nodes as done and clears current cursor", () => {
+		const events = new EventBus();
+		const builder = new SnapshotBuilder(events);
+		builder.init("T-0001", { name: "test", description: "" });
+
+		events.emit("workflow.phase", { taskId: "T-0001", phase: "Validate" }, "T-0001");
+		events.emit(
+			"workflow.agent_started",
+			{ taskId: "T-0001", label: "validator", phase: "Validate", prompt: "check it" },
+			"T-0001",
+		);
+		events.emit("workflow.agent_completed", { taskId: "T-0001", label: "validator", result: "ok" }, "T-0001");
+
+		// Before finish: phase node is still running, cursor points to the agent
+		let snap = builder.get("T-0001")!;
+		expect(snap.currentPhase).toBe("Validate");
+		expect(snap.graph.nodes.find((node) => node.id === "phase:validate")?.status).toBe("running");
+		expect(snap.graph.cursorNodeId).toBe("agent:1");
+
+		// Emit task.finished
+		events.emit("task.finished", { taskId: "T-0001", result: { ok: true } }, "T-0001");
+
+		snap = builder.get("T-0001")!;
+		expect(snap.graph.nodes.find((node) => node.id === "phase:validate")?.status).toBe("done");
+		expect(snap.currentPhase).toBeUndefined();
+		expect(snap.graph.cursorNodeId).toBeUndefined();
+		// Agent status is preserved
+		expect(snap.agents[0].status).toBe("done");
+	});
+
+	it("task.failed finalizes running phase nodes as error and clears current cursor", () => {
+		const events = new EventBus();
+		const builder = new SnapshotBuilder(events);
+		builder.init("T-0001", { name: "test", description: "" });
+
+		events.emit("workflow.phase", { taskId: "T-0001", phase: "Implement" }, "T-0001");
+		events.emit(
+			"workflow.agent_started",
+			{ taskId: "T-0001", label: "coder", phase: "Implement", prompt: "code it" },
+			"T-0001",
+		);
+
+		let snap = builder.get("T-0001")!;
+		expect(snap.graph.nodes.find((node) => node.id === "phase:implement")?.status).toBe("running");
+
+		events.emit("task.failed", { taskId: "T-0001", error: "something broke" }, "T-0001");
+
+		snap = builder.get("T-0001")!;
+		expect(snap.graph.nodes.find((node) => node.id === "phase:implement")?.status).toBe("error");
+		expect(snap.currentPhase).toBeUndefined();
+		expect(snap.graph.cursorNodeId).toBeUndefined();
+	});
+
+	it("task.aborted finalizes running phase nodes as error and clears current cursor", () => {
+		const events = new EventBus();
+		const builder = new SnapshotBuilder(events);
+		builder.init("T-0001", { name: "test", description: "" });
+
+		events.emit("workflow.phase", { taskId: "T-0001", phase: "Review" }, "T-0001");
+
+		events.emit("task.aborted", { taskId: "T-0001", error: "user aborted" }, "T-0001");
+
+		const snap = builder.get("T-0001")!;
+		expect(snap.graph.nodes.find((node) => node.id === "phase:review")?.status).toBe("error");
+		expect(snap.currentPhase).toBeUndefined();
+		expect(snap.graph.cursorNodeId).toBeUndefined();
+	});
+
+	it("task.finished preserves completed phase statuses unchanged", () => {
+		const events = new EventBus();
+		const builder = new SnapshotBuilder(events);
+		builder.init("T-0001", { name: "test", description: "" });
+
+		// Phase A completes, then Phase B starts
+		events.emit("workflow.phase", { taskId: "T-0001", phase: "Analyze" }, "T-0001");
+		events.emit(
+			"workflow.agent_started",
+			{ taskId: "T-0001", label: "analyst", phase: "Analyze", prompt: "analyze" },
+			"T-0001",
+		);
+		events.emit("workflow.agent_completed", { taskId: "T-0001", label: "analyst", result: "done" }, "T-0001");
+		events.emit("workflow.phase", { taskId: "T-0001", phase: "Validate" }, "T-0001");
+
+		// Analyze phase should have been marked done by the phase transition
+		let snap = builder.get("T-0001")!;
+		expect(snap.graph.nodes.find((node) => node.id === "phase:analyze")?.status).toBe("done");
+		expect(snap.graph.nodes.find((node) => node.id === "phase:validate")?.status).toBe("running");
+
+		events.emit("task.finished", { taskId: "T-0001", result: { ok: true } }, "T-0001");
+
+		snap = builder.get("T-0001")!;
+		// Already-done phase is unchanged
+		expect(snap.graph.nodes.find((node) => node.id === "phase:analyze")?.status).toBe("done");
+		// Running phase is finalized as done
+		expect(snap.graph.nodes.find((node) => node.id === "phase:validate")?.status).toBe("done");
+		expect(snap.currentPhase).toBeUndefined();
+		expect(snap.graph.cursorNodeId).toBeUndefined();
+	});
+
+	it("task.failed preserves completed agent status when cursor points to completed agent", () => {
+		const events = new EventBus();
+		const builder = new SnapshotBuilder(events);
+		builder.init("T-0001", { name: "test", description: "" });
+
+		// Phase starts, agent starts and completes, then task fails
+		events.emit("workflow.phase", { taskId: "T-0001", phase: "Implement" }, "T-0001");
+		events.emit(
+			"workflow.agent_started",
+			{ taskId: "T-0001", label: "coder", phase: "Implement", prompt: "code it" },
+			"T-0001",
+		);
+		events.emit("workflow.agent_completed", { taskId: "T-0001", label: "coder", result: "ok" }, "T-0001");
+
+		// Agent is done, cursor is still at agent:1
+		let snap = builder.get("T-0001")!;
+		expect(snap.agents[0].status).toBe("done");
+		expect(snap.graph.cursorNodeId).toBe("agent:1");
+		expect(snap.graph.nodes.find((node) => node.id === "agent:1")?.status).toBe("done");
+
+		// Task fails — should NOT overwrite the completed agent's status
+		events.emit("task.failed", { taskId: "T-0001", error: "post-agent failure" }, "T-0001");
+
+		snap = builder.get("T-0001")!;
+		// Agent node must remain done (not rewritten to error)
+		expect(snap.graph.nodes.find((node) => node.id === "agent:1")?.status).toBe("done");
+		// Agent in agents array also preserved
+		expect(snap.agents[0].status).toBe("done");
+		// Running phase is finalized as error
+		expect(snap.graph.nodes.find((node) => node.id === "phase:implement")?.status).toBe("error");
+		expect(snap.currentPhase).toBeUndefined();
+		expect(snap.graph.cursorNodeId).toBeUndefined();
+	});
+
+	it("task.aborted preserves completed agent status when cursor points to completed agent", () => {
+		const events = new EventBus();
+		const builder = new SnapshotBuilder(events);
+		builder.init("T-0001", { name: "test", description: "" });
+
+		events.emit("workflow.phase", { taskId: "T-0001", phase: "Build" }, "T-0001");
+		events.emit(
+			"workflow.agent_started",
+			{ taskId: "T-0001", label: "builder", phase: "Build", prompt: "build" },
+			"T-0001",
+		);
+		events.emit("workflow.agent_completed", { taskId: "T-0001", label: "builder", result: "ok" }, "T-0001");
+
+		let snap = builder.get("T-0001")!;
+		expect(snap.agents[0].status).toBe("done");
+
+		events.emit("task.aborted", { taskId: "T-0001", error: "user aborted" }, "T-0001");
+
+		snap = builder.get("T-0001")!;
+		expect(snap.graph.nodes.find((node) => node.id === "agent:1")?.status).toBe("done");
+		expect(snap.agents[0].status).toBe("done");
+		expect(snap.graph.nodes.find((node) => node.id === "phase:build")?.status).toBe("error");
+	});
 });

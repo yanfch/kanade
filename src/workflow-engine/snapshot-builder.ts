@@ -158,11 +158,38 @@ export class SnapshotBuilder {
 				updateGraphNode(node, "done", "resolved", event.ts);
 				break;
 			}
+			case "task.finished": {
+				// Finalize any phase nodes still marked as running.
+				for (const node of snap.graph.nodes) {
+					if (node.kind === "phase" && node.status === "running") {
+						updateGraphNode(node, "done", node.summary, event.ts);
+					}
+				}
+				// Clear current-phase indicators so the snapshot does not
+				// imply an active phase after terminal completion.
+				snap.currentPhase = undefined;
+				snap.graph.cursorNodeId = undefined;
+				break;
+			}
 			case "task.failed":
 			case "task.aborted": {
 				const data = event.data as { error?: string };
-				const node = snap.graph.cursorNodeId ? findGraphNode(snap, snap.graph.cursorNodeId) : undefined;
-				updateGraphNode(node, "error", data.error ?? event.type, event.ts);
+				// Only mark the cursor node as error if it is still running.
+				// A completed agent should not be retroactively changed to error.
+				const cursorNode = snap.graph.cursorNodeId ? findGraphNode(snap, snap.graph.cursorNodeId) : undefined;
+				if (cursorNode && cursorNode.status === "running") {
+					updateGraphNode(cursorNode, "error", data.error ?? event.type, event.ts);
+				}
+				// Finalize any phase nodes still marked as running.
+				for (const n of snap.graph.nodes) {
+					if (n.kind === "phase" && n.status === "running") {
+						updateGraphNode(n, "error", data.error ?? event.type, event.ts);
+					}
+				}
+				// Clear current-phase indicators so the snapshot does not
+				// imply an active phase after terminal completion.
+				snap.currentPhase = undefined;
+				snap.graph.cursorNodeId = undefined;
 				break;
 			}
 			// Intentionally ignore workflow.log — high frequency, not needed for snapshot

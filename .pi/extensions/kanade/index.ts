@@ -2180,8 +2180,8 @@ class KanadePanel implements Component {
 			lines.push("");
 			lines.push(this.color("muted", "Agent Timing"));
 			for (const node of graph.nodes) {
-				if (node.kind !== "agent" && node.kind !== "phase") continue;
-				const phase = node.phase ?? node.label;
+				if (node.kind !== "agent") continue;
+				const phase = node.phase ?? "-";
 				const status =
 					terminalTask(task) && (node.status === "running" || node.status === "planned") ? "done" : node.status;
 				const duration = nodeDurationLabel(node, terminalTask(task));
@@ -2195,7 +2195,7 @@ class KanadePanel implements Component {
 								: this.color("dim", "○");
 				lines.push(
 					truncateAnsi(
-						`  ${icon} ${truncatePlain(phase, 16).padEnd(16)} ${status.padEnd(8)} ${duration || "–"}`,
+						`  ${icon} ${truncatePlain(node.label, 22).padEnd(22)} ${truncatePlain(phase, 14).padEnd(14)} ${status.padEnd(8)} ${duration || "–"}`,
 						width,
 					),
 				);
