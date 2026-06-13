@@ -545,8 +545,6 @@ class AgentDetailOverlay implements Component {
 	private loading = true;
 	private disposed = false;
 	private inFlight = false;
-	private liveRefresh = false;
-	private refreshTimer: ReturnType<typeof setInterval> | undefined;
 	private cachedWidth?: number;
 	private cachedLines?: string[];
 
@@ -556,13 +554,7 @@ class AgentDetailOverlay implements Component {
 		private readonly task: KanadeTask,
 		private readonly done: () => void,
 	) {
-		this.liveRefresh = isLiveStatus(this.task.status);
 		void this.refresh(true);
-		if (this.liveRefresh) {
-			this.refreshTimer = setInterval(() => {
-				void this.refresh(false);
-			}, 2000);
-		}
 	}
 
 	invalidate(): void {
@@ -571,7 +563,6 @@ class AgentDetailOverlay implements Component {
 
 	dispose(): void {
 		this.disposed = true;
-		if (this.refreshTimer) clearInterval(this.refreshTimer);
 	}
 
 	render(width: number): string[] {
@@ -600,20 +591,13 @@ class AgentDetailOverlay implements Component {
 		body.push(rule(contentWidth, this.theme));
 		body.push(this.theme.fg("muted", "Activity"));
 		const events = this.detail?.sessionEvents ?? [];
-		if (events.length === 0) {
-			body.push(
-				this.theme.fg(
-					"dim",
-					this.liveRefresh ? "No persisted session events yet. Auto-refreshing." : "No persisted session events yet.",
-				),
-			);
-		}
+		if (events.length === 0) body.push(this.theme.fg("dim", "No persisted session events yet."));
 		for (const event of events.slice(-20)) {
 			const state = event.state === "running" ? "⣾" : event.state === "error" ? "!" : "·";
 			body.push(truncateAnsi(`${event.time} ${state} ${eventLabel(event)} ${event.summary}`, contentWidth));
 			if (event.detail) body.push(this.theme.fg("dim", truncatePlain(`    ${event.detail}`, contentWidth)));
 		}
-		body.push(this.theme.fg("dim", `${this.liveRefresh ? "auto-refresh 2s · " : ""}r refresh · Esc close`));
+		body.push(this.theme.fg("dim", "r refresh · Esc close"));
 		this.cachedWidth = width;
 		this.cachedLines = box(fitBodyRows(body, 27, 30), width, "Kanade Agent Detail", this.theme);
 		return this.cachedLines;
@@ -637,7 +621,6 @@ class AgentDetailOverlay implements Component {
 		this.tui.requestRender();
 		try {
 			this.detail = await fetchTaskDetail(this.task.id, true);
-			this.updateLiveRefreshState();
 		} catch (error) {
 			this.error = error instanceof Error ? error.message : String(error);
 		} finally {
@@ -647,15 +630,6 @@ class AgentDetailOverlay implements Component {
 				this.invalidate();
 				this.tui.requestRender();
 			}
-		}
-	}
-
-	private updateLiveRefreshState(): void {
-		const status = this.detail?.task?.status ?? this.task.status;
-		this.liveRefresh = isLiveStatus(status);
-		if (!this.liveRefresh && this.refreshTimer) {
-			clearInterval(this.refreshTimer);
-			this.refreshTimer = undefined;
 		}
 	}
 }
@@ -1721,10 +1695,6 @@ function latestSessionModel(events: SessionEvent[]): string | undefined {
 		if (event?.label === "model" && event.summary) return event.summary;
 	}
 	return undefined;
-}
-
-function isLiveStatus(status: string): boolean {
-	return status === "running" || status === "created" || status === "needs_human";
 }
 
 function eventLabel(event: SessionEvent): string {
