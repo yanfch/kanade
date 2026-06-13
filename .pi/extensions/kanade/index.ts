@@ -2042,7 +2042,9 @@ class KanadePanel implements Component {
 		const isRecovery = task.status === "failed" || task.status === "aborted";
 		const lines = [this.color("muted", isRecovery ? "Recovery Center" : "Worktree")];
 		const worktrees = detail?.worktrees ?? [];
-		const summary = task.worktree_summary;
+		// Prefer review endpoint data which includes git-derived diff details;
+		// fall back to lightweight list summary for status display before detail loads.
+		const summary = detail?.review?.worktree ?? task.worktree_summary;
 		if (isRecovery) {
 			lines.push(`${this.color("error", "✖")} ${task.id} ${taskTitle(task, width - 10)}`);
 			lines.push(this.color("dim", `Failure: ${sanitizeText(truncatePlain(task.error ?? "unknown", width - 9))}`));

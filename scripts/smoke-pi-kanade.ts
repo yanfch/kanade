@@ -45,10 +45,6 @@ const TASK_MERGED: Record<string, unknown> = {
 		branch: "kanade/T-0003",
 		path: "/tmp/T-0003",
 		merge_commit: "abc123",
-		diff_stat: "2 files changed, 12 insertions(+)",
-		changed_files_count: 2,
-		commit_count: 2,
-		has_changes: true,
 	},
 };
 

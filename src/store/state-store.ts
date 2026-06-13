@@ -396,6 +396,28 @@ export class StateStore {
 		return rows as WorktreeRow[];
 	}
 
+	/**
+	 * Bulk fetch worktrees for a set of task ids.
+	 * Returns a Map keyed by task_id to avoid N+1 queries in list paths.
+	 */
+	findWorktreesByTaskIds(taskIds: string[]): Map<string, WorktreeRow[]> {
+		const result = new Map<string, WorktreeRow[]>();
+		if (taskIds.length === 0) return result;
+		const placeholders = taskIds.map(() => "?").join(", ");
+		const rows = this.db
+			.prepare(`SELECT * FROM worktrees WHERE task_id IN (${placeholders}) ORDER BY last_used_at DESC`)
+			.all(...taskIds) as WorktreeRow[];
+		for (const row of rows) {
+			let list = result.get(row.task_id);
+			if (!list) {
+				list = [];
+				result.set(row.task_id, list);
+			}
+			list.push(row);
+		}
+		return result;
+	}
+
 	listActiveWorktrees(): WorktreeRow[] {
 		const rows = this.db
 			.prepare("SELECT * FROM worktrees WHERE status IN ('active', 'inactive') ORDER BY last_used_at DESC")

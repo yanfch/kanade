@@ -147,11 +147,12 @@ describe("GET /tasks", () => {
 			expect(byId.get("TL-merged")?.worktree_summary).toMatchObject({
 				status: "merged",
 				merge_commit: head,
-				has_changes: true,
 			});
-			expect(byId.get("TL-merged")?.worktree_summary.changed_files_count).toBeGreaterThan(0);
-			expect(byId.get("TL-merged")?.worktree_summary.commit_count).toBeGreaterThan(0);
-			expect(byId.get("TL-merged")?.worktree_summary.diff_stat).toContain("file");
+			// List endpoint returns lightweight summaries: no git-derived fields
+			expect(byId.get("TL-merged")?.worktree_summary.has_changes).toBeUndefined();
+			expect(byId.get("TL-merged")?.worktree_summary.changed_files_count).toBeUndefined();
+			expect(byId.get("TL-merged")?.worktree_summary.commit_count).toBeUndefined();
+			expect(byId.get("TL-merged")?.worktree_summary.diff_stat).toBeUndefined();
 			expect(byId.get("TL-review")?.worktree_summary).toMatchObject({ status: "inactive" });
 			expect(byId.get("TL-none")?.worktree_summary).toMatchObject({ status: "none" });
 		} finally {
@@ -202,6 +203,61 @@ describe("GET /tasks", () => {
 			};
 			const task = body.tasks.find((row) => row.id === "TL-failed-preserved");
 			expect(task?.worktree_summary).toMatchObject({ status: "preserved", path: worktreePath });
+		} finally {
+			store.close();
+		}
+	});
+	it("list does not invoke git diff/rev-list/status for worktree summaries", async () => {
+		const { store, app } = setup();
+		try {
+			const now = Date.now();
+			// Insert multiple tasks with worktrees to amplify any N+1 issue
+			for (let i = 0; i < 5; i++) {
+				const id = `TL-perf-${i}`;
+				store.insertTask({
+					id,
+					workflow_source: "inline",
+					workflow_name: null,
+					workflow_path: `/tmp/${id}.js`,
+					status: "finished",
+					base_repo: null,
+					base_branch: "main",
+					cwd: process.cwd(),
+					created_at: now,
+					started_at: now,
+					finished_at: now,
+					error: null,
+					options: "{}",
+					result: null,
+				});
+				store.insertWorktree({
+					id: `wt-perf-${i}`,
+					task_id: id,
+					label: "dev",
+					branch: `kanade/${id}`,
+					base_branch: "main",
+					worktree_path: `/tmp/${id}`,
+					status: "inactive",
+					base_repo: process.cwd(),
+					created_at: now,
+					last_used_at: now,
+					finished_at: now,
+					merge_commit: null,
+				});
+			}
+			// Spy on child_process.execFileSync to detect git operations
+			const cp = await import("node:child_process");
+			const spy = vi.spyOn(cp, "execFileSync");
+			const gitCallsBefore = spy.mock.calls.length;
+
+			const res = await app.request("/tasks");
+			expect(res.status).toBe(200);
+
+			const gitCallsDuring = spy.mock.calls.length - gitCallsBefore;
+			// List should not trigger any git operations for worktree summaries
+			expect(gitCallsDuring).toBe(0);
+
+			spy.mockRestore();
 		} finally {
 			store.close();
 		}
