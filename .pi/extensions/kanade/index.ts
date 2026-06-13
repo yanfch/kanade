@@ -1699,7 +1699,7 @@ function worktreeStateLabel(task: KanadeTask): string {
 	if (!summary) return task.status === "finished" ? "review/merge" : "";
 	if (summary.status === "merged") return "merged";
 	if (summary.status === "preserved") return "preserved";
-	if (summary.status === "rejected") return "cleaned";
+	if (summary.status === "rejected") return summary.has_changes || summary.path ? "preserved" : "cleaned";
 	if (task.status === "finished") {
 		if (summary.status === "active" || summary.status === "inactive") return "review/merge";
 		return "no changes";

@@ -1019,12 +1019,25 @@ function summarizeTaskWorktrees(task: TaskRow, worktrees: WorktreeRow[]): TaskWo
 	}
 	const rejected = worktrees.find((row) => row.status === "rejected");
 	if (rejected && worktrees.every((row) => row.status === "rejected")) {
+		const rejectedSummary = branchDiffSummary(rejected);
+		if (
+			(task.status === "failed" || task.status === "aborted") &&
+			(existsSync(rejected.worktree_path) || rejectedSummary.has_changes)
+		) {
+			return {
+				status: "preserved",
+				count: worktrees.length,
+				branch: rejected.branch,
+				path: rejected.worktree_path,
+				...rejectedSummary,
+			};
+		}
 		return {
 			status: "rejected",
 			count: worktrees.length,
 			branch: rejected.branch,
 			path: rejected.worktree_path,
-			...branchDiffSummary(rejected),
+			...rejectedSummary,
 		};
 	}
 	const active = worktrees.find((row) => row.status === "active");

@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -28,7 +28,7 @@ function setup(
 	const humanGate = new HumanGate(store, { initialPollMs: 5 });
 	const taskManager = new TaskManager(config, store, events, humanGate, author, undefined, sessionFactory);
 	const app = createApp({ taskManager, events, config });
-	return { config, store, taskManager, events, app };
+	return { root, config, store, taskManager, events, app };
 }
 
 describe("server app — existing", () => {
@@ -155,6 +155,54 @@ describe("GET /tasks", () => {
 			expect(byId.get("TL-merged")?.worktree_summary.diff_stat).toContain("file");
 			expect(byId.get("TL-review")?.worktree_summary).toMatchObject({ status: "inactive" });
 			expect(byId.get("TL-none")?.worktree_summary).toMatchObject({ status: "none" });
+		} finally {
+			store.close();
+		}
+	});
+
+	it("reports failed rejected worktrees that still exist as preserved", async () => {
+		const { root, store, app } = setup();
+		try {
+			const now = Date.now();
+			const worktreePath = join(root, "preserved-rejected");
+			mkdirSync(worktreePath, { recursive: true });
+			store.insertTask({
+				id: "TL-failed-preserved",
+				workflow_source: "inline",
+				workflow_name: null,
+				workflow_path: "/tmp/TL-failed-preserved.js",
+				status: "failed",
+				base_repo: null,
+				base_branch: "main",
+				cwd: process.cwd(),
+				created_at: now,
+				started_at: now,
+				finished_at: now,
+				error: "auto-commit failed",
+				options: "{}",
+				result: null,
+			});
+			store.insertWorktree({
+				id: "wt-failed-preserved",
+				task_id: "TL-failed-preserved",
+				label: "dev",
+				branch: "kanade/TL-failed-preserved",
+				base_branch: "main",
+				worktree_path: worktreePath,
+				status: "rejected",
+				base_repo: process.cwd(),
+				created_at: now,
+				last_used_at: now,
+				finished_at: now,
+				merge_commit: null,
+			});
+
+			const res = await app.request("/tasks");
+			const body = (await res.json()) as {
+				tasks: Array<{ id: string; worktree_summary: { status: string; path?: string } }>;
+			};
+			const task = body.tasks.find((row) => row.id === "TL-failed-preserved");
+			expect(task?.worktree_summary).toMatchObject({ status: "preserved", path: worktreePath });
 		} finally {
 			store.close();
 		}
