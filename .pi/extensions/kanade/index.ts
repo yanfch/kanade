@@ -583,7 +583,7 @@ class AgentDetailOverlay implements Component {
 		if (activeAgent) {
 			body.push(`${this.theme.fg("muted", "Agent:")} ${activeAgent.label} · ${activeAgent.status}`);
 			const summary = activeAgent.error || activeAgent.resultPreview;
-			if (summary) body.push(this.theme.fg("dim", firstLine(summary, contentWidth)));
+			if (summary) body.push(this.theme.fg("dim", agentSummaryLine(summary, contentWidth)));
 		} else {
 			body.push(this.theme.fg("dim", "No agent snapshot yet."));
 		}
@@ -1341,7 +1341,7 @@ class KanadePanel implements Component {
 			const title = isCurrent ? this.color("accent", phase) : phase;
 			lines.push(`${icon} ${index + 1} ${truncatePlain(title, width - 6)}`);
 			const summary = summarizePhase(phaseAgents);
-			if (summary) lines.push(this.color("dim", `    ${firstLine(summary, width - 4)}`));
+			if (summary) lines.push(this.color("dim", `    ${agentSummaryLine(summary, width - 4)}`));
 			if (index < phases.length - 1) lines.push(this.color("dim", "  │"));
 		});
 		if (task.status === "needs_human") {
@@ -1374,8 +1374,8 @@ class KanadePanel implements Component {
 				const indent = node.kind === "agent" ? "    " : "  ";
 				const styledSummary =
 					node.status === "error"
-						? this.color("error", firstLine(summary, width - indent.length))
-						: this.color("dim", firstLine(summary, width - indent.length));
+						? this.color("error", agentSummaryLine(summary, width - indent.length))
+						: this.color("dim", agentSummaryLine(summary, width - indent.length));
 				lines.push(`${indent}${styledSummary}`);
 			}
 		}
@@ -1405,7 +1405,7 @@ class KanadePanel implements Component {
 			lines.push(
 				`${this.color("muted", "Agent:")} ${icon} ${truncatePlain(activeAgent.label, width - 12)} · ${activeAgent.status}`,
 			);
-			if (activeAgent.resultPreview) lines.push(this.color("dim", firstLine(activeAgent.resultPreview, width)));
+			if (activeAgent.resultPreview) lines.push(this.color("dim", agentSummaryLine(activeAgent.resultPreview, width)));
 		} else {
 			lines.push(this.color("muted", "Agent"));
 			lines.push(this.color("dim", "No agent snapshot yet."));
@@ -1723,6 +1723,20 @@ function formatTime(ts?: string | number): string {
 
 function firstLine(text: string, max: number): string {
 	return truncatePlain(text.replace(/\s+/g, " ").trim(), max);
+}
+
+function agentSummaryLine(text: string, max: number): string {
+	const lines = text
+		.split("\n")
+		.map((line) => line.trim())
+		.filter(Boolean);
+	const preferred =
+		lines.find((line) => /^[-*]\s*(✅|✓|passed|status|checks?|npm run)/i.test(line)) ??
+		lines.find((line) => /passed|clean|no blocking|status:\s*passed|\d+\/\d+/.test(line.toLowerCase())) ??
+		lines.find((line) => !line.startsWith("#") && !/^\|?\s*-{3,}/.test(line) && !/^\|.*\|$/.test(line)) ??
+		lines[0] ??
+		text;
+	return firstLine(preferred.replace(/^[-*]\s*/, ""), max);
 }
 
 function formatCost(cost?: number): string {
