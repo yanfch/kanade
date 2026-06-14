@@ -38,6 +38,7 @@ export interface AuthorUsage {
 export interface WorkflowAuthorGenerateOptions {
 	model?: string;
 	workspaceRoot?: string;
+	complexityHint?: "simple" | "medium" | "complex";
 	onUsage?: (usage: AuthorUsage) => void;
 }
 
@@ -132,7 +133,7 @@ export class LlmWorkflowAuthor implements WorkflowAuthor {
 				capture.value = undefined;
 				const promptToUse =
 					attempt === 1
-						? buildWorkflowAuthorPrompt(prompt, { projectProfile })
+						? buildWorkflowAuthorPrompt(prompt, { projectProfile, complexityHint: options?.complexityHint })
 						: buildWorkflowRepairPrompt(lastValidationError, attempt);
 				await session.prompt(promptToUse);
 				const capturedScript = (capture.value as { script: string } | undefined)?.script;

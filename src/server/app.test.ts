@@ -15,7 +15,12 @@ const SIMPLE_SCRIPT = "export const meta = { name: 'demo', description: 'Demo' }
 const TEST_GIT_AUTHOR = ["-c", "user.name=Kanade Test", "-c", "user.email=kanade@example.com"];
 
 function setup(
-	author?: { generate(prompt: string, options?: { model?: string; workspaceRoot?: string }): Promise<string> },
+	author?: {
+		generate(
+			prompt: string,
+			options?: { model?: string; workspaceRoot?: string; complexityHint?: "simple" | "medium" | "complex" },
+		): Promise<string>;
+	},
 	sessionFactory?: ConstructorParameters<typeof TaskManager>[6],
 ) {
 	const root = mkdtempSync(join(tmpdir(), "kanade-app-"));
@@ -69,6 +74,132 @@ describe("server app — existing", () => {
 			events.emit("task.test", { ok: true }, "T-1");
 			off();
 			expect(received).toEqual(["task.test"]);
+		} finally {
+			store.close();
+		}
+	});
+});
+
+describe("GET /recovery", () => {
+	it("lists failed and aborted tasks with recovery recommendations", async () => {
+		const { store, app, root } = setup();
+		try {
+			const now = Date.now();
+			const worktreePath = join(root, "preserved");
+			mkdirSync(worktreePath, { recursive: true });
+			store.insertTask({
+				id: "TR-preserved",
+				workflow_source: "inline",
+				workflow_name: null,
+				workflow_path: join(root, "workflow.js"),
+				status: "failed",
+				base_repo: process.cwd(),
+				base_branch: "main",
+				cwd: process.cwd(),
+				created_at: now,
+				started_at: now,
+				finished_at: now,
+				error: "boom",
+				options: "{}",
+				result: null,
+			});
+			store.insertWorktree({
+				id: "wt-recovery",
+				task_id: "TR-preserved",
+				label: "dev",
+				branch: "kanade/TR-preserved",
+				base_branch: "main",
+				worktree_path: worktreePath,
+				status: "inactive",
+				base_repo: process.cwd(),
+				created_at: now,
+				last_used_at: now,
+				finished_at: now,
+				merge_commit: null,
+			});
+
+			const res = await app.request("/recovery");
+			const body = (await res.json()) as { tasks: Array<Record<string, unknown>> };
+
+			expect(res.status).toBe(200);
+			expect(body.tasks[0]).toMatchObject({
+				id: "TR-preserved",
+				status: "failed",
+				recovery_state: "preserved",
+			});
+			expect(String(body.tasks[0]?.recommendation)).toContain("Inspect preserved worktree");
+		} finally {
+			store.close();
+		}
+	});
+});
+
+describe("POST /tasks/:id/reconcile", () => {
+	it("marks a manually merged task worktree as merged", async () => {
+		const { store, app, root, config } = setup();
+		try {
+			config.merge.targetBranch = "main";
+			const repo = join(root, "repo");
+			mkdirSync(repo, { recursive: true });
+			execFileSync("git", ["init", "-b", "main"], { cwd: repo, encoding: "utf8" });
+			writeFileSync(join(repo, "base.txt"), "base\n");
+			execFileSync("git", ["add", "base.txt"], { cwd: repo, encoding: "utf8" });
+			execFileSync("git", [...TEST_GIT_AUTHOR, "commit", "-m", "base"], { cwd: repo, encoding: "utf8" });
+			execFileSync("git", ["checkout", "-b", "kanade/TR-manual"], { cwd: repo, encoding: "utf8" });
+			writeFileSync(join(repo, "feature.txt"), "feature\n");
+			execFileSync("git", ["add", "feature.txt"], { cwd: repo, encoding: "utf8" });
+			execFileSync("git", [...TEST_GIT_AUTHOR, "commit", "-m", "feature"], { cwd: repo, encoding: "utf8" });
+			execFileSync("git", ["checkout", "main"], { cwd: repo, encoding: "utf8" });
+			execFileSync("git", [...TEST_GIT_AUTHOR, "merge", "--no-ff", "kanade/TR-manual", "-m", "manual merge"], {
+				cwd: repo,
+				encoding: "utf8",
+			});
+			const mergeCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+			const now = Date.now();
+			store.insertTask({
+				id: "TR-manual",
+				workflow_source: "saved",
+				workflow_name: "dev-standard",
+				workflow_path: join(root, "manual.js"),
+				status: "failed",
+				base_repo: repo,
+				base_branch: "main",
+				cwd: repo,
+				created_at: now,
+				started_at: now,
+				finished_at: now,
+				error: "auto-commit failed",
+				options: "{}",
+				result: null,
+			});
+			store.insertWorktree({
+				id: "wt-manual",
+				task_id: "TR-manual",
+				label: "dev",
+				branch: "kanade/TR-manual",
+				base_branch: "main",
+				worktree_path: join(root, "worktree"),
+				status: "inactive",
+				base_repo: repo,
+				created_at: now,
+				last_used_at: now,
+				finished_at: now,
+				merge_commit: null,
+			});
+
+			const res = await app.request("/tasks/TR-manual/reconcile", { method: "POST", body: "{}" });
+			const body = (await res.json()) as { state: string; mergeCommit: string };
+			expect(res.status).toBe(200);
+			expect(body.state).toBe("merged");
+			expect(body.mergeCommit).toBe(mergeCommit);
+			expect(store.findWorktreesByTask("TR-manual")[0]).toMatchObject({
+				status: "merged",
+				merge_commit: mergeCommit,
+			});
+
+			const reviewRes = await app.request("/tasks/TR-manual/review");
+			const review = (await reviewRes.json()) as { state: string };
+			expect(review.state).toBe("merged");
 		} finally {
 			store.close();
 		}
@@ -849,9 +980,13 @@ describe("POST /workflows/generate", () => {
 	it("returns generated script without creating a task", async () => {
 		const script = "export const meta = { name: 'dry', description: 'Dry' }\nreturn { ok: true }";
 		const { store, taskManager, app } = setup({
-			async generate(prompt: string, options?: { model?: string; workspaceRoot?: string }) {
+			async generate(
+				prompt: string,
+				options?: { model?: string; workspaceRoot?: string; complexityHint?: "simple" | "medium" | "complex" },
+			) {
 				expect(prompt).toBe("make workflow");
 				expect(options?.model).toBe("gpt-5.4");
+				expect(options?.complexityHint).toBe("simple");
 				return script;
 			},
 		});
@@ -859,7 +994,7 @@ describe("POST /workflows/generate", () => {
 			const res = await app.request("/workflows/generate", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ prompt: "make workflow", options: { author_model: "gpt-5.4" } }),
+				body: JSON.stringify({ prompt: "make workflow", options: { author_model: "gpt-5.4", workflow_size: "small" } }),
 			});
 			const body = (await res.json()) as { script: string };
 

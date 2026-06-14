@@ -28,8 +28,12 @@ import { buildIterateWorkflowScript } from "./iterate-workflow.ts";
 import { type AuthorUsage, LlmWorkflowAuthor, StubWorkflowAuthor, type WorkflowAuthor } from "./workflow-author.ts";
 import { type WorkflowInfo, WorkflowStore } from "./workflow-store.ts";
 
+export type WorkflowSizeHint = "small" | "medium" | "large";
+
 export interface TaskOptions {
 	cwd?: string;
+	/** Size/complexity hint used only by the workflow author for generated workflows. */
+	workflow_size?: WorkflowSizeHint;
 	/** Model used only by the workflow author for generated workflows. */
 	author_model?: string;
 	/** Default model used by workflow subagents. */
@@ -78,6 +82,21 @@ export type TaskListRow = TaskRow & { worktree_summary: TaskWorktreeSummary };
 export interface GenerateWorkflowResult {
 	script: string;
 }
+
+export interface ReconcileMergeResult {
+	success: boolean;
+	state: "already_merged" | "merged" | "not_merged";
+	taskId: string;
+	branch?: string;
+	mergeCommit?: string;
+	message?: string;
+	error?: string;
+}
+
+export type RecoveryListRow = TaskListRow & {
+	recovery_state: "preserved" | "merged" | "rejected" | "no_worktree";
+	recommendation: string;
+};
 
 export function resolveConfiguredAgentDir(config: KanadeConfig): string | undefined {
 	if (config.models.agentDir) return config.models.agentDir;
@@ -208,7 +227,11 @@ export class TaskManager {
 		if (!prompt?.trim()) throw new AppError("prompt is required", 400);
 		this.assertGeneratedAuthorAvailable(options);
 		const workspaceRoot = this.resolveProfileRoot(options?.cwd);
-		const script = await this.author.generate(prompt, { model: options?.author_model, workspaceRoot });
+		const script = await this.author.generate(prompt, {
+			model: options?.author_model,
+			workspaceRoot,
+			complexityHint: workflowSizeToComplexityHint(options?.workflow_size),
+		});
 		validateSemanticWorkflowScript(script);
 		return { script };
 	}
@@ -285,6 +308,7 @@ export class TaskManager {
 				script = await this.author.generate(prompt, {
 					model: options?.author_model,
 					workspaceRoot,
+					complexityHint: workflowSizeToComplexityHint(options?.workflow_size),
 					onUsage: (usage: AuthorUsage) => {
 						authorUsage = usage;
 						this.addDailyCost(usage.cost.total);
@@ -634,6 +658,22 @@ export class TaskManager {
 		}));
 	}
 
+	listRecovery(): RecoveryListRow[] {
+		const tasks = this.store.listTasksByStatuses(["failed", "aborted"], Number.MAX_SAFE_INTEGER);
+		const taskIds = tasks.map((t) => t.id);
+		const worktreesByTask = this.store.findWorktreesByTaskIds(taskIds);
+		return tasks.map((task) => {
+			const summary = summarizeTaskWorktreesLight(task, worktreesByTask.get(task.id) ?? []);
+			const recoveryState = recoveryStateForSummary(summary);
+			return {
+				...task,
+				worktree_summary: summary,
+				recovery_state: recoveryState,
+				recommendation: recoveryRecommendation(task, summary),
+			};
+		});
+	}
+
 	inbox(): NeedsHumanRow[] {
 		return this.store.listPendingNeedsHuman();
 	}
@@ -843,6 +883,64 @@ export class TaskManager {
 		this.store.updateTask(taskId, { status: "aborted" });
 		this.events.emit("task.rejected", { taskId }, taskId);
 		this.logger.forTask(taskId).info("task rejected");
+	}
+
+	reconcileMerged(taskId: string, options: { mergeCommit?: string } = {}): ReconcileMergeResult {
+		const task = this.store.getTask(taskId);
+		if (!task) return { success: false, state: "not_merged", taskId, error: `Task not found: ${taskId}` };
+		const worktrees = this.store.findWorktreesByTask(taskId);
+		if (worktrees.length === 0) {
+			return { success: false, state: "not_merged", taskId, error: "No worktree records found for task" };
+		}
+		const already = worktrees.find((row) => row.status === "merged" || row.merge_commit);
+		if (already) {
+			return {
+				success: true,
+				state: "already_merged",
+				taskId,
+				branch: already.branch,
+				mergeCommit: already.merge_commit ?? undefined,
+				message: "Task worktree is already marked merged",
+			};
+		}
+
+		const candidates = [...worktrees].sort((a, b) => b.last_used_at - a.last_used_at);
+		for (const worktree of candidates) {
+			const mergeCommit = options.mergeCommit?.trim()
+				? verifyGitCommit(worktree.base_repo, options.mergeCommit.trim())
+				: findManualMergeCommit(
+						worktree.base_repo,
+						worktree.branch,
+						this.config.merge.targetBranch || worktree.base_branch,
+					);
+			if (!mergeCommit) continue;
+			const now = Date.now();
+			this.store.updateWorktree(worktree.id, {
+				status: "merged",
+				merge_commit: mergeCommit,
+				finished_at: now,
+				last_used_at: now,
+			});
+			this.events.emit("task.merged", { taskId, mergeCommit, branch: worktree.branch, reconciled: true }, taskId);
+			this.logger.forTask(taskId).info("manual merge reconciled", { branch: worktree.branch, commit: mergeCommit });
+			return {
+				success: true,
+				state: "merged",
+				taskId,
+				branch: worktree.branch,
+				mergeCommit,
+				message: "Task worktree marked merged from repository state",
+			};
+		}
+
+		return {
+			success: false,
+			state: "not_merged",
+			taskId,
+			error: options.mergeCommit
+				? "Provided merge commit was not found in the task repository"
+				: "No task worktree branch appears to be merged into the configured target branch",
+		};
 	}
 
 	private get runningCount(): number {
@@ -1410,6 +1508,65 @@ function gitOutput(cwd: string, args: string[]): string {
 	} catch {
 		return "";
 	}
+}
+
+function gitOk(cwd: string, args: string[]): boolean {
+	try {
+		execFileSync("git", args, { cwd, encoding: "utf8", stdio: "ignore" });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function verifyGitCommit(cwd: string, commit: string): string | null {
+	const resolved = gitOutput(cwd, ["rev-parse", "--verify", `${commit}^{commit}`]);
+	return resolved || null;
+}
+
+function findManualMergeCommit(cwd: string, branch: string, targetBranch: string): string | null {
+	const branchTip = gitOutput(cwd, ["rev-parse", "--verify", `${branch}^{commit}`]);
+	if (!branchTip) return null;
+	const target = gitOutput(cwd, ["rev-parse", "--verify", `${targetBranch}^{commit}`]);
+	if (!target) return null;
+	if (!gitOk(cwd, ["merge-base", "--is-ancestor", branchTip, target])) return null;
+
+	const merges = gitOutput(cwd, ["rev-list", "--merges", "--first-parent", "--max-count=100", targetBranch])
+		.split("\n")
+		.map((line) => line.trim())
+		.filter(Boolean);
+	for (const merge of merges) {
+		const secondParent = gitOutput(cwd, ["rev-parse", "--verify", `${merge}^2`]);
+		if (secondParent && gitOk(cwd, ["merge-base", "--is-ancestor", branchTip, secondParent])) return merge;
+	}
+
+	// Fast-forward/manual adoption fallback: the branch tip is reachable from target,
+	// but no no-ff merge commit was found.
+	return branchTip;
+}
+
+function workflowSizeToComplexityHint(size?: WorkflowSizeHint): "simple" | "medium" | "complex" | undefined {
+	if (size === "small") return "simple";
+	if (size === "medium") return "medium";
+	if (size === "large") return "complex";
+	return undefined;
+}
+
+function recoveryStateForSummary(summary: TaskWorktreeSummary): RecoveryListRow["recovery_state"] {
+	if (summary.status === "merged") return "merged";
+	if (summary.status === "preserved" || summary.status === "active" || summary.status === "inactive")
+		return "preserved";
+	if (summary.status === "rejected") return "rejected";
+	return "no_worktree";
+}
+
+function recoveryRecommendation(task: TaskRow, summary: TaskWorktreeSummary): string {
+	if (summary.status === "merged") return "Already merged; consider cleanup/reconcile review history.";
+	if (summary.status === "preserved")
+		return "Inspect preserved worktree, then iterate, reconcile a manual merge, or reject cleanup.";
+	if (summary.status === "rejected") return "Cleanup is complete; inspect logs or rerun if still needed.";
+	if (task.status === "aborted") return "Task aborted without a preserved worktree; rerun or iterate if needed.";
+	return "Task failed without a preserved worktree; inspect logs and rerun if needed.";
 }
 
 function countNonEmptyLines(text: string): number {

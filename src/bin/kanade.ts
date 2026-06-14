@@ -78,6 +78,19 @@ function sourceBadge(source: string): string {
 	}
 }
 
+function recoveryStateLabel(state: string): string {
+	switch (state) {
+		case "preserved":
+			return pc.yellow("preserved");
+		case "merged":
+			return pc.green("merged");
+		case "rejected":
+			return pc.dim("rejected");
+		default:
+			return pc.dim(state);
+	}
+}
+
 function timestamp(ms: number | null): string {
 	if (!ms) return pc.dim("-");
 	return new Date(ms).toLocaleString();
@@ -579,9 +592,13 @@ async function cmdGenerateWorkflow(args: ReturnType<typeof parseArgs>["values"])
 	}
 
 	const authorModel = (args.author_model ?? args["author-model"]) as string | undefined;
+	const workflowSize = parseWorkflowSize(args["workflow-size"]);
+	const options: Record<string, unknown> = {};
+	if (authorModel) options.author_model = authorModel;
+	if (workflowSize) options.workflow_size = workflowSize;
 	const body = (await api("/workflows/generate", {
 		method: "POST",
-		body: JSON.stringify({ prompt, ...(authorModel ? { options: { author_model: authorModel } } : {}) }),
+		body: JSON.stringify({ prompt, ...(Object.keys(options).length > 0 ? { options } : {}) }),
 	})) as { script: string };
 
 	if (args.json) {
@@ -614,6 +631,13 @@ function parseStringArray(value: unknown): string[] {
 	return out;
 }
 
+function parseWorkflowSize(value: unknown): "small" | "medium" | "large" | undefined {
+	if (value === undefined) return undefined;
+	if (value === "small" || value === "medium" || value === "large") return value;
+	console.error(pc.red("✖ --workflow-size must be one of: small, medium, large"));
+	process.exit(1);
+}
+
 async function cmdRun(workflowName: string | undefined, args: ReturnType<typeof parseArgs>["values"]) {
 	const prompt = args.prompt as string | undefined;
 
@@ -621,10 +645,12 @@ async function cmdRun(workflowName: string | undefined, args: ReturnType<typeof 
 	if (!workflowName && prompt?.trim()) {
 		const authorModel = (args.author_model ?? args["author-model"]) as string | undefined;
 		const agentModel = (args.agent_model ?? args["agent-model"]) as string | undefined;
+		const workflowSize = parseWorkflowSize(args["workflow-size"]);
 		const cwd = (args.cwd as string | undefined) ?? process.cwd();
 		const options: Record<string, unknown> = { cwd };
 		if (authorModel) options.author_model = authorModel;
 		if (agentModel) options.agent_model = agentModel;
+		if (workflowSize) options.workflow_size = workflowSize;
 		const roleModels = parseRoleModels(args["role-model"]);
 		if (roleModels) options.role_models = roleModels;
 		const prepareCommands = parseStringArray(args["prepare-command"]);
@@ -642,6 +668,7 @@ async function cmdRun(workflowName: string | undefined, args: ReturnType<typeof 
 
 		console.log(pc.green(`✔ Task ${pc.bold(body.task_id)} created.`));
 		console.log(pc.dim("  Source: generated"));
+		if (workflowSize) console.log(pc.dim(`  Workflow size: ${workflowSize}`));
 		console.log(pc.dim(`  Workspace: ${cwd}`));
 
 		if (args.follow) {
@@ -662,7 +689,7 @@ async function cmdRun(workflowName: string | undefined, args: ReturnType<typeof 
 		);
 		console.log(
 			pc.dim(
-				"  Usage: kanade run --prompt '...' [--author-model gpt-5.4] [--agent-model gpt-5.3-codex-spark] [--role-model reviewer=gpt-5.4] [--prepare-command CMD] [--follow]",
+				"  Usage: kanade run --prompt '...' [--workflow-size small|medium|large] [--author-model gpt-5.4] [--agent-model gpt-5.3-codex-spark] [--role-model reviewer=gpt-5.4] [--prepare-command CMD] [--follow]",
 			),
 		);
 		process.exit(1);
@@ -782,6 +809,51 @@ async function cmdMerge(taskId: string | undefined) {
 		console.error(pc.red(`✖ Merge failed: ${body.error}`));
 		process.exit(1);
 	}
+}
+
+async function cmdRecovery(args: ReturnType<typeof parseArgs>["values"]) {
+	const body = (await api("/recovery")) as { tasks: Record<string, unknown>[] };
+	if (args.json) {
+		console.log(JSON.stringify(body.tasks, null, 2));
+		return;
+	}
+	if (body.tasks.length === 0) {
+		console.log(pc.green("✔ No failed/aborted tasks need recovery."));
+		return;
+	}
+	header("Recovery");
+	printTable(body.tasks, [
+		{ key: "id", label: "ID", width: 10, render: (v) => pc.bold(String(v)) },
+		{ key: "status", label: "Status", width: 12, render: (v) => statusLabel(String(v)) },
+		{ key: "recovery_state", label: "Recovery", width: 14, render: (v) => recoveryStateLabel(String(v)) },
+		{
+			key: "worktree_summary",
+			label: "Branch/Path",
+			width: 34,
+			render: (v) => {
+				const summary = v && typeof v === "object" ? (v as Record<string, unknown>) : {};
+				return pc.dim(String(summary.branch ?? summary.path ?? "-"));
+			},
+		},
+	]);
+	console.log(pc.dim("\n  Use 'kanade show <id>' to inspect or 'kanade reconcile <id>' after a manual merge."));
+}
+
+async function cmdReconcile(taskId: string | undefined, args: ReturnType<typeof parseArgs>["values"]) {
+	if (!taskId) {
+		console.error(pc.red("✖ Task ID required. Usage: kanade reconcile <task-id> [--merge-commit <sha>]"));
+		process.exit(1);
+	}
+	const mergeCommit = args["merge-commit"] as string | undefined;
+	const body = (await api(`/tasks/${taskId}/reconcile`, {
+		method: "POST",
+		body: JSON.stringify(mergeCommit ? { merge_commit: mergeCommit } : {}),
+	})) as { state: string; mergeCommit?: string; branch?: string; message?: string };
+	const already = body.state === "already_merged";
+	console.log(pc.green(already ? "✔ Already marked merged." : "✔ Reconciled manual merge."));
+	if (body.branch) console.log(pc.dim(`  Branch: ${body.branch}`));
+	if (body.mergeCommit) console.log(pc.dim(`  Commit: ${body.mergeCommit.slice(0, 12)}`));
+	if (body.message) console.log(pc.dim(`  ${body.message}`));
 }
 
 async function cmdReject(taskId: string | undefined) {
@@ -912,6 +984,8 @@ async function main() {
 			"agent-model": { type: "string" },
 			"role-model": { type: "string", multiple: true },
 			"prepare-command": { type: "string", multiple: true },
+			"workflow-size": { type: "string" },
+			"merge-commit": { type: "string" },
 			prompt: { type: "string", short: "p" },
 			daemon: { type: "boolean" },
 		},
@@ -943,6 +1017,10 @@ async function main() {
 			return cmdClean();
 		case "merge":
 			return cmdMerge(positionals[1] as string | undefined);
+		case "reconcile":
+			return cmdReconcile(positionals[1] as string | undefined, values);
+		case "recovery":
+			return cmdRecovery(values);
 		case "reject":
 			return cmdReject(positionals[1] as string | undefined);
 		case "generate-workflow":
@@ -983,12 +1061,14 @@ ${pc.bold("Commands:")}
   ${pc.cyan("show")}          ${pc.dim("<task-id> [--json]")}             Task details
   ${pc.cyan("tail")}          ${pc.dim("<task-id>")}                      Follow events (SSE)
   ${pc.cyan("run")}           ${pc.dim("<name> [--cwd /path] [--args '{}'] [--agent-model ...] [--role-model reviewer=...] [--prepare-command cmd] [--follow]")} Run saved workflow
-                      ${pc.dim("--prompt '...' [--author-model ...] [--agent-model ...] [--role-model reviewer=...] [--prepare-command cmd] [--follow]")} Generate workflow and run
-  ${pc.cyan("generate-workflow")} ${pc.dim("--prompt '...' [--json]")}              Generate workflow script without running
+                      ${pc.dim("--prompt '...' [--workflow-size small|medium|large] [--author-model ...] [--agent-model ...] [--role-model reviewer=...] [--prepare-command cmd] [--follow]")} Generate workflow and run
+  ${pc.cyan("generate-workflow")} ${pc.dim("--prompt '...' [--workflow-size small|medium|large] [--json]")} Generate workflow script without running
   ${pc.cyan("iterate")}       ${pc.dim("<task-id> --instructions '...'")} Iterate on task
   ${pc.cyan("save")}          ${pc.dim("<task-id> --as <name>")}          Save script as workflow
   ${pc.cyan("workflows")}     ${pc.dim("[--json]")}                      List workflows
   ${pc.cyan("merge")}         ${pc.dim("<task-id>")}                     Merge branch
+  ${pc.cyan("reconcile")}     ${pc.dim("<task-id> [--merge-commit sha]")} Mark a manually merged task branch as merged
+  ${pc.cyan("recovery")}      ${pc.dim("[--json]")}                      List failed/aborted tasks with recovery state
   ${pc.cyan("reject")}        ${pc.dim("<task-id>")}                     Reject, remove branch
   ${pc.cyan("abort")}         ${pc.dim("<task-id>")}                     Abort task
   ${pc.cyan("kill")}          ${pc.dim("<task-id> | --all")}              Force kill task(s)

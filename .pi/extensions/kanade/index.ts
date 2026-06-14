@@ -72,6 +72,20 @@ type InboxRequest = {
 	response?: unknown;
 };
 
+type UsageAgent = {
+	label?: string;
+	phase?: string;
+	role?: string;
+	model?: string;
+	status?: string;
+	input?: number;
+	output?: number;
+	cacheRead?: number;
+	cacheWrite?: number;
+	totalTokens?: number;
+	cost?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; total?: number };
+};
+
 type UsageSummary = {
 	input?: number;
 	output?: number;
@@ -82,6 +96,7 @@ type UsageSummary = {
 	author?: UsageSummary;
 	runtime?: UsageSummary;
 	total?: UsageSummary;
+	agents?: UsageAgent[];
 };
 
 type WorkflowAgentSnapshot = {
@@ -243,7 +258,17 @@ type Tab = "Map" | "Agent" | "Events" | "Worktree" | "Usage" | "Result" | "Revie
 
 type Counts = { running: number; needsHuman: number; failed: number; finished: number };
 
-type ActionKey = "respond" | "iterate" | "merge" | "abort" | "reject" | "recovery" | "agent" | "refresh" | "settings";
+type ActionKey =
+	| "respond"
+	| "iterate"
+	| "merge"
+	| "reconcile"
+	| "abort"
+	| "reject"
+	| "recovery"
+	| "agent"
+	| "refresh"
+	| "settings";
 
 type ActionItem = {
 	key: ActionKey;
@@ -1813,6 +1838,7 @@ class KanadePanel implements Component {
 			items.push({ key: "merge", label: "Merge task", danger: true });
 		if (task.status === "failed" || task.status === "aborted") {
 			items.push({ key: "recovery", label: "Open recovery view" });
+			items.push({ key: "reconcile", label: "Reconcile manual merge" });
 			items.push({ key: "iterate", label: "Iterate with instructions" });
 			items.push({ key: "reject", label: "Reject cleanup preserved worktree", danger: true });
 		}
@@ -1922,6 +1948,10 @@ class KanadePanel implements Component {
 			}
 			return;
 		}
+		if (item.key === "reconcile") {
+			await this.runPanelAction(() => this.reconcileTask(task));
+			return;
+		}
 		if (item.key === "agent") {
 			await this.openAgentDetail();
 			return;
@@ -2010,6 +2040,17 @@ class KanadePanel implements Component {
 	private async rejectTask(task: KanadeTask): Promise<void> {
 		await postJson(`/tasks/${encodeURIComponent(task.id)}/reject`, {});
 		this.ui.notify(`Rejected and cleaned up ${task.id}`, "warning");
+		await this.refresh();
+	}
+
+	private async reconcileTask(task: KanadeTask): Promise<void> {
+		const result = await postJson<{ mergeCommit?: string; state?: string }>(
+			`/tasks/${encodeURIComponent(task.id)}/reconcile`,
+			{},
+		);
+		const suffix = result.mergeCommit ? ` (${result.mergeCommit.slice(0, 12)})` : "";
+		this.lastNotice = { kind: "info", text: `Reconciled ${task.id} as ${result.state ?? "merged"}${suffix}` };
+		this.ui.notify(`Reconciled ${task.id}${suffix}`, "info");
 		await this.refresh();
 	}
 
@@ -2472,9 +2513,10 @@ class KanadePanel implements Component {
 		if (isRecovery) {
 			lines.push(this.color("muted", "Recommended Actions"));
 			lines.push("  1. Open agent detail and inspect the failed step");
-			lines.push("  2. Iterate with focused recovery instructions");
-			lines.push("  3. Keep preserved worktree if partial work may help");
-			lines.push(this.color("error", "  4. Reject cleanup only after review"));
+			lines.push("  2. If branch was manually merged, run Reconcile manual merge");
+			lines.push("  3. Iterate with focused recovery instructions");
+			lines.push("  4. Keep preserved worktree if partial work may help");
+			lines.push(this.color("error", "  5. Reject cleanup only after review"));
 		}
 		return lines;
 	}
@@ -2503,6 +2545,21 @@ class KanadePanel implements Component {
 				),
 			),
 		);
+		const agents = usage.agents ?? [];
+		if (agents.length > 0) {
+			lines.push("");
+			lines.push(this.color("muted", "Per-Agent Usage"));
+			for (const agent of agents.slice(0, 8)) {
+				const label = truncatePlain(agent.label ?? "agent", 20).padEnd(20);
+				const phase = truncatePlain(agent.phase ?? agent.role ?? "-", 12).padEnd(12);
+				const status = truncatePlain(agent.status ?? "done", 9).padEnd(9);
+				const tokens = formatNumber(agent.totalTokens);
+				const cost = formatCost(costTotal(agent));
+				lines.push(truncateAnsi(`  ${label} ${phase} ${status} ${tokens.padStart(8)} tok  ${cost}`, width));
+				if (agent.model) lines.push(this.color("dim", truncatePlain(`    model ${agent.model}`, width)));
+			}
+			if (agents.length > 8) lines.push(this.color("dim", `  ${agents.length - 8} more agent(s)`));
+		}
 		return lines;
 	}
 

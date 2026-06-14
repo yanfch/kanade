@@ -113,6 +113,23 @@ const USAGE: Record<string, unknown> = {
 	output: 500,
 	totalTokens: 1500,
 	cost: { total: 0.05 },
+	agents: [
+		{
+			label: "implement-agent",
+			phase: "Implement",
+			status: "completed",
+			model: "claude-sonnet-4",
+			totalTokens: 900,
+			cost: { total: 0.03 },
+		},
+		{
+			label: "review-agent",
+			phase: "Review",
+			status: "completed",
+			totalTokens: 600,
+			cost: { total: 0.02 },
+		},
+	],
 };
 
 const REVIEW_READY: Record<string, unknown> = {
@@ -799,6 +816,28 @@ function assert(label: string, condition: boolean, detail?: string) {
 	}
 }
 
+// ---------- Test 5b: failed task action menu includes reconcile ----------
+{
+	console.log("\nTest 5b: failed task action menu includes reconcile");
+	customCalls.length = 0;
+	const panel = await createPanel();
+	panel.handleInput("/");
+	for (const ch of "T-0002") panel.handleInput(ch);
+	panel.handleInput("\r");
+	await delay(150);
+	const actionCall = customCalls.at(-1);
+	if (!actionCall) {
+		assert("action menu opened", false);
+	} else {
+		const overlayComp = actionCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
+		const text = strip(overlayComp.render(80).join("\n"));
+		assert("action menu opened", text.includes("Actions"), `overlay: ${text.slice(0, 300)}`);
+		assert("shows reconcile action", text.includes("Reconcile manual merge"), `overlay: ${text.slice(0, 300)}`);
+		overlayComp.handleInput?.("\x1b");
+		actionCall.resolve(null);
+	}
+}
+
 // ---------- Test 6: merged task list badge stays concise ----------
 {
 	console.log("\nTest 6: merged task list badge stays concise");
@@ -880,6 +919,23 @@ function assert(label: string, condition: boolean, detail?: string) {
 	assert("Review tab selected", text.includes("[Review]"), `output: ${text.slice(0, 500)}`);
 	assert("shows merge readiness label", text.includes("Merge Readiness"), `output: ${text.slice(0, 800)}`);
 	assert("shows ready state", text.includes("Ready") || text.includes("ready"), `output: ${text.slice(0, 800)}`);
+}
+
+// ---------- Test 9b: Usage tab renders per-agent usage ----------
+{
+	console.log("\nTest 9b: Usage tab shows per-agent usage");
+	customCalls.length = 0;
+	const panel = await createPanel();
+	panel.handleInput("/");
+	for (const ch of "T-0001") panel.handleInput(ch);
+	await delay(200);
+	for (let i = 0; i < 4; i++) panel.handleInput("\t");
+	await delay(200);
+	const text = strip(panel.render(120).join("\n"));
+	assert("Usage tab selected", text.includes("[Usage]"), `output: ${text.slice(0, 500)}`);
+	assert("shows per-agent usage section", text.includes("Per-Agent Usage"), `output: ${text.slice(0, 800)}`);
+	assert("shows implement agent usage", text.includes("implement-agent"), `output: ${text.slice(0, 800)}`);
+	assert("shows review agent usage", text.includes("review-agent"), `output: ${text.slice(0, 800)}`);
 }
 
 // ---------- Test 10: blocked task shows blockers in Review tab ----------

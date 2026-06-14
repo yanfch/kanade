@@ -101,6 +101,8 @@ export function createApp(ctx: AppContext): Hono {
 
 	app.get("/inbox", (c) => c.json({ requests: ctx.taskManager.inbox().map(formatInboxRow) }));
 
+	app.get("/recovery", (c) => c.json({ tasks: ctx.taskManager.listRecovery() }));
+
 	app.get("/events", (c) =>
 		streamSSE(c, async (stream) => {
 			const off = ctx.events.onAny((event) => void writeEvent(stream, event));
@@ -201,6 +203,16 @@ export function createApp(ctx: AppContext): Hono {
 	app.post("/tasks/:id/merge", async (c) => {
 		const result = await ctx.taskManager.merge(c.req.param("id"));
 		if (!result.success) return c.json({ error: result.error }, 400);
+		return c.json(result);
+	});
+
+	app.post("/tasks/:id/reconcile", async (c) => {
+		const body = (await c.req.json().catch(() => ({}))) as { merge_commit?: unknown; mergeCommit?: unknown };
+		const mergeCommit = typeof body.merge_commit === "string" ? body.merge_commit : body.mergeCommit;
+		const result = ctx.taskManager.reconcileMerged(c.req.param("id"), {
+			mergeCommit: typeof mergeCommit === "string" ? mergeCommit : undefined,
+		});
+		if (!result.success) return c.json({ error: result.error, result }, 400);
 		return c.json(result);
 	});
 
