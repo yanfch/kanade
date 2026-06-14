@@ -580,6 +580,46 @@ async function createPanel(confirmResult?: boolean) {
 	return entry.component as { render(w: number): string[]; handleInput(d: string): void };
 }
 
+type TestComponent = { render(w: number): string[]; handleInput?: (d: string) => void };
+
+function selectedSettingsLine(comp: TestComponent): string {
+	return (
+		strip(comp.render(90).join("\n"))
+			.split("\n")
+			.find((line) => line.includes("▸")) ?? ""
+	);
+}
+
+async function selectSettingsLine(comp: TestComponent, label: string): Promise<boolean> {
+	for (let i = 0; i < 80; i++) comp.handleInput?.("\x1b[A");
+	for (let i = 0; i < 80; i++) {
+		if (selectedSettingsLine(comp).includes(label)) return true;
+		comp.handleInput?.("\x1b[B");
+		await delay(5);
+	}
+	return false;
+}
+
+async function expandSettingsGroup(comp: TestComponent, label: string): Promise<boolean> {
+	if (!(await selectSettingsLine(comp, label))) return false;
+	const line = selectedSettingsLine(comp);
+	if (line.includes("[+]")) {
+		comp.handleInput?.("\r");
+		await delay(20);
+	}
+	return true;
+}
+
+async function selectSettingsField(comp: TestComponent, group: string, label: string): Promise<boolean> {
+	if (!(await expandSettingsGroup(comp, group))) return false;
+	for (let i = 0; i < 30; i++) {
+		if (selectedSettingsLine(comp).includes(label)) return true;
+		comp.handleInput?.("\x1b[B");
+		await delay(5);
+	}
+	return false;
+}
+
 // ---------------------------------------------------------------------------
 // 4. Tests
 // ---------------------------------------------------------------------------
@@ -1218,31 +1258,30 @@ function assert(label: string, condition: boolean, detail?: string) {
 	if (!settingsCall) {
 		assert("settings overlay opened for edit test", false);
 	} else {
-		const comp = settingsCall.component as { render(w: number): string[] };
+		const comp = settingsCall.component as TestComponent;
 		const text = strip(comp.render(90).join("\n"));
-		assert("shows Max Concurrent Tasks label", text.includes("Max Concurrent Tasks"), `output: ${text.slice(0, 500)}`);
-		assert("shows Concurrency label", text.includes("Concurrency"), `output: ${text.slice(0, 500)}`);
-		assert("shows Agent Timeout label", text.includes("Agent Timeout Ms"), `output: ${text.slice(0, 500)}`);
-		assert("shows Isolation Mode label", text.includes("Isolation Mode"), `output: ${text.slice(0, 500)}`);
-		assert("shows Persist Subagents label", text.includes("Persist Subagents"), `output: ${text.slice(0, 500)}`);
-		assert("shows Cleanup Enabled label", text.includes("Cleanup Enabled"), `output: ${text.slice(0, 500)}`);
+		assert("shows collapsed Defaults group", text.includes("[+] Defaults"), `output: ${text.slice(0, 500)}`);
+		assert("shows expanded Models group", text.includes("[-] Models"), `output: ${text.slice(0, 500)}`);
 		assert("shows Inherit Pi Settings label", text.includes("Inherit Pi Settings"), `output: ${text.slice(0, 500)}`);
-		assert("shows Author Model label", text.includes("Author Model"), `output: ${text.slice(0, 500)}`);
-		assert("shows Agent Model label", text.includes("Agent Model"), `output: ${text.slice(0, 500)}`);
-		assert("shows Role Models label", text.includes("Role Models"), `output: ${text.slice(0, 500)}`);
-		assert("shows read-only marker for authPath", text.includes("[read-only]"), `output: ${text.slice(0, 500)}`);
+		assert("can reveal Max Concurrent Tasks", await selectSettingsField(comp, "Defaults", "Max Concurrent Tasks"));
+		assert("can reveal Role Models", await selectSettingsField(comp, "Defaults", "Role Models"));
+		assert("can reveal Isolation Mode", await selectSettingsField(comp, "Isolation", "Isolation Mode"));
+		assert("can reveal Persist Subagents", await selectSettingsField(comp, "Debug", "Persist Subagents"));
+		assert("can reveal Cleanup Enabled", await selectSettingsField(comp, "Cleanup", "Cleanup Enabled"));
+		assert("can reveal Auth Path read-only field", await selectSettingsField(comp, "Read-only", "Auth Path"));
+		const readOnlyText = strip(comp.render(90).join("\n"));
 		assert(
-			"shows group headers",
-			text.includes("── Models ──") || text.includes("Models"),
-			`output: ${text.slice(0, 500)}`,
+			"shows read-only marker for authPath",
+			readOnlyText.includes("[read-only]"),
+			`output: ${readOnlyText.slice(0, 500)}`,
 		);
 		assert(
 			"shows current boolean value",
-			text.includes("false") || text.includes("true"),
-			`output: ${text.slice(0, 500)}`,
+			readOnlyText.includes("false") || readOnlyText.includes("true"),
+			`output: ${readOnlyText.slice(0, 500)}`,
 		);
-		assert("shows select hint", text.includes("select"), `output: ${text.slice(0, 500)}`);
-		(comp as { handleInput?: (d: string) => void }).handleInput?.("\x1b");
+		assert("shows select hint", readOnlyText.includes("select"), `output: ${readOnlyText.slice(0, 500)}`);
+		comp.handleInput?.("\x1b");
 		settingsCall.resolve(undefined);
 	}
 	Object.assign(MOCK_CONFIG, savedConfig);
@@ -1262,9 +1301,8 @@ function assert(label: string, condition: boolean, detail?: string) {
 	if (!settingsCall) {
 		assert("settings overlay opened for toggle test", false);
 	} else {
-		const comp = settingsCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
-		// Navigate to Persist Subagents (11 down arrows from first field models.modelsPath)
-		for (let i = 0; i < 11; i++) comp.handleInput?.("\x1b[B"); // down arrow
+		const comp = settingsCall.component as TestComponent;
+		assert("selected Persist Subagents", await selectSettingsField(comp, "Debug", "Persist Subagents"));
 		await delay(50);
 		comp.handleInput?.("\r"); // Enter to toggle
 		await delay(200);
@@ -1304,9 +1342,8 @@ function assert(label: string, condition: boolean, detail?: string) {
 	if (!settingsCall) {
 		assert("settings overlay opened for number edit", false);
 	} else {
-		const comp = settingsCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
-		// Navigate to Max Concurrent Tasks (3 down arrows from first field models.modelsPath)
-		for (let i = 0; i < 3; i++) comp.handleInput?.("\x1b[B"); // down arrow
+		const comp = settingsCall.component as TestComponent;
+		assert("selected Max Concurrent Tasks", await selectSettingsField(comp, "Defaults", "Max Concurrent Tasks"));
 		await delay(50);
 		// Enter edit mode
 		comp.handleInput?.("\r");
@@ -1358,11 +1395,12 @@ function assert(label: string, condition: boolean, detail?: string) {
 	if (!settingsCall) {
 		assert("settings overlay opened for dangerous test", false);
 	} else {
-		const comp = settingsCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
-		// Navigate to Cleanup Enabled (13 down arrows from first field models.modelsPath)
-		for (let i = 0; i < 13; i++) comp.handleInput?.("\x1b[B"); // down arrow
+		const comp = settingsCall.component as TestComponent;
+		assert("selected Cleanup Enabled", await selectSettingsField(comp, "Cleanup", "Cleanup Enabled"));
 		await delay(50);
 		comp.handleInput?.("\r"); // Enter to toggle
+		await delay(50);
+		comp.handleInput?.("\x1b"); // reject inline confirmation
 		await delay(300);
 		const text = strip(comp.render(90).join("\n"));
 		assert(
@@ -1394,9 +1432,8 @@ function assert(label: string, condition: boolean, detail?: string) {
 	if (!settingsCall) {
 		assert("settings overlay opened for cancel test", false);
 	} else {
-		const comp = settingsCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
-		// Navigate to an editable field (defaults, ~8 down arrows from first field)
-		for (let i = 0; i < 8; i++) comp.handleInput?.("\x1b[B"); // down arrow
+		const comp = settingsCall.component as TestComponent;
+		assert("selected Agent Timeout Ms", await selectSettingsField(comp, "Defaults", "Agent Timeout Ms"));
 		await delay(50);
 		// Enter edit mode
 		comp.handleInput?.("\r");
@@ -1430,7 +1467,7 @@ function assert(label: string, condition: boolean, detail?: string) {
 	if (!settingsCall) {
 		assert("settings overlay opened for group test", false);
 	} else {
-		const comp = settingsCall.component as { render(w: number): string[] };
+		const comp = settingsCall.component as TestComponent;
 		const text = strip(comp.render(90).join("\n"));
 		assert("shows Models group header", text.includes("Models"), `output: ${text.slice(0, 500)}`);
 		assert("shows Defaults group header", text.includes("Defaults"), `output: ${text.slice(0, 500)}`);
@@ -1445,38 +1482,97 @@ function assert(label: string, condition: boolean, detail?: string) {
 			text.includes("Read-only") || text.includes("Sensitive"),
 			`output: ${text.slice(0, 500)}`,
 		);
+		assert("starts with non-model groups collapsed", text.includes("[+] Defaults"), `output: ${text.slice(0, 500)}`);
+		assert("shows Models Path in models section", text.includes("Models Path"), `output: ${text.slice(0, 500)}`);
 		assert(
 			"shows Disable Subagent Compaction label",
 			text.includes("Disable Subagent Compaction"),
 			`output: ${text.slice(0, 500)}`,
 		);
-		assert("shows Role Models label", text.includes("Role Models"), `output: ${text.slice(0, 500)}`);
-		assert("shows read-only marker for blocked field", text.includes("[read-only]"), `output: ${text.slice(0, 500)}`);
-		assert("shows Port in read-only section", text.includes("Port"), `output: ${text.slice(-500)}`);
-		assert("shows DB Dir in read-only section", text.includes("DB Dir"), `output: ${text.slice(0, 500)}`);
-		assert("shows Worktrees Dir in read-only section", text.includes("Worktrees Dir"), `output: ${text.slice(0, 500)}`);
-		assert("shows Models Path in models section", text.includes("Models Path"), `output: ${text.slice(0, 500)}`);
-		assert("shows HTTP Proxy label", text.includes("HTTP Proxy"), `output: ${text.slice(0, 500)}`);
-		assert("shows HTTP Idle Timeout label", text.includes("HTTP Idle Timeout"), `output: ${text.slice(0, 500)}`);
+		assert("can reveal Role Models label", await selectSettingsField(comp, "Defaults", "Role Models"));
+		assert("can reveal HTTP Proxy label", await selectSettingsField(comp, "Network", "HTTP Proxy"));
+		assert("can reveal HTTP Idle Timeout label", await selectSettingsField(comp, "Network", "HTTP Idle Timeout"));
 		assert(
-			"shows Timeout Ms in Live Acceptance",
-			text.includes("Timeout Ms") && text.includes("Poll Ms"),
-			`output: ${text.slice(0, 500)}`,
+			"can reveal Timeout Ms in Live Acceptance",
+			await selectSettingsField(comp, "Live Acceptance", "Timeout Ms"),
+		);
+		assert("can reveal Poll Ms in Live Acceptance", await selectSettingsField(comp, "Live Acceptance", "Poll Ms"));
+		assert("can reveal Port in read-only section", await selectSettingsField(comp, "Read-only", "Port"));
+		assert("can reveal DB Dir in read-only section", await selectSettingsField(comp, "Read-only", "DB Dir"));
+		assert(
+			"can reveal Worktrees Dir in read-only section",
+			await selectSettingsField(comp, "Read-only", "Worktrees Dir"),
+		);
+		const readOnlyText = strip(comp.render(90).join("\n"));
+		assert(
+			"shows read-only marker for blocked field",
+			readOnlyText.includes("[read-only]"),
+			`output: ${readOnlyText.slice(0, 500)}`,
 		);
 		assert(
-			"shows JSON value for roleModels",
-			text.includes("implement") || text.includes("roleModels"),
-			`output: ${text.slice(0, 500)}`,
+			"shows role=model value for roleModels",
+			(await selectSettingsField(comp, "Defaults", "Role Models")) &&
+				strip(comp.render(90).join("\n")).includes("implement=claude-sonnet-4"),
+			`output: ${strip(comp.render(90).join("\n")).slice(0, 500)}`,
 		);
-		(comp as { handleInput?: (d: string) => void }).handleInput?.("\x1b");
+		comp.handleInput?.("\x1b");
 		settingsCall.resolve(undefined);
 	}
 	Object.assign(MOCK_CONFIG, savedConfig);
 }
 
-// ---------- Test 26: Edit model default field (authorModel) with correct PATCH shape ----------
+// ---------- Test 26: Edit roleModels using role=model lines ----------
 {
-	console.log("\nTest 26: Edit model default field (authorModel) with correct PATCH shape");
+	console.log("\nTest 26: Edit roleModels using role=model lines");
+	const savedConfig = structuredClone(MOCK_CONFIG);
+	customCalls.length = 0;
+	fetchCalls.length = 0;
+	patchBodies.length = 0;
+	const panel = await createPanel();
+	panel.handleInput("s");
+	await delay(200);
+	const settingsCall = customCalls.at(-1);
+	if (!settingsCall) {
+		assert("settings overlay opened for roleModels edit test", false);
+	} else {
+		const comp = settingsCall.component as TestComponent;
+		assert("selected Role Models", await selectSettingsField(comp, "Defaults", "Role Models"));
+		comp.handleInput?.("\r");
+		await delay(50);
+		let text = strip(comp.render(90).join("\n"));
+		assert("shows role=model editor", text.includes("implement=claude-sonnet-4"), `output: ${text.slice(0, 500)}`);
+		assert("shows role editor hint", text.includes("role=model"), `output: ${text.slice(0, 500)}`);
+		comp.handleInput?.("\x1b[A"); // move cursor from the last role to the first role
+		comp.handleInput?.("\x1b[F"); // move to the end of that role line
+		comp.handleInput?.("\r");
+		for (const ch of "qa=gpt-5.4") comp.handleInput?.(ch);
+		comp.handleInput?.("\x13"); // Ctrl+S
+		await delay(200);
+		text = strip(comp.render(90).join("\n"));
+		assert("shows saved after roleModels edit", text.includes("Saved"), `output: ${text.slice(0, 500)}`);
+		const roleModels = (patchBodies.at(-1)?.defaults as Record<string, unknown> | undefined)?.roleModels as
+			| Record<string, string>
+			| undefined;
+		assert("roleModels PATCH keeps existing implement role", roleModels?.implement === "claude-sonnet-4");
+		assert(
+			"roleModels PATCH adds qa role",
+			roleModels?.qa === "gpt-5.4",
+			`patch: ${JSON.stringify(patchBodies.at(-1))}`,
+		);
+		assert(
+			"up arrow inserts qa before review role",
+			Object.keys(roleModels ?? {}).join(",") === "implement,qa,review",
+			`patch: ${JSON.stringify(patchBodies.at(-1))}`,
+		);
+		comp.handleInput?.("\x1b");
+		settingsCall.resolve(undefined);
+	}
+	Object.assign(MOCK_CONFIG, savedConfig);
+}
+
+// ---------- Test 27: Edit model default field (authorModel) with correct PATCH shape ----------
+{
+	console.log("\nTest 27: Edit model default field (authorModel) with correct PATCH shape");
 	const savedConfig = structuredClone(MOCK_CONFIG);
 	customCalls.length = 0;
 	fetchCalls.length = 0;
@@ -1488,9 +1584,8 @@ function assert(label: string, condition: boolean, detail?: string) {
 	if (!settingsCall) {
 		assert("settings overlay opened for model edit test", false);
 	} else {
-		const comp = settingsCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
-		// Navigate to Author Model field (6 down arrows from first field models.modelsPath)
-		for (let i = 0; i < 6; i++) comp.handleInput?.("\x1b[B"); // down arrow
+		const comp = settingsCall.component as TestComponent;
+		assert("selected Author Model", await selectSettingsField(comp, "Defaults", "Author Model"));
 		await delay(50);
 		// Enter edit mode
 		comp.handleInput?.("\r");

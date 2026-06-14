@@ -270,7 +270,7 @@ const CLEAR_CELL = "\u00A0";
 const ANSI_SGR_PREFIX = new RegExp(`^${ESC}\\[[0-9;]*m`);
 const ANSI_SGR_GLOBAL = new RegExp(`${ESC}\\[[0-9;]*m`, "g");
 
-type SettingsFieldType = "boolean" | "number" | "string" | "json";
+type SettingsFieldType = "boolean" | "number" | "string" | "json" | "record";
 
 type SettingsFieldDef = {
 	key: string;
@@ -282,6 +282,9 @@ type SettingsFieldDef = {
 };
 
 type SettingsGroup = { section: string; label: string; fields: SettingsFieldDef[] };
+type SettingsDisplayItem =
+	| { kind: "section"; groupIndex: number; label: string; expanded: boolean; fieldCount: number }
+	| { kind: "field"; groupIndex: number; field: SettingsFieldDef };
 
 const SETTINGS_GROUPS: readonly SettingsGroup[] = [
 	{
@@ -307,7 +310,7 @@ const SETTINGS_GROUPS: readonly SettingsGroup[] = [
 			{ key: "defaults.agentTimeoutMs", section: "defaults", label: "Agent Timeout Ms", type: "number" },
 			{ key: "defaults.authorModel", section: "defaults", label: "Author Model", type: "string" },
 			{ key: "defaults.agentModel", section: "defaults", label: "Agent Model", type: "string" },
-			{ key: "defaults.roleModels", section: "defaults", label: "Role Models", type: "json" },
+			{ key: "defaults.roleModels", section: "defaults", label: "Role Models", type: "record" },
 		],
 	},
 	{
@@ -905,26 +908,17 @@ class SettingsOverlay implements Component {
 	private notice?: { kind: "info" | "warning" | "error"; text: string };
 	private savedField?: string;
 	private editBuffer?: string;
-
-	private readonly _displayItems: Array<
-		{ kind: "section"; label: string } | { kind: "field"; field: SettingsFieldDef }
-	>;
+	private editCursor = 0;
+	private pendingConfirm?: { message: string; field: SettingsFieldDef; value: unknown };
+	private readonly expandedGroups = new Set<number>();
 
 	constructor(
 		private readonly tui: TuiHandle,
 		private readonly theme: Theme,
-		private readonly ui: Ui,
 		private readonly config: Record<string, unknown>,
 		private readonly done: () => void,
 	) {
-		const items: typeof this._displayItems = [];
-		for (const group of SETTINGS_GROUPS) {
-			items.push({ kind: "section", label: group.label });
-			for (const field of group.fields) items.push({ kind: "field", field });
-		}
-		this._displayItems = items;
-		// Ensure selected starts on a field, not a section header
-		while (this.selected < items.length && items[this.selected]?.kind === "section") this.selected++;
+		this.expandedGroups.add(0);
 	}
 
 	invalidate(): void {}
@@ -932,6 +926,7 @@ class SettingsOverlay implements Component {
 	render(width: number): string[] {
 		const boxWidth = Math.min(Math.max(72, width), 120);
 		const contentWidth = Math.max(40, boxWidth - 4);
+		const displayItems = this.displayItems();
 		const lines: string[] = [this.theme.fg("muted", "Global Kanade Settings"), ""];
 		lines.push(
 			this.theme.fg(
@@ -941,16 +936,25 @@ class SettingsOverlay implements Component {
 		);
 		lines.push(rule(Math.min(60, contentWidth), this.theme));
 
-		for (let i = 0; i < this._displayItems.length; i++) {
-			const item = this._displayItems[i];
+		const listRows = this.editBuffer !== undefined || this.pendingConfirm ? 10 : 16;
+		const windowed = windowAroundSelection(displayItems, this.selected, listRows);
+		if (windowed.start > 0) lines.push(this.theme.fg("dim", `  ... ${windowed.start} above`));
+		for (let offset = 0; offset < windowed.items.length; offset++) {
+			const i = windowed.start + offset;
+			const item = windowed.items[offset];
 			if (!item) continue;
 			if (item.kind === "section") {
-				lines.push(this.theme.fg("muted", `── ${item.label} ──`));
+				const selected = i === this.selected && !this.editBuffer && !this.pendingConfirm;
+				const prefix = selected ? this.theme.fg("accent", "▸") : " ";
+				const marker = item.expanded ? "[-]" : "[+]";
+				lines.push(
+					`${prefix} ${this.theme.fg(item.expanded ? "muted" : "dim", `${marker} ${item.label}`)} ${this.theme.fg("dim", `(${item.fieldCount})`)}`,
+				);
 				continue;
 			}
 			const field = item.field;
 			const value = this.getFieldValue(field.key);
-			const selected = i === this.selected && !this.editBuffer;
+			const selected = i === this.selected && !this.editBuffer && !this.pendingConfirm;
 			const prefix = selected ? this.theme.fg("accent", "▸") : " ";
 			const display = this.displayValue(field, value);
 			const dangerTag = field.dangerous ? this.theme.fg("warning", " ⚠") : "";
@@ -962,26 +966,39 @@ class SettingsOverlay implements Component {
 				lines.push(`${prefix} ${this.theme.fg("dim", field.label)}: ${display}${dangerTag}`);
 			}
 		}
+		if (windowed.end < displayItems.length)
+			lines.push(this.theme.fg("dim", `  ... ${displayItems.length - windowed.end} below`));
+
+		if (this.pendingConfirm) {
+			lines.push("");
+			lines.push(this.theme.fg("warning", "Confirm Change"));
+			for (const line of wrapPlain(this.pendingConfirm.message, contentWidth).slice(0, 3)) {
+				lines.push(this.theme.fg("dim", line));
+			}
+			lines.push(this.theme.fg("dim", "Enter / y confirm · Esc / n cancel"));
+		}
 
 		// Edit mode indicator
 		if (this.editBuffer !== undefined) {
 			lines.push("");
 			const field = this.currentField();
 			if (field) {
-				if (field.type === "json") {
+				if (field.type === "json" || field.type === "record") {
 					lines.push(this.theme.fg("accent", `Editing ${field.label}:`));
-					const bufLines = this.editBuffer.split("\n");
+					const bufLines = renderBufferWithCursor(this.editBuffer, this.editCursor);
 					for (const bl of bufLines) {
 						lines.push(this.theme.fg("accent", `  ${bl}`));
 					}
-					lines.push(this.theme.fg("accent", "  ▏"));
 				} else {
-					lines.push(this.theme.fg("accent", `Editing ${field.label}: ${this.editBuffer}▏`));
+					const rendered = renderBufferWithCursor(this.editBuffer, this.editCursor)[0] ?? "▏";
+					lines.push(this.theme.fg("accent", `Editing ${field.label}: ${rendered}`));
 				}
-				if (field.type === "json") {
-					lines.push(this.theme.fg("dim", "Type to edit · Enter newline · Ctrl+S save · Esc cancel"));
+				if (field.type === "record") {
+					lines.push(this.theme.fg("dim", "One role=model per line · arrows move · Ctrl+S save · Esc cancel"));
+				} else if (field.type === "json") {
+					lines.push(this.theme.fg("dim", "Arrows move · Enter newline · Ctrl+S save · Esc cancel"));
 				} else {
-					lines.push(this.theme.fg("dim", "Type to edit · Enter save · Esc cancel"));
+					lines.push(this.theme.fg("dim", "Arrows move · Enter save · Esc cancel"));
 				}
 			}
 		}
@@ -1001,19 +1018,60 @@ class SettingsOverlay implements Component {
 
 		lines.push("");
 		if (!this.editBuffer) {
-			lines.push(this.theme.fg("dim", "↑↓ select · Enter edit/toggle · Esc close"));
+			lines.push(this.theme.fg("dim", "↑↓ select · Enter expand/edit/toggle · Esc close"));
 		}
 
-		const fitLines = fitBodyRows(lines, 24, 60);
+		const fitLines = fitBodyRows(lines, 18, 28);
 		return box(fitLines, boxWidth, "Kanade Settings", this.theme);
 	}
 
+	private displayItems(): SettingsDisplayItem[] {
+		const items: SettingsDisplayItem[] = [];
+		for (let groupIndex = 0; groupIndex < SETTINGS_GROUPS.length; groupIndex++) {
+			const group = SETTINGS_GROUPS[groupIndex]!;
+			const expanded = this.expandedGroups.has(groupIndex);
+			items.push({ kind: "section", groupIndex, label: group.label, expanded, fieldCount: group.fields.length });
+			if (expanded) {
+				for (const field of group.fields) items.push({ kind: "field", groupIndex, field });
+			}
+		}
+		this.selected = Math.min(this.selected, Math.max(0, items.length - 1));
+		return items;
+	}
+
+	private currentItem(): SettingsDisplayItem | undefined {
+		return this.displayItems()[this.selected];
+	}
+
 	private currentField(): SettingsFieldDef | undefined {
-		const item = this._displayItems[this.selected];
+		const item = this.currentItem();
 		return item?.kind === "field" ? item.field : undefined;
 	}
 
 	handleInput(data: string): void {
+		if (this.pendingConfirm) {
+			if (
+				isKey(data, "escape", "\x1b") ||
+				isKey(data, "ctrl+c") ||
+				data === "n" ||
+				data === "N" ||
+				data === "q" ||
+				data === "Q"
+			) {
+				this.pendingConfirm = undefined;
+				this.notice = { kind: "warning", text: "Cancelled." };
+				this.tui.requestRender();
+				return;
+			}
+			if (data === "y" || data === "Y" || isKey(data, "return", "\r", "\n") || isKey(data, "enter", "\r", "\n")) {
+				const { field, value } = this.pendingConfirm;
+				this.pendingConfirm = undefined;
+				void this.patchField(field.key, value);
+				return;
+			}
+			return;
+		}
+
 		// Edit mode
 		if (this.editBuffer !== undefined) {
 			const field = this.currentField();
@@ -1021,12 +1079,15 @@ class SettingsOverlay implements Component {
 				handleEditModeInput(
 					data,
 					this.editBuffer,
+					this.editCursor,
 					field,
-					(buffer) => {
+					(buffer, cursor) => {
 						this.editBuffer = buffer;
+						this.editCursor = cursor;
 					},
 					() => {
 						this.editBuffer = undefined;
+						this.editCursor = 0;
 					},
 					() => void this.saveCurrentField(),
 				);
@@ -1040,17 +1101,12 @@ class SettingsOverlay implements Component {
 		}
 		if (isKey(data, "up", "\x1b[A", "\x1bOA")) {
 			this.selected = Math.max(0, this.selected - 1);
-			// Skip section headers
-			while (this.selected > 0 && this._displayItems[this.selected]?.kind === "section") this.selected--;
 			this.notice = undefined;
 			this.savedField = undefined;
 			return;
 		}
 		if (isKey(data, "down", "\x1b[B", "\x1bOB")) {
-			this.selected = Math.min(this._displayItems.length - 1, this.selected + 1);
-			// Skip section headers
-			while (this.selected < this._displayItems.length - 1 && this._displayItems[this.selected]?.kind === "section")
-				this.selected++;
+			this.selected = Math.min(this.displayItems().length - 1, this.selected + 1);
 			this.notice = undefined;
 			this.savedField = undefined;
 			return;
@@ -1072,6 +1128,7 @@ class SettingsOverlay implements Component {
 
 	private displayValue(field: SettingsFieldDef, value: unknown): string {
 		if (field.type === "boolean") return value ? "true" : "false";
+		if (field.type === "record") return displayRecordValue(value);
 		if (field.type === "json") {
 			if (value && typeof value === "object") return JSON.stringify(value);
 			return String(value ?? "{}");
@@ -1080,7 +1137,16 @@ class SettingsOverlay implements Component {
 	}
 
 	private async activateField(): Promise<void> {
-		const field = this.currentField();
+		const item = this.currentItem();
+		if (item?.kind === "section") {
+			if (this.expandedGroups.has(item.groupIndex)) this.expandedGroups.delete(item.groupIndex);
+			else this.expandedGroups.add(item.groupIndex);
+			this.notice = undefined;
+			this.savedField = undefined;
+			this.tui.requestRender();
+			return;
+		}
+		const field = item?.field;
 		if (!field) return;
 		if (field.readOnly) {
 			this.notice = { kind: "warning", text: `${field.label} is read-only.` };
@@ -1091,11 +1157,14 @@ class SettingsOverlay implements Component {
 		} else {
 			// Enter edit mode for string/number/json
 			const current = this.getFieldValue(field.key);
-			if (field.type === "json") {
+			if (field.type === "record") {
+				this.editBuffer = formatRecordEditorValue(current);
+			} else if (field.type === "json") {
 				this.editBuffer = current && typeof current === "object" ? JSON.stringify(current, null, 2) : "{}";
 			} else {
 				this.editBuffer = String(current ?? "");
 			}
+			this.editCursor = this.editBuffer.length;
 			this.notice = undefined;
 			this.savedField = undefined;
 		}
@@ -1106,13 +1175,13 @@ class SettingsOverlay implements Component {
 		const next = !current;
 
 		if (field.dangerous) {
-			const confirmed = await this.ui.confirm(
-				`${field.label}: ${current ? "true" : "false"} → ${next ? "true" : "false"}. Confirm change?`,
-			);
-			if (!confirmed) {
-				this.notice = { kind: "warning", text: "Cancelled." };
-				return;
-			}
+			this.pendingConfirm = {
+				field,
+				value: next,
+				message: `${field.label}: ${current ? "true" : "false"} -> ${next ? "true" : "false"}. Confirm change?`,
+			};
+			this.tui.requestRender();
+			return;
 		}
 
 		await this.patchField(field.key, next);
@@ -1132,6 +1201,13 @@ class SettingsOverlay implements Component {
 				return;
 			}
 			value = parsed;
+		} else if (field.type === "record") {
+			try {
+				value = parseRecordEditorValue(buffer);
+			} catch (error) {
+				this.notice = { kind: "error", text: error instanceof Error ? error.message : String(error) };
+				return;
+			}
 		} else if (field.type === "json") {
 			try {
 				value = JSON.parse(buffer);
@@ -1144,13 +1220,12 @@ class SettingsOverlay implements Component {
 		}
 
 		this.editBuffer = undefined;
+		this.editCursor = 0;
 
 		if (field.dangerous) {
-			const confirmed = await this.ui.confirm(`Set ${field.label} to ${JSON.stringify(value)}. Confirm?`);
-			if (!confirmed) {
-				this.notice = { kind: "warning", text: "Cancelled." };
-				return;
-			}
+			this.pendingConfirm = { field, value, message: `Set ${field.label} to ${JSON.stringify(value)}. Confirm?` };
+			this.tui.requestRender();
+			return;
 		}
 
 		await this.patchField(field.key, value);
@@ -1206,14 +1281,45 @@ function buildConfigPatch(key: string, value: unknown): Record<string, unknown> 
 	return root;
 }
 
+function displayRecordValue(value: unknown): string {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+	const entries = Object.entries(value as Record<string, unknown>);
+	if (entries.length === 0) return "";
+	return entries.map(([key, item]) => `${key}=${String(item ?? "")}`).join(", ");
+}
+
+function formatRecordEditorValue(value: unknown): string {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+	return Object.entries(value as Record<string, unknown>)
+		.map(([key, item]) => `${key}=${String(item ?? "")}`)
+		.join("\n");
+}
+
+function parseRecordEditorValue(buffer: string): Record<string, string> {
+	const result: Record<string, string> = {};
+	for (const rawLine of buffer.split("\n")) {
+		const line = rawLine.trim();
+		if (!line) continue;
+		const sep = line.indexOf("=");
+		if (sep <= 0) throw new Error("Invalid role model line. Use role=model.");
+		const key = line.slice(0, sep).trim();
+		const value = line.slice(sep + 1).trim();
+		if (!key) throw new Error("Role name is required.");
+		result[key] = value;
+	}
+	return result;
+}
+
 function handleEditModeInput(
 	data: string,
 	buffer: string,
+	cursor: number,
 	field: SettingsFieldDef,
-	setBuffer: (b: string) => void,
+	setBuffer: (b: string, cursor: number) => void,
 	cancel: () => void,
 	save: () => void,
 ): void {
+	const safeCursor = clampCursor(buffer, cursor);
 	if (isKey(data, "escape", "\x1b") || isKey(data, "ctrl+c")) {
 		cancel();
 		return;
@@ -1223,38 +1329,110 @@ function handleEditModeInput(
 		save();
 		return;
 	}
-	// For JSON fields, Enter inserts a newline; use Ctrl+S to save
-	if ((field.type === "json" && isKey(data, "return", "\r", "\n")) || isKey(data, "enter", "\r", "\n")) {
-		if (field.type === "json") {
-			setBuffer(`${buffer}\n`);
+	// For multi-line fields, Enter inserts a newline; use Ctrl+S to save
+	if (
+		((field.type === "json" || field.type === "record") && isKey(data, "return", "\r", "\n")) ||
+		isKey(data, "enter", "\r", "\n")
+	) {
+		if (field.type === "json" || field.type === "record") {
+			setBuffer(`${buffer.slice(0, safeCursor)}\n${buffer.slice(safeCursor)}`, safeCursor + 1);
 			return;
 		}
 	}
-	// For non-JSON fields, Enter saves
-	if (field.type !== "json" && (isKey(data, "return", "\r", "\n") || isKey(data, "enter", "\r", "\n"))) {
+	// For single-line fields, Enter saves
+	if (
+		field.type !== "json" &&
+		field.type !== "record" &&
+		(isKey(data, "return", "\r", "\n") || isKey(data, "enter", "\r", "\n"))
+	) {
 		save();
 		return;
 	}
+	if (isKey(data, "left", "\x1b[D", "\x1bOD")) {
+		setBuffer(buffer, Math.max(0, safeCursor - 1));
+		return;
+	}
+	if (isKey(data, "right", "\x1b[C", "\x1bOC")) {
+		setBuffer(buffer, Math.min(buffer.length, safeCursor + 1));
+		return;
+	}
+	if (isKey(data, "up", "\x1b[A", "\x1bOA")) {
+		setBuffer(buffer, moveCursorVertically(buffer, safeCursor, -1));
+		return;
+	}
+	if (isKey(data, "down", "\x1b[B", "\x1bOB")) {
+		setBuffer(buffer, moveCursorVertically(buffer, safeCursor, 1));
+		return;
+	}
+	if (data === "\x1b[H" || data === "\x1b[1~") {
+		setBuffer(buffer, lineStartOffset(buffer, safeCursor));
+		return;
+	}
+	if (data === "\x1b[F" || data === "\x1b[4~") {
+		setBuffer(buffer, lineEndOffset(buffer, safeCursor));
+		return;
+	}
 	if (isKey(data, "backspace")) {
-		setBuffer(buffer.slice(0, -1));
+		if (safeCursor > 0) setBuffer(buffer.slice(0, safeCursor - 1) + buffer.slice(safeCursor), safeCursor - 1);
 		return;
 	}
 	if (field.type === "number") {
 		if (data === "+") {
 			const n = Number(buffer);
-			setBuffer(String(Number.isNaN(n) ? 1 : n + 1));
+			const next = String(Number.isNaN(n) ? 1 : n + 1);
+			setBuffer(next, next.length);
 			return;
 		}
 		if (data === "-") {
 			const n = Number(buffer);
-			setBuffer(String(Number.isNaN(n) ? 0 : n - 1));
+			const next = String(Number.isNaN(n) ? 0 : n - 1);
+			setBuffer(next, next.length);
 			return;
 		}
 	}
 	// Allow typing printable characters
 	if (data.length === 1 && data >= " " && data <= "~") {
-		setBuffer(buffer + data);
+		setBuffer(buffer.slice(0, safeCursor) + data + buffer.slice(safeCursor), safeCursor + data.length);
 	}
+}
+
+function renderBufferWithCursor(buffer: string, cursor: number): string[] {
+	const safeCursor = clampCursor(buffer, cursor);
+	const rendered = `${buffer.slice(0, safeCursor)}▏${buffer.slice(safeCursor)}`;
+	return rendered.split("\n");
+}
+
+function clampCursor(buffer: string, cursor: number): number {
+	return Math.max(0, Math.min(buffer.length, cursor));
+}
+
+function lineStartOffset(buffer: string, cursor: number): number {
+	const safeCursor = clampCursor(buffer, cursor);
+	const previousBreak = buffer.lastIndexOf("\n", Math.max(0, safeCursor - 1));
+	return previousBreak < 0 ? 0 : previousBreak + 1;
+}
+
+function lineEndOffset(buffer: string, cursor: number): number {
+	const safeCursor = clampCursor(buffer, cursor);
+	const nextBreak = buffer.indexOf("\n", safeCursor);
+	return nextBreak < 0 ? buffer.length : nextBreak;
+}
+
+function moveCursorVertically(buffer: string, cursor: number, direction: -1 | 1): number {
+	const safeCursor = clampCursor(buffer, cursor);
+	const lineStart = lineStartOffset(buffer, safeCursor);
+	const column = safeCursor - lineStart;
+	if (direction < 0) {
+		if (lineStart === 0) return safeCursor;
+		const previousLineEnd = lineStart - 1;
+		const previousLineStart = lineStartOffset(buffer, previousLineEnd);
+		return Math.min(previousLineStart + column, previousLineEnd);
+	}
+	const lineEnd = lineEndOffset(buffer, safeCursor);
+	if (lineEnd >= buffer.length) return safeCursor;
+	const nextLineStart = lineEnd + 1;
+	const nextLineEnd = lineEndOffset(buffer, nextLineStart);
+	return Math.min(nextLineStart + column, nextLineEnd);
 }
 
 class AgentDetailOverlay implements Component {
@@ -2398,13 +2576,10 @@ class KanadePanel implements Component {
 		this.invalidateAndRender();
 		try {
 			const config = await getJson<Record<string, unknown>>("/config");
-			await this.ui.custom<void>(
-				(tui, theme, _keybindings, done) => new SettingsOverlay(tui, theme, this.ui, config, done),
-				{
-					overlay: true,
-					overlayOptions: { anchor: "top-center", offsetY: 3, width: "80%", minWidth: 80, maxHeight: "80%" },
-				},
-			);
+			await this.ui.custom<void>((tui, theme, _keybindings, done) => new SettingsOverlay(tui, theme, config, done), {
+				overlay: true,
+				overlayOptions: { anchor: "top-center", offsetY: 3, width: "80%", minWidth: 80, maxHeight: "80%" },
+			});
 		} catch (error) {
 			this.lastNotice = { kind: "error", text: error instanceof Error ? error.message : String(error) };
 			this.ui.notify(this.lastNotice.text, "error");
@@ -2785,6 +2960,19 @@ function fitBodyRows(body: string[], minRows: number, maxRows: number): string[]
 	if (content.length < minRows - 1)
 		content = [...content, ...Array.from({ length: minRows - 1 - content.length }, () => "")];
 	return [...content, help];
+}
+
+function windowAroundSelection<T>(
+	items: T[],
+	selected: number,
+	rows: number,
+): { items: T[]; start: number; end: number } {
+	const count = Math.max(1, rows);
+	if (items.length <= count) return { items, start: 0, end: items.length };
+	const half = Math.floor(count / 2);
+	const start = Math.max(0, Math.min(items.length - count, selected - half));
+	const end = Math.min(items.length, start + count);
+	return { items: items.slice(start, end), start, end };
 }
 
 function box(body: string[], width: number, title: string, theme: Theme): string[] {
