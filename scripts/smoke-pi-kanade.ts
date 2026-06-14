@@ -29,6 +29,25 @@ const TASK_FAILED: Record<string, unknown> = {
 	created_at: Date.now() - 120_000,
 	started_at: Date.now() - 90_000,
 	finished_at: Date.now() - 30_000,
+	worktree_summary: { status: "preserved", count: 1, branch: "kanade/T-0002", path: "/tmp/T-0002" },
+};
+
+const TASK_FAILED_MERGED: Record<string, unknown> = {
+	id: "T-0006",
+	status: "aborted",
+	workflow_source: "saved",
+	workflow_name: "failed-but-merged",
+	error: "manual merge reconciled after abort",
+	created_at: Date.now() - 180_000,
+	started_at: Date.now() - 150_000,
+	finished_at: Date.now() - 90_000,
+	worktree_summary: {
+		status: "merged",
+		count: 1,
+		branch: "kanade/T-0006",
+		path: "/tmp/T-0006",
+		merge_commit: "def456",
+	},
 };
 
 const TASK_MERGED: Record<string, unknown> = {
@@ -199,6 +218,34 @@ const REVIEW_BLOCKED: Record<string, unknown> = {
 	iteration_chain: ["T-0004"],
 };
 
+const REVIEW_FAILED_MERGED: Record<string, unknown> = {
+	task_id: "T-0006",
+	status: "aborted",
+	state: "merged",
+	mergeable: false,
+	recommendation: "Already merged",
+	blockers: [],
+	checks: {},
+	workflow: { source: "saved", name: "failed-but-merged" },
+	worktree: {
+		status: "merged",
+		count: 1,
+		branch: "kanade/T-0006",
+		path: "/tmp/T-0006",
+		merge_commit: "def456",
+		has_changes: true,
+		changed_files_count: 1,
+		diff_stat: "1 file changed, 2 insertions(+)",
+	},
+	review: {
+		agents: { total: 1, done: 1, failed: 0 },
+		phases: { completed: 1, in_progress: 0 },
+		human_gates: { pending: 0, resolved: 0 },
+	},
+	usage: USAGE,
+	iteration_chain: ["T-0006"],
+};
+
 const REVIEW_NO_CHANGES: Record<string, unknown> = {
 	task_id: "T-0005",
 	status: "finished",
@@ -282,7 +329,7 @@ function mockFetch(url: string | URL | Request, init?: RequestInit): Promise<Res
 
 	if (path === "/health") return json({ ok: true });
 	if (path === "/tasks" && method === "GET")
-		return json({ tasks: [TASK, TASK_FAILED, TASK_MERGED, TASK_BLOCKED, TASK_CHECKS_MISSING] });
+		return json({ tasks: [TASK, TASK_FAILED, TASK_MERGED, TASK_BLOCKED, TASK_CHECKS_MISSING, TASK_FAILED_MERGED] });
 	if (path === "/inbox") return json({ requests: [] });
 	if (/^\/tasks\/T-0001\/snapshot$/.test(path)) return json({ snapshot: SNAPSHOT });
 	if (/^\/tasks\/T-0001\/script$/.test(path)) return json({ script: SCRIPT });
@@ -361,6 +408,15 @@ function mockFetch(url: string | URL | Request, init?: RequestInit): Promise<Res
 	if (/^\/tasks\/T-0005\/script$/.test(path)) return json({ script: SCRIPT });
 	if (/^\/tasks\/T-0005\/worktrees$/.test(path)) return json({ worktrees: [] });
 	if (/^\/tasks\/T-0005\/sessions$/.test(path)) return json({ sessions: [] });
+	if (/^\/tasks\/T-0006\/review$/.test(path)) return json(REVIEW_FAILED_MERGED);
+	if (/^\/tasks\/T-0006$/.test(path) && method === "GET") return json({ task: TASK_FAILED_MERGED, usage: USAGE });
+	if (/^\/tasks\/T-0006\/snapshot$/.test(path)) return json({ snapshot: { ...SNAPSHOT, name: "failed-but-merged" } });
+	if (/^\/tasks\/T-0006\/script$/.test(path)) return json({ script: SCRIPT });
+	if (/^\/tasks\/T-0006\/worktrees$/.test(path))
+		return json({
+			worktrees: [{ branch: "kanade/T-0006", worktree_path: "/tmp/T-0006", status: "merged", merge_commit: "def456" }],
+		});
+	if (/^\/tasks\/T-0006\/sessions$/.test(path)) return json({ sessions: [] });
 	if (path === "/config" && method === "GET") return json(MOCK_CONFIG);
 	if (path === "/config" && method === "PATCH") {
 		let body: Record<string, unknown> = {};
@@ -416,6 +472,14 @@ function mockFetch(url: string | URL | Request, init?: RequestInit): Promise<Res
 	}
 	if (/^\/tasks\/T-0005\/events$/.test(path)) {
 		return new Response("", { status: 200, headers: { "content-type": "text/event-stream" } });
+	}
+	if (/^\/tasks\/T-0006\/events$/.test(path)) {
+		const now = Date.now();
+		const sse = [
+			`event: task.aborted\nid: 1\ndata: ${JSON.stringify({ id: 1, type: "task.aborted", taskId: "T-0006", data: {}, ts: now - 100000 })}\n\n`,
+			`event: task.merged\nid: 2\ndata: ${JSON.stringify({ id: 2, type: "task.merged", taskId: "T-0006", data: { mergeCommit: "def456" }, ts: now - 90000 })}\n\n`,
+		].join("");
+		return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
 	}
 
 	// Task-detail sub-requests that return errors (for test 5)
@@ -833,6 +897,39 @@ function assert(label: string, condition: boolean, detail?: string) {
 		const text = strip(overlayComp.render(80).join("\n"));
 		assert("action menu opened", text.includes("Actions"), `overlay: ${text.slice(0, 300)}`);
 		assert("shows reconcile action", text.includes("Reconcile manual merge"), `overlay: ${text.slice(0, 300)}`);
+		overlayComp.handleInput?.("\x1b");
+		actionCall.resolve(null);
+	}
+}
+
+// ---------- Test 5c: failed-but-merged task actions are read-only ----------
+{
+	console.log("\nTest 5c: failed-but-merged task actions are read-only");
+	customCalls.length = 0;
+	const panel = await createPanel();
+	panel.handleInput("/");
+	for (const ch of "T-0006") panel.handleInput(ch);
+	panel.handleInput("\r");
+	await delay(150);
+	const actionCall = customCalls.at(-1);
+	if (!actionCall) {
+		assert("action menu opened", false);
+	} else {
+		const overlayComp = actionCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
+		const text = strip(overlayComp.render(90).join("\n"));
+		assert("action menu opened", text.includes("Actions"), `overlay: ${text.slice(0, 400)}`);
+		assert("shows merge summary action", text.includes("Open merge summary"), `overlay: ${text.slice(0, 400)}`);
+		assert(
+			"hides reconcile for merged task",
+			!text.includes("Reconcile manual merge"),
+			`overlay: ${text.slice(0, 400)}`,
+		);
+		assert("hides reject cleanup for merged task", !text.includes("Reject cleanup"), `overlay: ${text.slice(0, 400)}`);
+		assert(
+			"hides iterate for merged failed task",
+			!text.includes("Iterate with instructions"),
+			`overlay: ${text.slice(0, 400)}`,
+		);
 		overlayComp.handleInput?.("\x1b");
 		actionCall.resolve(null);
 	}

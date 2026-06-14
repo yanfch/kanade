@@ -1829,24 +1829,34 @@ class KanadePanel implements Component {
 	private actionItems(task: KanadeTask): ActionItem[] {
 		const items: ActionItem[] = [];
 		const detail = this.details.get(task.id);
-		if (task.status === "needs_human") items.push({ key: "respond", label: "Respond to human request" });
-		// Gate merge: hide for merged, no-changes, and non-finished tasks
 		const review = detail?.review;
-		const isMerged = review?.state === "merged" || task.worktree_summary?.status === "merged";
-		const isNoChanges = review?.state === "no_changes";
-		if (!isMerged && !isNoChanges && isTaskMergeable(task, review))
-			items.push({ key: "merge", label: "Merge task", danger: true });
-		if (task.status === "failed" || task.status === "aborted") {
-			items.push({ key: "recovery", label: "Open recovery view" });
-			items.push({ key: "reconcile", label: "Reconcile manual merge" });
-			items.push({ key: "iterate", label: "Iterate with instructions" });
-			items.push({ key: "reject", label: "Reject cleanup preserved worktree", danger: true });
+		switch (taskActionState(task, review)) {
+			case "needs_human":
+				items.push({ key: "respond", label: "Respond to human request" });
+				items.push({ key: "abort", label: "Abort task", danger: true });
+				break;
+			case "active":
+				items.push({ key: "abort", label: "Abort task", danger: true });
+				break;
+			case "merge_ready":
+				items.push({ key: "merge", label: "Merge task", danger: true });
+				items.push({ key: "iterate", label: "Iterate with instructions" });
+				break;
+			case "finished_review":
+				items.push({ key: "iterate", label: "Iterate with instructions" });
+				break;
+			case "terminal_preserved":
+				items.push({ key: "recovery", label: "Open recovery view" });
+				items.push({ key: "reconcile", label: "Reconcile manual merge" });
+				items.push({ key: "iterate", label: "Iterate with instructions" });
+				items.push({ key: "reject", label: "Reject cleanup preserved worktree", danger: true });
+				break;
+			case "terminal_merged":
+				items.push({ key: "recovery", label: "Open merge summary" });
+				break;
+			case "terminal_cleaned":
+				break;
 		}
-		if (task.status === "running" || task.status === "needs_human" || task.status === "created") {
-			items.push({ key: "abort", label: "Abort task", danger: true });
-		}
-		if (task.status !== "running" && task.status !== "created")
-			items.push({ key: "iterate", label: "Iterate with instructions" });
 		items.push({ key: "agent", label: "Open agent detail" });
 		items.push({ key: "refresh", label: "Refresh" });
 		return dedupeActions(items);
@@ -2478,15 +2488,22 @@ class KanadePanel implements Component {
 	}
 
 	private worktreeLines(task: KanadeTask, detail: TaskDetail | undefined, width: number): string[] {
-		const isRecovery = task.status === "failed" || task.status === "aborted";
-		const lines = [this.color("muted", isRecovery ? "Recovery Center" : "Worktree")];
+		const isTerminalFailure = task.status === "failed" || task.status === "aborted";
 		const worktrees = detail?.worktrees ?? [];
 		// Prefer review endpoint data which includes git-derived diff details;
 		// fall back to lightweight list summary for status display before detail loads.
 		const summary = detail?.review?.worktree ?? task.worktree_summary;
-		if (isRecovery) {
+		const isMerged = detail?.review?.state === "merged" || summary?.status === "merged";
+		const lines = [
+			this.color("muted", isTerminalFailure && !isMerged ? "Recovery Center" : isMerged ? "Merge Summary" : "Worktree"),
+		];
+		if (isTerminalFailure && !isMerged) {
 			lines.push(`${this.color("error", "✖")} ${task.id} ${taskTitle(task, width - 10)}`);
 			lines.push(this.color("dim", `Failure: ${sanitizeText(truncatePlain(task.error ?? "unknown", width - 9))}`));
+			lines.push("");
+		} else if (isTerminalFailure && isMerged) {
+			lines.push(`${this.color("success", "✓")} ${task.id} was manually reconciled as merged`);
+			lines.push(this.color("dim", `Original task status: ${task.status}`));
 			lines.push("");
 		}
 		if (summary) {
@@ -2497,7 +2514,7 @@ class KanadePanel implements Component {
 				lines.push(`${this.color("dim", "Commit")}   ${truncatePlain(summary.merge_commit, width - 9)}`);
 			lines.push("");
 		}
-		if (isRecovery) lines.push(this.color("muted", "Preserved Assets"));
+		if (isTerminalFailure && !isMerged) lines.push(this.color("muted", "Preserved Assets"));
 		if (worktrees.length === 0) {
 			lines.push(this.color("dim", "No worktree records found."));
 		} else {
@@ -2510,7 +2527,7 @@ class KanadePanel implements Component {
 				lines.push("");
 			}
 		}
-		if (isRecovery) {
+		if (isTerminalFailure && !isMerged) {
 			lines.push(this.color("muted", "Recommended Actions"));
 			lines.push("  1. Open agent detail and inspect the failed step");
 			lines.push("  2. If branch was manually merged, run Reconcile manual merge");
@@ -2854,6 +2871,31 @@ function checkLabel(key: string): string {
 		human_gates_resolved: "Human gates resolved",
 	};
 	return labels[key] ?? key;
+}
+
+type TaskActionState =
+	| "active"
+	| "needs_human"
+	| "merge_ready"
+	| "finished_review"
+	| "terminal_preserved"
+	| "terminal_merged"
+	| "terminal_cleaned";
+
+function taskActionState(task: KanadeTask, review?: ReviewSummary | null): TaskActionState {
+	const summary = task.worktree_summary;
+	const merged = review?.state === "merged" || summary?.status === "merged";
+	if (merged) return "terminal_merged";
+	if (task.status === "needs_human") return "needs_human";
+	if (task.status === "running" || task.status === "created") return "active";
+	if (task.status === "failed" || task.status === "aborted") {
+		if (summary?.status === "preserved" || summary?.status === "active" || summary?.status === "inactive") {
+			return "terminal_preserved";
+		}
+		return "terminal_cleaned";
+	}
+	if (isTaskMergeable(task, review)) return "merge_ready";
+	return "finished_review";
 }
 
 function isTaskMergeable(task: KanadeTask, review?: ReviewSummary | null): boolean {
