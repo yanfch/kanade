@@ -12,6 +12,7 @@ import { TaskManager } from "./task-manager.ts";
 import { createMockSessionFactory } from "./test-session-mock.ts";
 
 const SIMPLE_SCRIPT = "export const meta = { name: 'demo', description: 'Demo' }\nreturn { ok: true }";
+const TEST_GIT_AUTHOR = ["-c", "user.name=Kanade Test", "-c", "user.email=kanade@example.com"];
 
 function setup(
 	author?: { generate(prompt: string, options?: { model?: string; workspaceRoot?: string }): Promise<string> },
@@ -275,7 +276,7 @@ describe("GET /tasks", () => {
 			execFileSync("git", ["worktree", "add", tmpDir, branchName], { encoding: "utf8" });
 			writeFileSync(join(tmpDir, "struct-test.txt"), "struct content");
 			execFileSync("git", ["add", "struct-test.txt"], { cwd: tmpDir, encoding: "utf8" });
-			execFileSync("git", ["commit", "-m", "struct test"], { cwd: tmpDir, encoding: "utf8" });
+			execFileSync("git", [...TEST_GIT_AUTHOR, "commit", "-m", "struct test"], { cwd: tmpDir, encoding: "utf8" });
 
 			// Create a finished task with an active worktree pointing to the real branch
 			store.insertTask({
@@ -1141,7 +1142,7 @@ describe("GET /tasks/:id/review", () => {
 			// Make a commit in the worktree
 			writeFileSync(join(tmpDir, "review-test.txt"), "review content");
 			execFileSync("git", ["add", "review-test.txt"], { cwd: tmpDir, encoding: "utf8" });
-			execFileSync("git", ["commit", "-m", "review test"], { cwd: tmpDir, encoding: "utf8" });
+			execFileSync("git", [...TEST_GIT_AUTHOR, "commit", "-m", "review test"], { cwd: tmpDir, encoding: "utf8" });
 
 			const now = Date.now();
 			store.insertWorktree({
@@ -1483,7 +1484,7 @@ describe("POST /tasks/:id/merge — review gating", () => {
 			execFileSync("git", ["worktree", "add", tmpDir, branchName], { encoding: "utf8" });
 			writeFileSync(join(tmpDir, "test.txt"), "content");
 			execFileSync("git", ["add", "test.txt"], { cwd: tmpDir, encoding: "utf8" });
-			execFileSync("git", ["commit", "-m", "test"], { cwd: tmpDir, encoding: "utf8" });
+			execFileSync("git", [...TEST_GIT_AUTHOR, "commit", "-m", "test"], { cwd: tmpDir, encoding: "utf8" });
 
 			const now = Date.now();
 			store.insertWorktree({
