@@ -253,7 +253,7 @@ describe("CLI — recovery", () => {
 		}
 	});
 
-	it("reconciles a manually merged failed task with an explicit commit", async () => {
+	it("reconciles a failed task with an explicit branch-tip commit", async () => {
 		const res = await fetch(`${BASE_URL}/tasks`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
@@ -264,14 +264,20 @@ describe("CLI — recovery", () => {
 		});
 		const task = (await res.json()) as { task_id: string };
 		await waitForTask(task.task_id, "failed");
-		const head = execSync("git rev-parse HEAD", { encoding: "utf8", cwd: join(import.meta.dirname, "../..") }).trim();
+		const before = cliJson(`show ${task.task_id}`) as { worktrees: Array<{ branch: string }> };
+		const branch = before.worktrees[0]?.branch;
+		expect(branch).toBeTruthy();
+		const branchTip = execSync(`git rev-parse ${branch}`, {
+			encoding: "utf8",
+			cwd: join(import.meta.dirname, "../.."),
+		}).trim();
 
 		try {
-			const out = cli(`reconcile ${task.task_id} --merge-commit ${head}`);
+			const out = cli(`reconcile ${task.task_id} --merge-commit ${branchTip}`);
 			expect(out).toContain("Reconciled manual merge");
-			expect(out).toContain(head.slice(0, 12));
+			expect(out).toContain(branchTip.slice(0, 12));
 			const body = cliJson(`show ${task.task_id}`) as { worktrees: Array<{ status: string; merge_commit: string }> };
-			expect(body.worktrees[0]).toMatchObject({ status: "merged", merge_commit: head });
+			expect(body.worktrees[0]).toMatchObject({ status: "merged", merge_commit: branchTip });
 		} finally {
 			cli(`reject ${task.task_id}`);
 		}

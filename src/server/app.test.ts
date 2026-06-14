@@ -228,6 +228,82 @@ describe("POST /tasks/:id/reconcile", () => {
 			store.close();
 		}
 	});
+
+	it("does not mistake later merge commits for an older branch merge", async () => {
+		const { store, app, root, config } = setup();
+		try {
+			config.merge.targetBranch = "main";
+			const repo = join(root, "repo-later-merge");
+			mkdirSync(repo, { recursive: true });
+			execFileSync("git", ["init", "-b", "main"], { cwd: repo, encoding: "utf8" });
+			writeFileSync(join(repo, "base.txt"), "base\n");
+			execFileSync("git", ["add", "base.txt"], { cwd: repo, encoding: "utf8" });
+			execFileSync("git", [...TEST_GIT_AUTHOR, "commit", "-m", "base"], { cwd: repo, encoding: "utf8" });
+
+			execFileSync("git", ["checkout", "-b", "kanade/old"], { cwd: repo, encoding: "utf8" });
+			writeFileSync(join(repo, "old.txt"), "old\n");
+			execFileSync("git", ["add", "old.txt"], { cwd: repo, encoding: "utf8" });
+			execFileSync("git", [...TEST_GIT_AUTHOR, "commit", "-m", "old"], { cwd: repo, encoding: "utf8" });
+			execFileSync("git", ["checkout", "main"], { cwd: repo, encoding: "utf8" });
+			execFileSync("git", [...TEST_GIT_AUTHOR, "merge", "--no-ff", "kanade/old", "-m", "merge old"], {
+				cwd: repo,
+				encoding: "utf8",
+			});
+			const oldMerge = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+
+			execFileSync("git", ["checkout", "-b", "kanade/new"], { cwd: repo, encoding: "utf8" });
+			writeFileSync(join(repo, "new.txt"), "new\n");
+			execFileSync("git", ["add", "new.txt"], { cwd: repo, encoding: "utf8" });
+			execFileSync("git", [...TEST_GIT_AUTHOR, "commit", "-m", "new"], { cwd: repo, encoding: "utf8" });
+			execFileSync("git", ["checkout", "main"], { cwd: repo, encoding: "utf8" });
+			execFileSync("git", [...TEST_GIT_AUTHOR, "merge", "--no-ff", "kanade/new", "-m", "merge new"], {
+				cwd: repo,
+				encoding: "utf8",
+			});
+			const newMerge = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+			expect(newMerge).not.toBe(oldMerge);
+
+			const now = Date.now();
+			store.insertTask({
+				id: "TR-old",
+				workflow_source: "saved",
+				workflow_name: "dev-standard",
+				workflow_path: join(root, "old.js"),
+				status: "failed",
+				base_repo: repo,
+				base_branch: "main",
+				cwd: repo,
+				created_at: now,
+				started_at: now,
+				finished_at: now,
+				error: "failed after manual merge",
+				options: "{}",
+				result: null,
+			});
+			store.insertWorktree({
+				id: "wt-old",
+				task_id: "TR-old",
+				label: "dev",
+				branch: "kanade/old",
+				base_branch: "main",
+				worktree_path: join(root, "old-worktree"),
+				status: "inactive",
+				base_repo: repo,
+				created_at: now,
+				last_used_at: now,
+				finished_at: now,
+				merge_commit: null,
+			});
+
+			const res = await app.request("/tasks/TR-old/reconcile", { method: "POST", body: "{}" });
+			const body = (await res.json()) as { mergeCommit: string };
+			expect(res.status).toBe(200);
+			expect(body.mergeCommit).toBe(oldMerge);
+			expect(body.mergeCommit).not.toBe(newMerge);
+		} finally {
+			store.close();
+		}
+	});
 });
 
 describe("GET /tasks", () => {

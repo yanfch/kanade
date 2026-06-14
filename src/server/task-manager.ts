@@ -896,7 +896,7 @@ export class TaskManager {
 			return { success: false, state: "not_merged", taskId, error: "No worktree records found for task" };
 		}
 		const already = worktrees.find((row) => row.status === "merged" || row.merge_commit);
-		if (already) {
+		if (already && !options.mergeCommit?.trim()) {
 			return {
 				success: true,
 				state: "already_merged",
@@ -907,10 +907,14 @@ export class TaskManager {
 			};
 		}
 
-		const candidates = [...worktrees].sort((a, b) => b.last_used_at - a.last_used_at);
+		const candidates = options.mergeCommit?.trim()
+			? [...worktrees].sort((a, b) => (a === already ? -1 : b === already ? 1 : b.last_used_at - a.last_used_at))
+			: [...worktrees].sort((a, b) => b.last_used_at - a.last_used_at);
 		for (const worktree of candidates) {
+			const branchTip = resolveBranchTip(worktree.base_repo, worktree.branch);
+			if (!branchTip) continue;
 			const mergeCommit = options.mergeCommit?.trim()
-				? verifyGitCommit(worktree.base_repo, options.mergeCommit.trim())
+				? verifyMergeCommitForBranch(worktree.base_repo, options.mergeCommit.trim(), branchTip)
 				: findManualMergeCommit(
 						worktree.base_repo,
 						worktree.branch,
@@ -1522,13 +1526,22 @@ function gitOk(cwd: string, args: string[]): boolean {
 	}
 }
 
-function verifyGitCommit(cwd: string, commit: string): string | null {
+function resolveBranchTip(cwd: string, branch: string): string | null {
+	const branchTip = gitOutput(cwd, ["rev-parse", "--verify", `${branch}^{commit}`]);
+	return branchTip || null;
+}
+
+function verifyMergeCommitForBranch(cwd: string, commit: string, branchTip: string): string | null {
 	const resolved = gitOutput(cwd, ["rev-parse", "--verify", `${commit}^{commit}`]);
-	return resolved || null;
+	if (!resolved) return null;
+	if (!gitOk(cwd, ["merge-base", "--is-ancestor", branchTip, resolved])) return null;
+	const firstParent = gitOutput(cwd, ["rev-parse", "--verify", `${resolved}^1`]);
+	if (firstParent && gitOk(cwd, ["merge-base", "--is-ancestor", branchTip, firstParent])) return null;
+	return resolved;
 }
 
 function findManualMergeCommit(cwd: string, branch: string, targetBranch: string): string | null {
-	const branchTip = gitOutput(cwd, ["rev-parse", "--verify", `${branch}^{commit}`]);
+	const branchTip = resolveBranchTip(cwd, branch);
 	if (!branchTip) return null;
 	const target = gitOutput(cwd, ["rev-parse", "--verify", `${targetBranch}^{commit}`]);
 	if (!target) return null;
@@ -1539,6 +1552,8 @@ function findManualMergeCommit(cwd: string, branch: string, targetBranch: string
 		.map((line) => line.trim())
 		.filter(Boolean);
 	for (const merge of merges) {
+		const firstParent = gitOutput(cwd, ["rev-parse", "--verify", `${merge}^1`]);
+		if (firstParent && gitOk(cwd, ["merge-base", "--is-ancestor", branchTip, firstParent])) continue;
 		const secondParent = gitOutput(cwd, ["rev-parse", "--verify", `${merge}^2`]);
 		if (secondParent && gitOk(cwd, ["merge-base", "--is-ancestor", branchTip, secondParent])) return merge;
 	}
