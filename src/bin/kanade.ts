@@ -638,6 +638,13 @@ function parseWorkflowSize(value: unknown): "small" | "medium" | "large" | undef
 	process.exit(1);
 }
 
+function parseRecoveryStateArg(value: unknown): "preserved" | "merged" | "rejected" | "no_worktree" | undefined {
+	if (value === undefined) return undefined;
+	if (value === "preserved" || value === "merged" || value === "rejected" || value === "no_worktree") return value;
+	console.error(pc.red("✖ --state must be one of: preserved, merged, rejected, no_worktree"));
+	process.exit(1);
+}
+
 async function cmdRun(workflowName: string | undefined, args: ReturnType<typeof parseArgs>["values"]) {
 	const prompt = args.prompt as string | undefined;
 
@@ -812,13 +819,20 @@ async function cmdMerge(taskId: string | undefined) {
 }
 
 async function cmdRecovery(args: ReturnType<typeof parseArgs>["values"]) {
-	const body = (await api("/recovery")) as { tasks: Record<string, unknown>[] };
+	const state = parseRecoveryStateArg(args.state);
+	const showAll = Boolean(args.all);
+	const actionable = Boolean(args.actionable) || !showAll;
+	const query = new URLSearchParams();
+	if (state) query.set("state", state);
+	if (actionable) query.set("actionable", "true");
+	const path = query.size > 0 ? `/recovery?${query}` : "/recovery";
+	const body = (await api(path)) as { tasks: Record<string, unknown>[] };
 	if (args.json) {
 		console.log(JSON.stringify(body.tasks, null, 2));
 		return;
 	}
 	if (body.tasks.length === 0) {
-		console.log(pc.green("✔ No failed/aborted tasks need recovery."));
+		console.log(pc.green(showAll ? "✔ No failed/aborted tasks need recovery." : "✔ No actionable recovery tasks."));
 		return;
 	}
 	header("Recovery");
@@ -836,7 +850,13 @@ async function cmdRecovery(args: ReturnType<typeof parseArgs>["values"]) {
 			},
 		},
 	]);
-	console.log(pc.dim("\n  Use 'kanade show <id>' to inspect or 'kanade reconcile <id>' after a manual merge."));
+	console.log(
+		pc.dim(
+			showAll
+				? "\n  Use 'kanade show <id>' to inspect or 'kanade reconcile <id>' after a manual merge."
+				: "\n  Showing actionable items only. Use 'kanade recovery --all' to include rejected/no-worktree history.",
+		),
+	);
 }
 
 async function cmdReconcile(taskId: string | undefined, args: ReturnType<typeof parseArgs>["values"]) {
@@ -986,6 +1006,11 @@ async function main() {
 			"prepare-command": { type: "string", multiple: true },
 			"workflow-size": { type: "string" },
 			"merge-commit": { type: "string" },
+			state: { type: "string" },
+			actionable: { type: "boolean" },
+			all: { type: "boolean" },
+			dir: { type: "string" },
+			port: { type: "string" },
 			prompt: { type: "string", short: "p" },
 			daemon: { type: "boolean" },
 		},
@@ -1068,7 +1093,7 @@ ${pc.bold("Commands:")}
   ${pc.cyan("workflows")}     ${pc.dim("[--json]")}                      List workflows
   ${pc.cyan("merge")}         ${pc.dim("<task-id>")}                     Merge branch
   ${pc.cyan("reconcile")}     ${pc.dim("<task-id> [--merge-commit sha]")} Mark a manually merged task branch as merged
-  ${pc.cyan("recovery")}      ${pc.dim("[--json]")}                      List failed/aborted tasks with recovery state
+  ${pc.cyan("recovery")}      ${pc.dim("[--state preserved|merged|rejected|no_worktree] [--all] [--json]")} List recovery tasks
   ${pc.cyan("reject")}        ${pc.dim("<task-id>")}                     Reject, remove branch
   ${pc.cyan("abort")}         ${pc.dim("<task-id>")}                     Abort task
   ${pc.cyan("kill")}          ${pc.dim("<task-id> | --all")}              Force kill task(s)

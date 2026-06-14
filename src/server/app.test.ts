@@ -117,6 +117,22 @@ describe("GET /recovery", () => {
 				finished_at: now,
 				merge_commit: null,
 			});
+			store.insertTask({
+				id: "TR-no-worktree",
+				workflow_source: "inline",
+				workflow_name: null,
+				workflow_path: join(root, "missing.js"),
+				status: "failed",
+				base_repo: process.cwd(),
+				base_branch: "main",
+				cwd: process.cwd(),
+				created_at: now - 1,
+				started_at: now - 1,
+				finished_at: now,
+				error: "boom without worktree",
+				options: "{}",
+				result: null,
+			});
 
 			const res = await app.request("/recovery");
 			const body = (await res.json()) as { tasks: Array<Record<string, unknown>> };
@@ -128,6 +144,14 @@ describe("GET /recovery", () => {
 				recovery_state: "preserved",
 			});
 			expect(String(body.tasks[0]?.recommendation)).toContain("Inspect preserved worktree");
+
+			const actionableRes = await app.request("/recovery?actionable=true");
+			const actionable = (await actionableRes.json()) as { tasks: Array<Record<string, unknown>> };
+			expect(actionable.tasks.map((task) => task.id)).toEqual(["TR-preserved"]);
+
+			const noWorktreeRes = await app.request("/recovery?state=no_worktree");
+			const noWorktree = (await noWorktreeRes.json()) as { tasks: Array<Record<string, unknown>> };
+			expect(noWorktree.tasks.map((task) => task.id)).toEqual(["TR-no-worktree"]);
 		} finally {
 			store.close();
 		}

@@ -101,7 +101,11 @@ export function createApp(ctx: AppContext): Hono {
 
 	app.get("/inbox", (c) => c.json({ requests: ctx.taskManager.inbox().map(formatInboxRow) }));
 
-	app.get("/recovery", (c) => c.json({ tasks: ctx.taskManager.listRecovery() }));
+	app.get("/recovery", (c) => {
+		const state = parseRecoveryState(c.req.query("state"));
+		const actionable = parseBooleanQuery(c.req.query("actionable"));
+		return c.json({ tasks: ctx.taskManager.listRecovery({ state, actionable }) });
+	});
 
 	app.get("/events", (c) =>
 		streamSSE(c, async (stream) => {
@@ -357,6 +361,18 @@ export function createApp(ctx: AppContext): Hono {
 	});
 
 	return app;
+}
+
+function parseBooleanQuery(value: string | undefined): boolean | undefined {
+	if (value === undefined) return undefined;
+	return value === "1" || value === "true" || value === "yes";
+}
+
+function parseRecoveryState(
+	value: string | undefined,
+): "preserved" | "merged" | "rejected" | "no_worktree" | undefined {
+	if (value === "preserved" || value === "merged" || value === "rejected" || value === "no_worktree") return value;
+	return undefined;
 }
 
 function resolveSessionFile(

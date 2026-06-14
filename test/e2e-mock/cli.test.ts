@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 let BASE_URL = "http://127.0.0.1:17777";
 let serverProcess: ReturnType<typeof spawn> | null = null;
 let kanadeDir: string;
+const extraServerPids: number[] = [];
 
 function cli(args: string): string {
 	try {
@@ -106,6 +107,15 @@ beforeAll(async () => {
 }, 30_000);
 
 afterAll(() => {
+	for (const pid of extraServerPids) {
+		try {
+			process.kill(-pid, "SIGTERM");
+		} catch {
+			try {
+				process.kill(pid, "SIGTERM");
+			} catch {}
+		}
+	}
 	if (serverProcess) {
 		serverProcess.kill("SIGTERM");
 		serverProcess = null;
@@ -116,6 +126,21 @@ describe("CLI — health", () => {
 	it("returns server status", () => {
 		const out = cli("health");
 		expect(out).toContain("Server is running");
+	});
+});
+
+describe("CLI — start", () => {
+	it("parses --dir and --port when starting a daemon", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "kanade-cli-start-"));
+		const port = 18777 + Math.floor(Math.random() * 1000);
+		const out = cli(`start --dir ${dir} --port ${port} --daemon`);
+		expect(out).toContain("Server started in background");
+		expect(out).toContain(`Dir:  ${dir}`);
+		expect(out).toContain(`Port: ${port}`);
+		const match = out.match(/background:\s*(\d+)/);
+		expect(match?.[1]).toBeTruthy();
+		if (match?.[1]) extraServerPids.push(Number(match[1]));
+		await waitForServer(`http://127.0.0.1:${port}`);
 	});
 });
 
@@ -186,6 +211,73 @@ describe("CLI — show", () => {
 	});
 });
 
+describe("CLI — recovery", () => {
+	it("lists actionable recovery tasks by default and supports --all/--state filters", async () => {
+		const noWorktreeRes = await fetch(`${BASE_URL}/tasks`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				source: "inline",
+				script: `export const meta = { name: 'cli-recovery-no-wt', description: 'Test' }\nthrow new Error('no worktree')`,
+			}),
+		});
+		const noWorktree = (await noWorktreeRes.json()) as { task_id: string };
+		await waitForTask(noWorktree.task_id, "failed");
+
+		const preservedRes = await fetch(`${BASE_URL}/tasks`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				source: "inline",
+				script: `export const meta = { name: 'cli-recovery-preserved', description: 'Test' }\nawait agent('make partial work', { label: 'dev', isolation: 'worktree' })\nthrow new Error('preserved')`,
+			}),
+		});
+		const preserved = (await preservedRes.json()) as { task_id: string };
+		await waitForTask(preserved.task_id, "failed");
+
+		try {
+			const actionable = cliJson("recovery") as Array<{ id: string; recovery_state: string }>;
+			expect(actionable.some((task) => task.id === preserved.task_id && task.recovery_state === "preserved")).toBe(
+				true,
+			);
+			expect(actionable.some((task) => task.id === noWorktree.task_id)).toBe(false);
+
+			const all = cliJson("recovery --all") as Array<{ id: string; recovery_state: string }>;
+			expect(all.some((task) => task.id === noWorktree.task_id && task.recovery_state === "no_worktree")).toBe(true);
+
+			const noWorktreeOnly = cliJson("recovery --all --state no_worktree") as Array<{ id: string }>;
+			expect(noWorktreeOnly.some((task) => task.id === noWorktree.task_id)).toBe(true);
+			expect(noWorktreeOnly.some((task) => task.id === preserved.task_id)).toBe(false);
+		} finally {
+			cli(`reject ${preserved.task_id}`);
+		}
+	});
+
+	it("reconciles a manually merged failed task with an explicit commit", async () => {
+		const res = await fetch(`${BASE_URL}/tasks`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				source: "inline",
+				script: `export const meta = { name: 'cli-reconcile', description: 'Test' }\nawait agent('make partial work', { label: 'dev', isolation: 'worktree' })\nthrow new Error('needs manual merge')`,
+			}),
+		});
+		const task = (await res.json()) as { task_id: string };
+		await waitForTask(task.task_id, "failed");
+		const head = execSync("git rev-parse HEAD", { encoding: "utf8", cwd: join(import.meta.dirname, "../..") }).trim();
+
+		try {
+			const out = cli(`reconcile ${task.task_id} --merge-commit ${head}`);
+			expect(out).toContain("Reconciled manual merge");
+			expect(out).toContain(head.slice(0, 12));
+			const body = cliJson(`show ${task.task_id}`) as { worktrees: Array<{ status: string; merge_commit: string }> };
+			expect(body.worktrees[0]).toMatchObject({ status: "merged", merge_commit: head });
+		} finally {
+			cli(`reject ${task.task_id}`);
+		}
+	});
+});
+
 describe("CLI — workflows", () => {
 	it("lists saved workflows", async () => {
 		await fetch(`${BASE_URL}/workflows/cli-wf-test`, {
@@ -246,9 +338,9 @@ describe("CLI — run", () => {
 		expect(out).toContain(projectRoot);
 	});
 
-	it("passes subagent routing options and task-level prepare commands for generated runs", async () => {
+	it("passes subagent routing options, workflow size, and task-level prepare commands for generated runs", async () => {
 		const created = cliJson(
-			"run --prompt 'return {}' --agent-model gpt-5.3-codex-spark --role-model reviewer=gpt-5.4 --role-model developer=gpt-5.3-codex-spark --prepare-command 'echo prepare-one' --prepare-command 'echo prepare-two'",
+			"run --prompt 'return {}' --workflow-size large --agent-model gpt-5.3-codex-spark --role-model reviewer=gpt-5.4 --role-model developer=gpt-5.3-codex-spark --prepare-command 'echo prepare-one' --prepare-command 'echo prepare-two'",
 		) as { task_id: string };
 		expect(created.task_id).toBeTruthy();
 		await waitForTask(created.task_id);
@@ -256,6 +348,7 @@ describe("CLI — run", () => {
 		const body = cliJson(`show ${created.task_id}`) as { task: { options: string } };
 		const options = JSON.parse(body.task.options);
 		expect(options.author_model).toBeUndefined();
+		expect(options.workflow_size).toBe("large");
 		expect(options.agent_model).toBe("gpt-5.3-codex-spark");
 		expect(options.role_models).toEqual({ reviewer: "gpt-5.4", developer: "gpt-5.3-codex-spark" });
 		expect(options.prepare_commands).toEqual(["echo prepare-one", "echo prepare-two"]);
@@ -281,6 +374,19 @@ describe("CLI — run", () => {
 		expect(options.agent_model).toBe("gpt-5.4");
 		expect(options.role_models).toEqual({ reviewer: "gpt-5.3-codex-spark" });
 		expect(options.prepare_commands).toEqual(["echo prepare-saved"]);
+	});
+
+	it("generates a workflow script with workflow size hint", () => {
+		const out = cli("generate-workflow --prompt 'return {}' --workflow-size small");
+		expect(out).toContain("export const meta");
+		expect(out).toContain("return {}");
+	});
+
+	it("shows workflow size in generated run output", () => {
+		const out = cli("run --prompt 'return {}' --workflow-size small");
+		expect(out).toContain("Task");
+		expect(out).toContain("created");
+		expect(out).toContain("Workflow size: small");
 	});
 
 	it("shows workspace info in output when --cwd is specified", async () => {
@@ -436,8 +542,25 @@ describe("CLI — show usage", () => {
 			`export const meta = { name: 'cli-pending-agents', description: 'Test' }\nreturn 'done'`,
 		);
 		const agentsArray = [
-			{ label: "dev", phase: "Implement", model: "m1", input: 100, output: 50, totalTokens: 150, cost: { total: 0.01 } },
-			{ label: "reviewer", phase: "Review", model: "m2", input: 0, output: 0, totalTokens: 0, cost: { total: 0 }, pending: true },
+			{
+				label: "dev",
+				phase: "Implement",
+				model: "m1",
+				input: 100,
+				output: 50,
+				totalTokens: 150,
+				cost: { total: 0.01 },
+			},
+			{
+				label: "reviewer",
+				phase: "Review",
+				model: "m2",
+				input: 0,
+				output: 0,
+				totalTokens: 0,
+				cost: { total: 0 },
+				pending: true,
+			},
 		];
 		const db = new Database(join(kanadeDir, "db", "state.db"));
 		try {
@@ -460,9 +583,30 @@ describe("CLI — show usage", () => {
 		const taskId = await createTask(
 			`export const meta = { name: 'cli-backcompat', description: 'Test' }\nawait agent('task a', { label: 'dev' })\nreturn 'done'`,
 		);
-		const authorUsage = { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15, cost: { input: 0.0001, output: 0.0002, cacheRead: 0, cacheWrite: 0, total: 0.0003 } };
-		const runtimeUsage = { input: 100, output: 50, cacheRead: 20, cacheWrite: 10, totalTokens: 180, cost: { input: 0.001, output: 0.002, cacheRead: 0.0001, cacheWrite: 0.0001, total: 0.0032 } };
-		const totalUsage = { input: 110, output: 55, cacheRead: 20, cacheWrite: 10, totalTokens: 195, cost: { input: 0.0011, output: 0.0022, cacheRead: 0.0001, cacheWrite: 0.0001, total: 0.0035 } };
+		const authorUsage = {
+			input: 10,
+			output: 5,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 15,
+			cost: { input: 0.0001, output: 0.0002, cacheRead: 0, cacheWrite: 0, total: 0.0003 },
+		};
+		const runtimeUsage = {
+			input: 100,
+			output: 50,
+			cacheRead: 20,
+			cacheWrite: 10,
+			totalTokens: 180,
+			cost: { input: 0.001, output: 0.002, cacheRead: 0.0001, cacheWrite: 0.0001, total: 0.0032 },
+		};
+		const totalUsage = {
+			input: 110,
+			output: 55,
+			cacheRead: 20,
+			cacheWrite: 10,
+			totalTokens: 195,
+			cost: { input: 0.0011, output: 0.0022, cacheRead: 0.0001, cacheWrite: 0.0001, total: 0.0035 },
+		};
 		const db = new Database(join(kanadeDir, "db", "state.db"));
 		try {
 			const row = db.prepare("SELECT usage FROM tasks WHERE id = ?").get(taskId) as { usage: string | null };

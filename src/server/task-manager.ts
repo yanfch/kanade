@@ -658,20 +658,23 @@ export class TaskManager {
 		}));
 	}
 
-	listRecovery(): RecoveryListRow[] {
+	listRecovery(options: { state?: RecoveryListRow["recovery_state"]; actionable?: boolean } = {}): RecoveryListRow[] {
 		const tasks = this.store.listTasksByStatuses(["failed", "aborted"], Number.MAX_SAFE_INTEGER);
 		const taskIds = tasks.map((t) => t.id);
 		const worktreesByTask = this.store.findWorktreesByTaskIds(taskIds);
-		return tasks.map((task) => {
-			const summary = summarizeTaskWorktreesLight(task, worktreesByTask.get(task.id) ?? []);
-			const recoveryState = recoveryStateForSummary(summary);
-			return {
-				...task,
-				worktree_summary: summary,
-				recovery_state: recoveryState,
-				recommendation: recoveryRecommendation(task, summary),
-			};
-		});
+		return tasks
+			.map((task) => {
+				const summary = summarizeTaskWorktreesLight(task, worktreesByTask.get(task.id) ?? []);
+				const recoveryState = recoveryStateForSummary(summary);
+				return {
+					...task,
+					worktree_summary: summary,
+					recovery_state: recoveryState,
+					recommendation: recoveryRecommendation(task, summary),
+				};
+			})
+			.filter((row) => !options.state || row.recovery_state === options.state)
+			.filter((row) => !options.actionable || row.recovery_state === "preserved" || row.recovery_state === "merged");
 	}
 
 	inbox(): NeedsHumanRow[] {
