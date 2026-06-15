@@ -1793,7 +1793,7 @@ class KanadePanel implements Component {
 		if (this.loading) {
 			body.push(`${this.color("dim", "Loading")} Kanade tasks...`);
 		} else if (!this.overview.connected) {
-			body.push(`${this.color("error", "✖ offline")} ${this.color("muted", this.overview.error ?? "unknown error")}`);
+			body.push(`${this.color("error", "× offline")} ${this.color("muted", this.overview.error ?? "unknown error")}`);
 			body.push(this.color("dim", `URL: ${this.overview.baseUrl}`));
 		} else {
 			if (innerWidth >= 104) this.renderWide(body, innerWidth);
@@ -2403,7 +2403,7 @@ class KanadePanel implements Component {
 		}
 		if (task.status === "failed" || task.status === "aborted") {
 			return [
-				`${this.color("error", "✖")} Workflow stopped`,
+				`${this.color("error", "×")} Workflow stopped`,
 				this.color("dim", `    ${sanitizeText(truncatePlain(task.error ?? "No error recorded", width - 4))}`),
 				this.color("warning", "    Recommended: inspect agent history/worktree, iterate, or keep."),
 			];
@@ -2443,7 +2443,7 @@ class KanadePanel implements Component {
 			const isCurrent = currentPhase === group.phase || hasRunning;
 			const isDone = currentIndex >= 0 && phaseIndex < currentIndex;
 			const icon = hasError
-				? this.color("error", "✖")
+				? this.color("error", "×")
 				: isCurrent
 					? this.color("accent", "current")
 					: isDone || task.status === "finished"
@@ -2459,7 +2459,7 @@ class KanadePanel implements Component {
 					agentStatus === "running"
 						? this.color("accent", "running")
 						: agentStatus === "error"
-							? this.color("error", "✖")
+							? this.color("error", "×")
 							: agentStatus === "done"
 								? this.color("success", "✓")
 								: this.color("dim", "○");
@@ -2490,7 +2490,7 @@ class KanadePanel implements Component {
 			const isCurrent = snapshot.currentPhase === phase || phaseAgents.some((agent) => agent.status === "running");
 			const hasError = phaseAgents.some((agent) => agent.status === "error");
 			const icon = hasError
-				? this.color("error", "✖")
+				? this.color("error", "×")
 				: isCurrent
 					? this.color("accent", "current")
 					: this.color("success", "✓");
@@ -2549,7 +2549,7 @@ class KanadePanel implements Component {
 		if (node.status === "running" || isCursor) return this.color("accent", "current");
 		if (node.status === "done") return this.color("success", "✓");
 		if (node.status === "warning") return this.color("warning", "?");
-		if (node.status === "error") return this.color("error", "✖");
+		if (node.status === "error") return this.color("error", "×");
 		return this.color("dim", "○");
 	}
 
@@ -2563,7 +2563,7 @@ class KanadePanel implements Component {
 				activeAgent.status === "running"
 					? this.color("accent", "running")
 					: activeAgent.status === "error"
-						? this.color("error", "✖")
+						? this.color("error", "×")
 						: this.color("success", "✓");
 			lines.push(
 				`${this.color("muted", "Agent:")} ${icon} ${truncatePlain(activeAgent.label, width - 12)} · ${activeAgent.status}`,
@@ -2595,7 +2595,7 @@ class KanadePanel implements Component {
 						: status === "done"
 							? this.color("success", "✓")
 							: status === "error"
-								? this.color("error", "✖")
+								? this.color("error", "×")
 								: this.color("dim", "○");
 				lines.push(
 					truncateAnsi(
@@ -2673,7 +2673,7 @@ class KanadePanel implements Component {
 			this.color("muted", isTerminalFailure && !isMerged ? "Recovery Center" : isMerged ? "Merge Summary" : "Worktree"),
 		];
 		if (isTerminalFailure && !isMerged) {
-			lines.push(`${this.color("error", "✖")} ${task.id} ${taskTitle(task, width - 10)}`);
+			lines.push(`${this.color("error", "×")} ${task.id} ${taskTitle(task, width - 10)}`);
 			lines.push(this.color("dim", `Failure: ${sanitizeText(truncatePlain(task.error ?? "unknown", width - 9))}`));
 			lines.push("");
 		} else if (isTerminalFailure && isMerged) {
@@ -2786,7 +2786,7 @@ class KanadePanel implements Component {
 		// Checklist
 		const checks = review.checks ?? {};
 		for (const [key, passed] of Object.entries(checks)) {
-			const icon = passed ? this.color("success", "✓") : this.color("error", "✖");
+			const icon = passed ? this.color("success", "✓") : this.color("error", "×");
 			lines.push(`  ${icon} ${checkLabel(key)}`);
 		}
 
@@ -2842,11 +2842,11 @@ class KanadePanel implements Component {
 		const counts = countTasks(this.overview.tasks);
 		const status = this.overview.connected
 			? `${this.color("success", "●")} connected`
-			: `${this.color("error", "✖")} offline`;
+			: `${this.color("error", "×")} offline`;
 		const left = `${status}  ${this.color("dim", this.overview.baseUrl)}`;
 		const running =
 			counts.running > 0 ? `${this.runningToken()}${counts.running} running` : `${this.color("dim", "·")} 0 running`;
-		const right = `${running}   ${this.color("warning", "?")} ${counts.needsHuman} waiting   ${this.color("error", "✖")} ${counts.failed} failed`;
+		const right = `${running}   ${this.color("warning", "?")} ${counts.needsHuman} waiting   ${this.color("error", "×")} ${counts.failed} failed`;
 		const mid = width - visibleWidth(left) - visibleWidth(right);
 		return `${left}${" ".repeat(Math.max(1, mid))}${right}`;
 	}
