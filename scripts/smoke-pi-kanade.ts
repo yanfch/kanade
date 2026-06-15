@@ -1773,6 +1773,42 @@ function assert(label: string, condition: boolean, detail?: string) {
 	Object.assign(MOCK_CONFIG, savedConfig);
 }
 
+// ---------- Test 25b: Settings search, raw config, and restart hints ----------
+{
+	console.log("\nTest 25b: Settings search, raw config, and restart hints");
+	customCalls.length = 0;
+	const panel = await createPanel();
+	panel.handleInput("s");
+	await delay(200);
+	const settingsCall = customCalls.at(-1);
+	if (!settingsCall) {
+		assert("settings overlay opened for search/raw test", false);
+	} else {
+		const comp = settingsCall.component as TestComponent;
+		let text = strip(comp.render(100).join("\n"));
+		assert("shows restart hint", text.includes("[restart]"), `output: ${text.slice(0, 600)}`);
+		assert("shows live hint", text.includes("[live]"), `output: ${text.slice(0, 600)}`);
+		comp.handleInput?.("/");
+		for (const ch of "proxy") comp.handleInput?.(ch);
+		text = strip(comp.render(100).join("\n"));
+		assert("search prompt visible", text.includes("Search: proxy"), `output: ${text.slice(0, 600)}`);
+		assert("search finds proxy fields", text.includes("HTTP Proxy"), `output: ${text.slice(0, 600)}`);
+		assert("search filters unrelated fields", !text.includes("Max Concurrent Tasks"), `output: ${text.slice(0, 600)}`);
+		comp.handleInput?.("\x1b");
+		text = strip(comp.render(100).join("\n"));
+		assert("search clear restores groups", text.includes("[+] Defaults"), `output: ${text.slice(0, 600)}`);
+		comp.handleInput?.("r");
+		text = strip(comp.render(100).join("\n"));
+		assert("raw config view opens", text.includes("Raw config view"), `output: ${text.slice(0, 600)}`);
+		assert("raw config shows json", text.includes('"paths"'), `output: ${text.slice(0, 600)}`);
+		comp.handleInput?.("r");
+		text = strip(comp.render(100).join("\n"));
+		assert("raw config view closes", text.includes("Global Kanade Settings") && !text.includes("Raw config view"));
+		comp.handleInput?.("\x1b");
+		settingsCall.resolve(undefined);
+	}
+}
+
 // ---------- Test 26: Edit roleModels using role=model lines ----------
 {
 	console.log("\nTest 26: Edit roleModels using role=model lines");

@@ -942,6 +942,9 @@ class SettingsOverlay implements Component {
 	private editBuffer?: string;
 	private editCursor = 0;
 	private pendingConfirm?: { message: string; field: SettingsFieldDef; value: unknown };
+	private searchMode = false;
+	private searchQuery = "";
+	private rawMode = false;
 	private readonly expandedGroups = new Set<number>();
 
 	constructor(
@@ -958,14 +961,19 @@ class SettingsOverlay implements Component {
 	render(width: number): string[] {
 		const boxWidth = Math.min(Math.max(72, width), 120);
 		const contentWidth = Math.max(40, boxWidth - 4);
-		const displayItems = this.displayItems();
 		const lines: string[] = [this.theme.fg("muted", "Global Kanade Settings"), ""];
+		if (this.rawMode) return this.renderRawConfig(boxWidth, contentWidth, lines);
+		const displayItems = this.displayItems();
 		lines.push(
 			this.theme.fg(
 				"dim",
 				`Config: ${String((this.config.paths as Record<string, unknown>)?.configFile ?? "unknown")}`,
 			),
 		);
+		if (this.searchMode || this.searchQuery) {
+			const cursor = this.searchMode ? "▏" : "";
+			lines.push(this.theme.fg("accent", `Search: ${this.searchQuery}${cursor}`));
+		}
 		lines.push(rule(Math.min(60, contentWidth), this.theme));
 
 		const listRows = this.editBuffer !== undefined || this.pendingConfirm ? 10 : 16;
@@ -990,12 +998,14 @@ class SettingsOverlay implements Component {
 			const prefix = selected ? this.theme.fg("accent", "▸") : " ";
 			const display = this.displayValue(field, value);
 			const dangerTag = field.dangerous ? this.theme.fg("warning", " ⚠") : "";
+			const restart = settingRequiresRestart(field.key);
+			const lifecycleTag = this.theme.fg(restart ? "warning" : "dim", ` [${restart ? "restart" : "live"}]`);
 			if (field.readOnly) {
 				lines.push(
-					`${prefix} ${this.theme.fg("dim", `${field.label}: ${display}`)}${this.theme.fg("dim", " [read-only]")}`,
+					`${prefix} ${this.theme.fg("dim", `${field.label}: ${display}`)}${this.theme.fg("dim", " [read-only]")}${lifecycleTag}`,
 				);
 			} else {
-				lines.push(`${prefix} ${this.theme.fg("dim", field.label)}: ${display}${dangerTag}`);
+				lines.push(`${prefix} ${this.theme.fg("dim", field.label)}: ${display}${dangerTag}${lifecycleTag}`);
 			}
 		}
 		if (windowed.end < displayItems.length)
@@ -1050,15 +1060,38 @@ class SettingsOverlay implements Component {
 
 		lines.push("");
 		if (!this.editBuffer) {
-			lines.push(this.theme.fg("dim", "↑↓ select · Enter expand/edit/toggle · Esc close"));
+			lines.push(this.theme.fg("dim", "↑↓ select · Enter expand/edit/toggle · / search · r raw · Esc close"));
 		}
 
 		const fitLines = fitBodyRows(lines, 18, 28);
 		return box(fitLines, boxWidth, "Kanade Settings", this.theme);
 	}
 
+	private renderRawConfig(boxWidth: number, contentWidth: number, lines: string[]): string[] {
+		lines.push(this.theme.fg("dim", "Raw config view (read-only)"));
+		lines.push(rule(Math.min(60, contentWidth), this.theme));
+		const raw = JSON.stringify(this.config, null, 2).split("\n");
+		for (const line of raw.slice(0, 18)) lines.push(this.theme.fg("dim", truncatePlain(line, contentWidth)));
+		if (raw.length > 18) lines.push(this.theme.fg("dim", `... ${raw.length - 18} more lines`));
+		lines.push("");
+		lines.push(this.theme.fg("dim", "r back to fields · Esc close"));
+		return box(fitBodyRows(lines, 18, 28), boxWidth, "Kanade Settings", this.theme);
+	}
+
 	private displayItems(): SettingsDisplayItem[] {
 		const items: SettingsDisplayItem[] = [];
+		const query = this.searchQuery.trim().toLowerCase();
+		if (query) {
+			for (let groupIndex = 0; groupIndex < SETTINGS_GROUPS.length; groupIndex++) {
+				const group = SETTINGS_GROUPS[groupIndex]!;
+				for (const field of group.fields) {
+					const haystack = `${field.label} ${field.key} ${field.section} ${group.label}`.toLowerCase();
+					if (haystack.includes(query)) items.push({ kind: "field", groupIndex, field });
+				}
+			}
+			this.selected = Math.min(this.selected, Math.max(0, items.length - 1));
+			return items;
+		}
 		for (let groupIndex = 0; groupIndex < SETTINGS_GROUPS.length; groupIndex++) {
 			const group = SETTINGS_GROUPS[groupIndex]!;
 			const expanded = this.expandedGroups.has(groupIndex);
@@ -1081,6 +1114,19 @@ class SettingsOverlay implements Component {
 	}
 
 	handleInput(data: string): void {
+		if (this.rawMode) {
+			if (data === "r" || data === "R") {
+				this.rawMode = false;
+				this.tui.requestRender();
+				return;
+			}
+			if (isKey(data, "escape", "\x1b") || isKey(data, "ctrl+c") || data === "q" || data === "Q") {
+				this.done();
+				return;
+			}
+			return;
+		}
+
 		if (this.pendingConfirm) {
 			if (
 				isKey(data, "escape", "\x1b") ||
@@ -1127,7 +1173,41 @@ class SettingsOverlay implements Component {
 			return;
 		}
 
+		if (this.searchMode) {
+			if (isKey(data, "escape", "\x1b") || isKey(data, "ctrl+c")) {
+				this.searchMode = false;
+				this.searchQuery = "";
+				this.selected = 0;
+				this.tui.requestRender();
+				return;
+			}
+			if (isKey(data, "return", "\r", "\n") || isKey(data, "enter", "\r", "\n")) {
+				this.searchMode = false;
+				this.tui.requestRender();
+				return;
+			}
+			if (isKey(data, "backspace")) {
+				this.searchQuery = this.searchQuery.slice(0, -1);
+				this.selected = 0;
+				this.tui.requestRender();
+				return;
+			}
+			if (data.length === 1 && data >= " " && data <= "~") {
+				this.searchQuery += data;
+				this.selected = 0;
+				this.tui.requestRender();
+				return;
+			}
+			return;
+		}
+
 		if (isKey(data, "escape", "\x1b") || isKey(data, "ctrl+c") || data === "q" || data === "Q") {
+			if (this.searchQuery) {
+				this.searchQuery = "";
+				this.selected = 0;
+				this.tui.requestRender();
+				return;
+			}
 			this.done();
 			return;
 		}
@@ -1141,6 +1221,20 @@ class SettingsOverlay implements Component {
 			this.selected = Math.min(this.displayItems().length - 1, this.selected + 1);
 			this.notice = undefined;
 			this.savedField = undefined;
+			return;
+		}
+		if (data === "/") {
+			this.searchMode = true;
+			this.notice = undefined;
+			this.savedField = undefined;
+			this.tui.requestRender();
+			return;
+		}
+		if (data === "r" || data === "R") {
+			this.rawMode = true;
+			this.notice = undefined;
+			this.savedField = undefined;
+			this.tui.requestRender();
 			return;
 		}
 		if (isKey(data, "return", "\r", "\n") || isKey(data, "enter", "\r", "\n")) {
@@ -1296,6 +1390,18 @@ class SettingsOverlay implements Component {
 		}
 		current[parts[parts.length - 1]!] = value;
 	}
+}
+
+function settingRequiresRestart(key: string): boolean {
+	return (
+		key === "server.port" ||
+		key === "server.bind" ||
+		key.startsWith("paths.") ||
+		key === "models.authPath" ||
+		key === "models.modelsPath" ||
+		key === "models.agentDir" ||
+		key === "models.piAgentDir"
+	);
 }
 
 function buildConfigPatch(key: string, value: unknown): Record<string, unknown> {
