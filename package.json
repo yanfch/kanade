@@ -22,6 +22,7 @@
 		"live:accept": "tsx scripts/live-acceptance.ts",
 		"smoke:pi-kanade": "tsx scripts/smoke-pi-kanade.ts",
 		"smoke:generated-workflow": "tsx scripts/generated-workflow-smoke.ts",
+		"smoke:generated-live": "tsx scripts/generated-live-smoke.ts",
 		"lint": "biome check src/ scripts/",
 		"lint:fix": "biome check --write src/",
 		"format": "biome format --write src/",
