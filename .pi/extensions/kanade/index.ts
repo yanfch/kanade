@@ -1692,7 +1692,7 @@ class AgentDetailOverlay implements Component {
 		}
 		body.push(this.theme.fg("dim", "r refresh · Esc close"));
 		this.cachedWidth = width;
-		this.cachedLines = box(fitBodyRows(body, 27, 30), width, "Kanade Agent Detail", this.theme);
+		this.cachedLines = box(fitBodyRows(body, 24, 27), width, "Kanade Agent Detail", this.theme);
 		return this.cachedLines;
 	}
 
@@ -1978,7 +1978,7 @@ class KanadePanel implements Component {
 				(tui, theme, _keybindings, done) => new AgentDetailOverlay(tui, theme, task, done, initialDetail),
 				{
 					overlay: true,
-					overlayOptions: { anchor: "top-center", offsetY: 5, width: "90%", minWidth: 104, maxHeight: "80%" },
+					overlayOptions: { anchor: "top-center", offsetY: 5, width: "88%", minWidth: 104, maxHeight: "72%" },
 				},
 			);
 		} finally {
