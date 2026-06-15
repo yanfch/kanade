@@ -944,7 +944,7 @@ class SettingsOverlay implements Component {
 	private pendingConfirm?: { message: string; field: SettingsFieldDef; value: unknown };
 	private searchMode = false;
 	private searchQuery = "";
-	private rawMode = false;
+	private rawMode: "selected" | "all" | undefined;
 	private readonly expandedGroups = new Set<number>();
 
 	constructor(
@@ -962,7 +962,7 @@ class SettingsOverlay implements Component {
 		const boxWidth = Math.min(Math.max(72, width), 120);
 		const contentWidth = Math.max(40, boxWidth - 4);
 		const lines: string[] = [this.theme.fg("muted", "Global Kanade Settings"), ""];
-		if (this.rawMode) return this.renderRawConfig(boxWidth, contentWidth, lines);
+		if (this.rawMode) return this.renderRawConfig(boxWidth, contentWidth, lines, this.rawMode);
 		const displayItems = this.displayItems();
 		lines.push(
 			this.theme.fg(
@@ -1060,22 +1060,48 @@ class SettingsOverlay implements Component {
 
 		lines.push("");
 		if (!this.editBuffer) {
-			lines.push(this.theme.fg("dim", "↑↓ select · Enter expand/edit/toggle · / search · r raw · Esc close"));
+			lines.push(
+				this.theme.fg(
+					"dim",
+					"↑↓ select · Enter expand/edit/toggle · / search · r raw selected · R raw all · Esc close",
+				),
+			);
 		}
 
 		const fitLines = fitBodyRows(lines, 18, 28);
 		return box(fitLines, boxWidth, "Kanade Settings", this.theme);
 	}
 
-	private renderRawConfig(boxWidth: number, contentWidth: number, lines: string[]): string[] {
-		lines.push(this.theme.fg("dim", "Raw config view (read-only)"));
+	private renderRawConfig(boxWidth: number, contentWidth: number, lines: string[], mode: "selected" | "all"): string[] {
+		const target = mode === "all" ? this.rawAllTarget() : this.rawSelectedTarget();
+		lines.push(this.theme.fg("dim", `Raw · ${target.label} (read-only)`));
 		lines.push(rule(Math.min(60, contentWidth), this.theme));
-		const raw = JSON.stringify(this.config, null, 2).split("\n");
+		const raw = JSON.stringify(target.value, null, 2).split("\n");
 		for (const line of raw.slice(0, 18)) lines.push(this.theme.fg("dim", truncatePlain(line, contentWidth)));
 		if (raw.length > 18) lines.push(this.theme.fg("dim", `... ${raw.length - 18} more lines`));
 		lines.push("");
 		lines.push(this.theme.fg("dim", "r back to fields · Esc close"));
 		return box(fitBodyRows(lines, 18, 28), boxWidth, "Kanade Settings", this.theme);
+	}
+
+	private rawAllTarget(): { label: string; value: unknown } {
+		return { label: "config", value: this.config };
+	}
+
+	private rawSelectedTarget(): { label: string; value: unknown } {
+		const item = this.currentItem();
+		if (item?.kind === "field") return { label: item.field.key, value: this.getFieldValue(item.field.key) };
+		if (item?.kind === "section") {
+			const group = SETTINGS_GROUPS[item.groupIndex];
+			if (group?.section && !group.section.startsWith("_"))
+				return { label: group.section, value: this.getFieldValue(group.section) };
+			if (group) {
+				const value: Record<string, unknown> = {};
+				for (const field of group.fields) value[field.key] = this.getFieldValue(field.key);
+				return { label: group.label, value };
+			}
+		}
+		return this.rawAllTarget();
 	}
 
 	private displayItems(): SettingsDisplayItem[] {
@@ -1116,7 +1142,7 @@ class SettingsOverlay implements Component {
 	handleInput(data: string): void {
 		if (this.rawMode) {
 			if (data === "r" || data === "R") {
-				this.rawMode = false;
+				this.rawMode = undefined;
 				this.tui.requestRender();
 				return;
 			}
@@ -1242,7 +1268,7 @@ class SettingsOverlay implements Component {
 			return;
 		}
 		if (data === "r" || data === "R") {
-			this.rawMode = true;
+			this.rawMode = data === "R" ? "all" : "selected";
 			this.notice = undefined;
 			this.savedField = undefined;
 			this.tui.requestRender();

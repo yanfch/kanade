@@ -1812,11 +1812,16 @@ function assert(label: string, condition: boolean, detail?: string) {
 		assert("search clear restores groups", text.includes("[+] Defaults"), `output: ${text.slice(0, 600)}`);
 		comp.handleInput?.("r");
 		text = strip(comp.render(100).join("\n"));
-		assert("raw config view opens", text.includes("Raw config view"), `output: ${text.slice(0, 600)}`);
-		assert("raw config shows json", text.includes('"paths"'), `output: ${text.slice(0, 600)}`);
+		assert("selected raw config view opens", text.includes("Raw · models"), `output: ${text.slice(0, 600)}`);
+		assert("selected raw config shows section json", text.includes('"mode"'), `output: ${text.slice(0, 600)}`);
 		comp.handleInput?.("r");
 		text = strip(comp.render(100).join("\n"));
-		assert("raw config view closes", text.includes("Global Kanade Settings") && !text.includes("Raw config view"));
+		assert("raw config view closes", text.includes("Global Kanade Settings") && !text.includes("Raw ·"));
+		comp.handleInput?.("R");
+		text = strip(comp.render(100).join("\n"));
+		assert("all raw config view opens", text.includes("Raw · config"), `output: ${text.slice(0, 600)}`);
+		assert("all raw config shows root json", text.includes('"paths"'), `output: ${text.slice(0, 600)}`);
+		comp.handleInput?.("r");
 		comp.handleInput?.("\x1b");
 		settingsCall.resolve(undefined);
 	}
