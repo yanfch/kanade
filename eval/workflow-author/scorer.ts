@@ -27,6 +27,7 @@ export interface AuthorEvalMetrics {
 	usesParallel: boolean;
 	usesRawAgent: boolean;
 	usesRawPipeline: boolean;
+	parseOk: boolean;
 	workflowSizeFit: boolean;
 	projectAgnostic: boolean;
 }
@@ -138,6 +139,7 @@ interface ScriptSignals {
 	lowLevelControlCount: number;
 	iterateArgAccessCount: number;
 	workflowGuidance: string[];
+	parseOk: boolean;
 }
 
 export function scoreAuthorOutput(input: {
@@ -160,6 +162,7 @@ export function scoreAuthorOutput(input: {
 	const usesParallel = (signals.callCounts.get("parallel") ?? 0) > 0;
 	const usesRawAgent = (signals.callCounts.get("agent") ?? 0) > 0;
 	const usesRawPipeline = (signals.callCounts.get("pipeline") ?? 0) > 0;
+	const parseOk = signals.parseOk;
 	const workflowSizeFit = evaluateWorkflowSizeFit(input.evalCase.workflowSize, {
 		primarySteps,
 		agentCountEstimate,
@@ -170,6 +173,11 @@ export function scoreAuthorOutput(input: {
 		usesKinds,
 	});
 	const projectAgnostic = evaluateProjectAgnostic(input.evalCase.projectStack, signals.workflowGuidance);
+
+	if (!parseOk) {
+		score -= 0.35;
+		notes.push("script could not be parsed as JavaScript");
+	}
 
 	if (!workflowSizeFit) {
 		score -= 0.12;
@@ -292,6 +300,7 @@ export function scoreAuthorOutput(input: {
 			usesParallel,
 			usesRawAgent,
 			usesRawPipeline,
+			parseOk,
 			workflowSizeFit,
 			projectAgnostic,
 		},
@@ -321,16 +330,15 @@ function evaluateWorkflowSizeFit(
 			!metrics.hasReview &&
 			!metrics.hasHumanGate &&
 			!metrics.usesParallel &&
-			!metrics.usesKinds.includes("analyze") &&
 			!metrics.usesKinds.includes("continueImplementation")
 		);
 	}
 
 	if (workflowSize === "medium") {
-		return metrics.primarySteps >= 2 && metrics.primarySteps <= 4 && metrics.agentCountEstimate <= 5;
+		return metrics.primarySteps >= 2 && metrics.primarySteps <= 5 && metrics.agentCountEstimate <= 8;
 	}
 
-	return metrics.primarySteps >= 2 && metrics.primarySteps <= 6 && metrics.agentCountEstimate <= 8;
+	return metrics.primarySteps >= 2 && metrics.primarySteps <= 6 && metrics.agentCountEstimate <= 10;
 }
 
 function evaluateProjectAgnostic(stack: AuthorEvalCase["projectStack"], guidanceTexts: string[]): boolean {
@@ -347,6 +355,7 @@ function analyzeScriptStructure(script: string): ScriptSignals {
 		lowLevelControlCount: 0,
 		iterateArgAccessCount: 0,
 		workflowGuidance: [],
+		parseOk: true,
 	};
 
 	try {
@@ -374,7 +383,8 @@ function analyzeScriptStructure(script: string): ScriptSignals {
 			}
 		});
 	} catch {
-		// Ignore parse failures and fall back to zero counts; valid workflows should parse.
+		signals.parseOk = false;
+		// Fall back to zero counts; valid workflows should parse.
 	}
 
 	return signals;

@@ -22,6 +22,7 @@ function result(input: Partial<AuthorEvalResult> & Pick<AuthorEvalResult, "model
 			usesParallel: false,
 			usesRawAgent: false,
 			usesRawPipeline: false,
+			parseOk: true,
 			workflowSizeFit: true,
 			projectAgnostic: true,
 		},

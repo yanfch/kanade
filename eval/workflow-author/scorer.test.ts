@@ -290,6 +290,23 @@ describe("workflow author scorer", () => {
 		expect(result.metrics.usesKinds).toEqual(["implement", "testChange"]);
 	});
 
+	it("reports parse failures clearly", () => {
+		const result = scoreAuthorOutput({
+			evalCase: getCase("C4"),
+			variant: "semantic-no-read",
+			script: [
+				"export const meta = { name: 'bad_multiline', description: 'Bad multiline prompt' };",
+				"phase('Analyze');",
+				"const analysis = await analyze('Analyze this task:",
+				"- invalid newline in single-quoted string', { role: 'planner' });",
+				"return { analysis };",
+			].join("\n"),
+		});
+
+		expect(result.metrics.parseOk).toBe(false);
+		expect(result.notes.join(" | ")).toContain("script could not be parsed as JavaScript");
+	});
+
 	it("flags over-complex workflows for small cases", () => {
 		const result = scoreAuthorOutput({
 			evalCase: getCase("S1"),

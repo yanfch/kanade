@@ -154,7 +154,7 @@ export interface AnnouncerConfig {
 	fallback?: string;
 	/** Timeout for http_post/tsutae_tts requests (ms). Default: 5000 */
 	timeout_ms?: number;
-	/** Tsutae TTS source label. Default: "kanade". */
+	/** Optional legacy Tsutae TTS source label. Token-authenticated Tsutae servers infer this from the application. */
 	source?: string;
 	/** Tsutae TTS voice override. */
 	voice?: string;

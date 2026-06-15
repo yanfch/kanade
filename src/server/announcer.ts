@@ -95,7 +95,7 @@ const builtinHandlers: Record<string, AnnounceHandler> = {
 			headers: { "Content-Type": "application/json", ...ctx.config.headers },
 			body: JSON.stringify({
 				text: ctx.renderedBody,
-				source: ctx.config.source ?? "kanade",
+				...(ctx.config.source ? { source: ctx.config.source } : {}),
 				interrupt: ctx.config.interrupt ?? true,
 				...(ctx.config.voice ? { voice: ctx.config.voice } : {}),
 				...(ctx.config.rate !== undefined ? { rate: ctx.config.rate } : {}),

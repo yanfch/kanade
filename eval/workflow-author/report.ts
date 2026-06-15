@@ -14,7 +14,7 @@ export function formatAuthorEval(results: AuthorEvalResult[]): string {
 		lines.push(`${caseId} — ${caseResults[0].caseName}`);
 		for (const result of caseResults) {
 			lines.push(
-				`  ${result.variant.padEnd(16)} ${result.model.padEnd(28)} score=${result.score.toFixed(3)} size=${result.metrics.workflowSize.padEnd(6)} fit=${formatBool(result.metrics.workflowSizeFit)} steps=${String(result.metrics.primarySteps).padEnd(2)} agents=${String(result.metrics.agentCountEstimate).padEnd(2)} review=${formatBool(result.metrics.hasReview)} test=${formatBool(result.metrics.hasTest)} human=${formatBool(result.metrics.hasHumanGate)} raw=${formatBool(result.metrics.usesRawAgent || result.metrics.usesRawPipeline)} parallel=${formatBool(result.metrics.usesParallel)} project=${formatBool(result.metrics.projectAgnostic)} kinds=[${result.metrics.usesKinds.join(", ")}]`,
+				`  ${result.variant.padEnd(16)} ${result.model.padEnd(28)} score=${result.score.toFixed(3)} size=${result.metrics.workflowSize.padEnd(6)} fit=${formatBool(result.metrics.workflowSizeFit)} steps=${String(result.metrics.primarySteps).padEnd(2)} agents=${String(result.metrics.agentCountEstimate).padEnd(2)} review=${formatBool(result.metrics.hasReview)} test=${formatBool(result.metrics.hasTest)} human=${formatBool(result.metrics.hasHumanGate)} raw=${formatBool(result.metrics.usesRawAgent || result.metrics.usesRawPipeline)} parse=${formatBool(result.metrics.parseOk)} parallel=${formatBool(result.metrics.usesParallel)} project=${formatBool(result.metrics.projectAgnostic)} kinds=[${result.metrics.usesKinds.join(", ")}]`,
 			);
 			if (result.notes.length) lines.push(`    notes: ${result.notes.join("; ")}`);
 		}

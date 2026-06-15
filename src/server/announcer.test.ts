@@ -206,6 +206,37 @@ describe("AnnouncerRegistry", () => {
 		}
 	});
 
+	it("omits Tsutae source when announcer does not configure one", async () => {
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true } as Response);
+		try {
+			const registry = new AnnouncerRegistry([
+				{
+					name: "voice",
+					type: "tsutae_tts",
+					url: "http://127.0.0.1:1338/v1/speak",
+					events: ["task.finished"],
+					body_template: "任务 {{task.id}} 完成",
+					headers: { Authorization: "Bearer tsutae_test" },
+					enabled: true,
+				},
+			]);
+
+			await registry.dispatch(fakeEvent());
+
+			expect(fetchMock).toHaveBeenCalledWith(
+				"http://127.0.0.1:1338/v1/speak",
+				expect.objectContaining({
+					body: JSON.stringify({
+						text: "任务 T-0001 完成",
+						interrupt: true,
+					}),
+				}),
+			);
+		} finally {
+			fetchMock.mockRestore();
+		}
+	});
+
 	it("probe() checks http_post and tsutae_tts announcers with auto enabled", async () => {
 		const probe = vi.fn().mockResolvedValue(true);
 		const registry = new AnnouncerRegistry([
