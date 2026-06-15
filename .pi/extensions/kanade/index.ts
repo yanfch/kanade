@@ -1193,6 +1193,7 @@ class SettingsOverlay implements Component {
 			}
 			if (isKey(data, "return", "\r", "\n") || isKey(data, "enter", "\r", "\n")) {
 				this.searchMode = false;
+				void this.activateField();
 				this.tui.requestRender();
 				return;
 			}

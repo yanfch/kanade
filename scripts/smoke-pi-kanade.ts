@@ -1803,6 +1803,10 @@ function assert(label: string, condition: boolean, detail?: string) {
 			Boolean(selectedBefore) && Boolean(selectedAfter) && selectedBefore !== selectedAfter,
 			`before=${selectedBefore} after=${selectedAfter} output: ${text.slice(0, 600)}`,
 		);
+		comp.handleInput?.("\r");
+		text = strip(comp.render(100).join("\n"));
+		assert("search result enter starts editing", text.includes("Editing"), `output: ${text.slice(0, 600)}`);
+		comp.handleInput?.("\x1b");
 		comp.handleInput?.("\x1b");
 		text = strip(comp.render(100).join("\n"));
 		assert("search clear restores groups", text.includes("[+] Defaults"), `output: ${text.slice(0, 600)}`);
