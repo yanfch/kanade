@@ -248,6 +248,25 @@ describe("CLI — recovery", () => {
 			const noWorktreeOnly = cliJson("recovery --state no_worktree") as Array<{ id: string }>;
 			expect(noWorktreeOnly.some((task) => task.id === noWorktree.task_id)).toBe(true);
 			expect(noWorktreeOnly.some((task) => task.id === preserved.task_id)).toBe(false);
+
+			const dryRun = cliJson(`recovery cleanup --task ${preserved.task_id}`) as {
+				dry_run: boolean;
+				cleaned: number;
+				tasks: Array<{ id: string; recovery_state: string }>;
+			};
+			expect(dryRun).toMatchObject({ dry_run: true, cleaned: 0 });
+			expect(dryRun.tasks.some((task) => task.id === preserved.task_id && task.recovery_state === "preserved")).toBe(
+				true,
+			);
+			const blockedCleanup = cli(`recovery cleanup --task ${preserved.task_id} --execute`);
+			expect(blockedCleanup).toContain("requires --yes");
+			const executedCleanup = cliJson(`recovery cleanup --task ${preserved.task_id} --execute --yes`) as {
+				dry_run: boolean;
+				cleaned: number;
+			};
+			expect(executedCleanup).toMatchObject({ dry_run: false, cleaned: 1 });
+			const afterCleanup = cliJson("recovery") as Array<{ id: string }>;
+			expect(afterCleanup.some((task) => task.id === preserved.task_id)).toBe(false);
 		} finally {
 			cli(`reject ${preserved.task_id}`);
 		}

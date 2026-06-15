@@ -645,6 +645,23 @@ function parseRecoveryStateArg(value: unknown): "preserved" | "merged" | "reject
 	process.exit(1);
 }
 
+function parseDurationMs(value: unknown): number | undefined {
+	if (value === undefined) return undefined;
+	if (typeof value !== "string") {
+		console.error(pc.red("✖ duration must be a string like 7d, 12h, 30m, or 60s"));
+		process.exit(1);
+	}
+	const match = value.trim().match(/^(\d+(?:\.\d+)?)(ms|s|m|h|d)?$/);
+	if (!match) {
+		console.error(pc.red("✖ --older-than must be a duration like 7d, 12h, 30m, or 60s"));
+		process.exit(1);
+	}
+	const amount = Number(match[1]);
+	const unit = match[2] ?? "ms";
+	const multipliers: Record<string, number> = { ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+	return Math.floor(amount * multipliers[unit]);
+}
+
 async function cmdRun(workflowName: string | undefined, args: ReturnType<typeof parseArgs>["values"]) {
 	const prompt = args.prompt as string | undefined;
 
@@ -866,6 +883,61 @@ async function cmdRecovery(args: ReturnType<typeof parseArgs>["values"]) {
 	);
 }
 
+async function cmdRecoveryCleanup(taskIdArg: string | undefined, args: ReturnType<typeof parseArgs>["values"]) {
+	const taskId = ((args.task as string | undefined) ?? taskIdArg)?.trim() || undefined;
+	const olderThanMs = parseDurationMs(args["older-than"]);
+	const execute = Boolean(args.execute) && !args["dry-run"];
+	const confirmed = Boolean(args.yes);
+
+	if (execute && !confirmed) {
+		console.error(pc.red("✖ Recovery cleanup requires --yes when --execute is used."));
+		console.error(pc.dim("  Run without --execute first to preview the dry-run."));
+		process.exit(1);
+	}
+	if (execute && !taskId && olderThanMs === undefined) {
+		console.error(pc.red("✖ Refusing to execute cleanup without --task or --older-than."));
+		process.exit(1);
+	}
+
+	const body = (await api("/recovery/cleanup", {
+		method: "POST",
+		body: JSON.stringify({ task_id: taskId, older_than_ms: olderThanMs, execute, confirmed }),
+	})) as { dry_run: boolean; matched: number; cleaned: number; tasks: Record<string, unknown>[] };
+
+	if (args.json) {
+		console.log(JSON.stringify(body, null, 2));
+		return;
+	}
+
+	if (body.tasks.length === 0) {
+		console.log(pc.green("✔ No preserved recovery worktrees matched."));
+		return;
+	}
+
+	header(body.dry_run ? "Recovery Cleanup (dry run)" : "Recovery Cleanup");
+	printTable(body.tasks, [
+		{ key: "id", label: "ID", width: 10, render: (v) => pc.bold(String(v)) },
+		{ key: "status", label: "Status", width: 12, render: (v) => statusLabel(String(v)) },
+		{ key: "recovery_state", label: "Recovery", width: 14, render: (v) => recoveryStateLabel(String(v)) },
+		{
+			key: "worktree_summary",
+			label: "Branch/Path",
+			width: 34,
+			render: (v) => {
+				const summary = v && typeof v === "object" ? (v as Record<string, unknown>) : {};
+				return pc.dim(String(summary.branch ?? summary.path ?? "-"));
+			},
+		},
+	]);
+	console.log(
+		pc.dim(
+			body.dry_run
+				? "\n  No changes made. Re-run with --execute --yes after reviewing the list."
+				: `\n  Cleaned ${body.cleaned} preserved worktree(s).`,
+		),
+	);
+}
+
 async function cmdReconcile(taskId: string | undefined, args: ReturnType<typeof parseArgs>["values"]) {
 	if (!taskId) {
 		console.error(pc.red("✖ Task ID required. Usage: kanade reconcile <task-id> [--merge-commit <sha>]"));
@@ -1016,6 +1088,11 @@ async function main() {
 			state: { type: "string" },
 			actionable: { type: "boolean" },
 			all: { type: "boolean" },
+			task: { type: "string" },
+			"older-than": { type: "string" },
+			execute: { type: "boolean" },
+			"dry-run": { type: "boolean" },
+			yes: { type: "boolean", short: "y" },
 			dir: { type: "string" },
 			port: { type: "string" },
 			prompt: { type: "string", short: "p" },
@@ -1052,7 +1129,10 @@ async function main() {
 		case "reconcile":
 			return cmdReconcile(positionals[1] as string | undefined, values);
 		case "recovery":
+			if (positionals[1] === "cleanup") return cmdRecoveryCleanup(positionals[2] as string | undefined, values);
 			return cmdRecovery(values);
+		case "recovery-cleanup":
+			return cmdRecoveryCleanup(positionals[1] as string | undefined, values);
 		case "reject":
 			return cmdReject(positionals[1] as string | undefined);
 		case "generate-workflow":
@@ -1101,6 +1181,7 @@ ${pc.bold("Commands:")}
   ${pc.cyan("merge")}         ${pc.dim("<task-id>")}                     Merge branch
   ${pc.cyan("reconcile")}     ${pc.dim("<task-id> [--merge-commit sha]")} Mark a manually merged task branch as merged
   ${pc.cyan("recovery")}      ${pc.dim("[--state preserved|merged|rejected|no_worktree] [--all] [--json]")} List recovery tasks
+  ${pc.cyan("recovery cleanup")} ${pc.dim("[--task <id>|<id>] [--older-than 7d] [--execute --yes] [--json]")} Cleanup preserved recovery worktrees
   ${pc.cyan("reject")}        ${pc.dim("<task-id>")}                     Reject, remove branch
   ${pc.cyan("abort")}         ${pc.dim("<task-id>")}                     Abort task
   ${pc.cyan("kill")}          ${pc.dim("<task-id> | --all")}              Force kill task(s)

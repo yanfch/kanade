@@ -186,6 +186,38 @@ describe("GET /recovery", () => {
 			const noWorktreeRes = await app.request("/recovery?state=no_worktree");
 			const noWorktree = (await noWorktreeRes.json()) as { tasks: Array<Record<string, unknown>> };
 			expect(noWorktree.tasks.map((task) => task.id)).toEqual(["TR-no-worktree"]);
+
+			const cleanupDryRunRes = await app.request("/recovery/cleanup", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ task_id: "TR-preserved" }),
+			});
+			const cleanupDryRun = (await cleanupDryRunRes.json()) as {
+				dry_run: boolean;
+				cleaned: number;
+				tasks: Array<Record<string, unknown>>;
+			};
+			expect(cleanupDryRunRes.status).toBe(200);
+			expect(cleanupDryRun).toMatchObject({ dry_run: true, cleaned: 0 });
+			expect(cleanupDryRun.tasks.map((task) => task.id)).toEqual(["TR-preserved"]);
+			expect(existsSync(worktreePath)).toBe(true);
+
+			const unconfirmedRes = await app.request("/recovery/cleanup", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ task_id: "TR-preserved", execute: true }),
+			});
+			expect(unconfirmedRes.status).toBe(400);
+
+			const cleanupExecuteRes = await app.request("/recovery/cleanup", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ task_id: "TR-preserved", execute: true, confirmed: true }),
+			});
+			const cleanupExecute = (await cleanupExecuteRes.json()) as { dry_run: boolean; cleaned: number };
+			expect(cleanupExecuteRes.status).toBe(200);
+			expect(cleanupExecute).toMatchObject({ dry_run: false, cleaned: 1 });
+			expect(existsSync(worktreePath)).toBe(false);
 		} finally {
 			store.close();
 		}

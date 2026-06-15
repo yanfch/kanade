@@ -98,6 +98,20 @@ export type RecoveryListRow = TaskListRow & {
 	recommendation: string;
 };
 
+export interface RecoveryCleanupOptions {
+	taskId?: string;
+	olderThanMs?: number;
+	execute?: boolean;
+	confirmed?: boolean;
+}
+
+export interface RecoveryCleanupResult {
+	dry_run: boolean;
+	matched: number;
+	cleaned: number;
+	tasks: RecoveryListRow[];
+}
+
 export function resolveConfiguredAgentDir(config: KanadeConfig): string | undefined {
 	if (config.models.agentDir) return config.models.agentDir;
 	if (config.models.piAgentDir) return config.models.piAgentDir;
@@ -663,18 +677,37 @@ export class TaskManager {
 		const taskIds = tasks.map((t) => t.id);
 		const worktreesByTask = this.store.findWorktreesByTaskIds(taskIds);
 		return tasks
-			.map((task) => {
-				const summary = summarizeTaskWorktreesLight(task, worktreesByTask.get(task.id) ?? []);
-				const recoveryState = recoveryStateForSummary(summary);
-				return {
-					...task,
-					worktree_summary: summary,
-					recovery_state: recoveryState,
-					recommendation: recoveryRecommendation(task, summary),
-				};
-			})
+			.map((task) => recoveryRowForTask(task, summarizeTaskWorktreesLight(task, worktreesByTask.get(task.id) ?? [])))
 			.filter((row) => !options.state || row.recovery_state === options.state)
 			.filter((row) => !options.actionable || row.recovery_state === "preserved");
+	}
+
+	async cleanupRecovery(options: RecoveryCleanupOptions = {}): Promise<RecoveryCleanupResult> {
+		if (options.olderThanMs !== undefined && (!Number.isFinite(options.olderThanMs) || options.olderThanMs < 0)) {
+			throw new AppError("olderThanMs must be a non-negative number", 400);
+		}
+		const cutoff = options.olderThanMs === undefined ? undefined : Date.now() - options.olderThanMs;
+		const candidates = this.listRecovery({ state: "preserved" }).filter((row) => {
+			if (options.taskId && row.id !== options.taskId) return false;
+			if (cutoff === undefined) return true;
+			const finishedAt = row.finished_at ?? row.started_at ?? row.created_at;
+			return typeof finishedAt === "number" && finishedAt <= cutoff;
+		});
+
+		if (options.execute) {
+			if (!options.confirmed) throw new AppError("confirmed=true is required to execute recovery cleanup", 400);
+			if (!options.taskId && options.olderThanMs === undefined) {
+				throw new AppError("Refusing to execute cleanup without taskId or olderThanMs", 400);
+			}
+			for (const candidate of candidates) await this.reject(candidate.id);
+		}
+
+		return {
+			dry_run: !options.execute,
+			matched: candidates.length,
+			cleaned: options.execute ? candidates.length : 0,
+			tasks: candidates,
+		};
 	}
 
 	inbox(): NeedsHumanRow[] {
@@ -1568,6 +1601,16 @@ function workflowSizeToComplexityHint(size?: WorkflowSizeHint): "simple" | "medi
 	if (size === "medium") return "medium";
 	if (size === "large") return "complex";
 	return undefined;
+}
+
+function recoveryRowForTask(task: TaskRow, summary: TaskWorktreeSummary): RecoveryListRow {
+	const recoveryState = recoveryStateForSummary(summary);
+	return {
+		...task,
+		worktree_summary: summary,
+		recovery_state: recoveryState,
+		recommendation: recoveryRecommendation(task, summary),
+	};
 }
 
 function recoveryStateForSummary(summary: TaskWorktreeSummary): RecoveryListRow["recovery_state"] {

@@ -107,6 +107,26 @@ export function createApp(ctx: AppContext): Hono {
 		return c.json({ tasks: ctx.taskManager.listRecovery({ state, actionable }) });
 	});
 
+	app.post("/recovery/cleanup", async (c) => {
+		const body = (await c.req.json().catch(() => ({}))) as {
+			task_id?: unknown;
+			taskId?: unknown;
+			older_than_ms?: unknown;
+			olderThanMs?: unknown;
+			execute?: unknown;
+			confirmed?: unknown;
+		};
+		const taskId = typeof body.task_id === "string" ? body.task_id : body.taskId;
+		const olderThanMs = typeof body.older_than_ms === "number" ? body.older_than_ms : body.olderThanMs;
+		const result = await ctx.taskManager.cleanupRecovery({
+			taskId: typeof taskId === "string" ? taskId : undefined,
+			olderThanMs: typeof olderThanMs === "number" ? olderThanMs : undefined,
+			execute: body.execute === true,
+			confirmed: body.confirmed === true,
+		});
+		return c.json(result);
+	});
+
 	app.get("/events", (c) =>
 		streamSSE(c, async (stream) => {
 			const off = ctx.events.onAny((event) => void writeEvent(stream, event));
