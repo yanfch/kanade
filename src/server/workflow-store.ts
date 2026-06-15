@@ -54,4 +54,10 @@ export class WorkflowStore {
 		rmSync(filePath);
 		return true;
 	}
+
+	/** Check whether a saved workflow with the given name already exists. */
+	exists(name: string): boolean {
+		if (!NAME_RE.test(name)) return false;
+		return existsSync(join(this.dir, `${name}.js`));
+	}
 }

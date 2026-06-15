@@ -964,6 +964,62 @@ describe("POST /tasks/:id/save", () => {
 			store.close();
 		}
 	});
+
+	it("returns 409 when saving with a duplicate name without overwrite", async () => {
+		const { store, taskManager, app } = setup();
+		try {
+			const created = taskManager.create({ source: "inline", script: SIMPLE_SCRIPT });
+			await vi.waitFor(() => expect(taskManager.get(created.task_id)?.status).toBe("finished"));
+
+			// First save succeeds
+			const res1 = await app.request(`/tasks/${created.task_id}/save`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ name: "dup-workflow" }),
+			});
+			expect(res1.status).toBe(200);
+
+			// Second save with same name fails with 409
+			const res2 = await app.request(`/tasks/${created.task_id}/save`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ name: "dup-workflow" }),
+			});
+			expect(res2.status).toBe(409);
+			const body = (await res2.json()) as { error: string };
+			expect(body.error).toContain("already exists");
+		} finally {
+			store.close();
+		}
+	});
+
+	it("allows overwrite when overwrite=true is passed", async () => {
+		const { config, store, taskManager, app } = setup();
+		try {
+			const created = taskManager.create({ source: "inline", script: SIMPLE_SCRIPT });
+			await vi.waitFor(() => expect(taskManager.get(created.task_id)?.status).toBe("finished"));
+
+			// First save
+			const res1 = await app.request(`/tasks/${created.task_id}/save`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ name: "overwrite-workflow" }),
+			});
+			expect(res1.status).toBe(200);
+
+			// Second save with overwrite=true succeeds
+			const res2 = await app.request(`/tasks/${created.task_id}/save`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ name: "overwrite-workflow", overwrite: true }),
+			});
+			expect(res2.status).toBe(200);
+			expect(await res2.json()).toMatchObject({ ok: true });
+			expect(existsSync(join(config.paths.workflowsDir, "overwrite-workflow.js"))).toBe(true);
+		} finally {
+			store.close();
+		}
+	});
 });
 
 describe("GET /workflows", () => {

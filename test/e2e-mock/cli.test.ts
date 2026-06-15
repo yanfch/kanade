@@ -785,3 +785,43 @@ describe("CLI — show usage", () => {
 		expect(out).not.toContain("Per-Agent Usage");
 	});
 });
+
+describe("CLI — save", () => {
+	it("saves a task as a workflow", async () => {
+		const taskId = await createTask(
+			`export const meta = { name: 'cli-save', description: 'Test' }\nreturn { saved: true }`,
+		);
+		const out = cli(`save ${taskId} --as cli-save-test`);
+		expect(out).toContain("Saved as workflow");
+		expect(out).toContain("cli-save-test");
+
+		// Verify it exists
+		const workflows = cliJson("workflows") as Array<{ name: string }>;
+		expect(workflows.some((wf) => wf.name === "cli-save-test")).toBe(true);
+	});
+
+	it("rejects duplicate save without --force", async () => {
+		const taskId = await createTask(
+			`export const meta = { name: 'cli-save-dup', description: 'Test' }\nreturn { dup: true }`,
+		);
+		// First save succeeds
+		cli(`save ${taskId} --as cli-save-dup-test`);
+
+		// Second save with same name should fail
+		const out = cli(`save ${taskId} --as cli-save-dup-test`);
+		expect(out).toContain("already exists");
+	});
+
+	it("allows overwrite with --force", async () => {
+		const taskId = await createTask(
+			`export const meta = { name: 'cli-save-force', description: 'Test' }\nreturn { forced: true }`,
+		);
+		// First save
+		cli(`save ${taskId} --as cli-save-force-test`);
+
+		// Second save with --force succeeds
+		const out = cli(`save ${taskId} --as cli-save-force-test --force`);
+		expect(out).toContain("Saved as workflow");
+		expect(out).toContain("cli-save-force-test");
+	});
+});

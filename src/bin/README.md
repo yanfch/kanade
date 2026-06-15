@@ -18,7 +18,7 @@ kanade show <task-id> [--json]            # Task details + journal
 kanade tail <task-id>                     # Follow SSE events
 kanade run <name> [--args '{}'] [--follow]  # Run saved workflow
 kanade iterate <id> --instructions '...'  # Iterate with new instructions
-kanade save <task-id> --as <name>         # Save script as workflow
+kanade save <task-id> --as <name> [--force]  # Save script as workflow
 
 # Lifecycle
 kanade abort <task-id>                    # Abort running task
