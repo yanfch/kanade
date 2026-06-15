@@ -326,7 +326,115 @@ return await agent('cached work', {
 	});
 });
 
-// ── E7: Lifecycle events ────────────────────────────────────────────────────
+// ── E7: Complex semantic workflow ───────────────────────────────────────────
+
+describe("E2E — complex workflow", () => {
+	it("runs semantic phases, parallel analysis, review fix branch, validation, and records evidence", async () => {
+		const mock = createMockSessionFactory({
+			handler: (prompt) => {
+				if (prompt.includes("Risk analysis")) {
+					return { type: "structured", value: { status: "done", summary: "risk analyzed" } };
+				}
+				if (prompt.includes("Implementation plan")) {
+					return { type: "structured", value: { status: "done", summary: "plan created" } };
+				}
+				if (prompt.includes("Implement the feature")) {
+					return { type: "structured", value: { status: "done", summary: "implemented initial change" } };
+				}
+				if (prompt.includes("Review the following implementation result")) {
+					return {
+						type: "structured",
+						value: { status: "needs_fix", summary: "edge case missing", issues: ["missing edge case"] },
+					};
+				}
+				if (prompt.includes("Continue the previous implementation")) {
+					return { type: "structured", value: { status: "done", summary: "edge case fixed" } };
+				}
+				if (prompt.includes("Validate the following implementation result")) {
+					return {
+						type: "structured",
+						value: { status: "passed", summary: "focused tests passed", issues: [], warnings: [] },
+					};
+				}
+				return { type: "structured", value: { status: "done", summary: "fallback" } };
+			},
+		});
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const events: Array<{ type: string; data: unknown }> = [];
+			ctx.events.onAny((event) => events.push({ type: event.type, data: event.data }));
+			const stepSchema =
+				"{ type: 'object', properties: { status: { type: 'string' }, summary: { type: 'string' } }, required: ['status', 'summary'] }";
+			const validationSchema =
+				"{ type: 'object', properties: { status: { type: 'string', enum: ['passed', 'failed'] }, summary: { type: 'string' }, issues: { type: 'array', items: { type: 'string' } }, warnings: { type: 'array', items: { type: 'string' } } }, required: ['status', 'summary', 'issues'] }";
+			const task = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'complex-semantic', description: 'Complex semantic workflow' }
+phase('Analyze')
+const [risk, plan] = await parallel([
+  () => analyze('Risk analysis', { label: 'risk', output: ${stepSchema} }),
+  () => analyze('Implementation plan', { label: 'plan', output: ${stepSchema} }),
+])
+phase('Build')
+const impl = await implement('Implement the feature', { label: 'implement', output: ${stepSchema} })
+phase('Review')
+const review = await reviewChange(impl, { label: 'review' })
+if (review.status === 'needs_fix') {
+  phase('Fix')
+  const fixed = await continueImplementation(impl, { label: 'fix', feedback: review, output: ${stepSchema} })
+  phase('Validate')
+  const validation = await testChange(fixed, { label: 'validate', output: ${validationSchema} })
+  return { risk, plan, impl, review, fixed, validation }
+}
+phase('Validate')
+const validation = await testChange(impl, { label: 'validate', output: ${validationSchema} })
+return { risk, plan, impl, review, validation }`,
+			});
+
+			await waitForTask(ctx.taskManager, task.task_id, "finished", 10_000);
+			const result = JSON.parse(ctx.taskManager.get(task.task_id)?.result ?? "null") as {
+				review: { status: string; issues: string[] };
+				fixed?: { summary: string };
+				validation: { status: string };
+			};
+			expect(result.review.status).toBe("needs_fix");
+			expect(result.review.issues).toEqual(["missing edge case"]);
+			expect(result.fixed?.summary).toBe("edge case fixed");
+			expect(result.validation.status).toBe("passed");
+
+			const phases = ctx.store.listPhases(task.task_id).map((phase) => phase.phase);
+			expect(phases).toEqual(["Analyze", "Build", "Review", "Fix", "Validate"]);
+			const agentCalls = ctx.store.listAgentCalls(task.task_id);
+			expect(agentCalls.map((call) => call.label).sort()).toEqual([
+				"fix",
+				"implement",
+				"plan",
+				"review",
+				"risk",
+				"validate",
+			]);
+			expect(agentCalls.every((call) => call.status === "completed")).toBe(true);
+			const startedLabels = events
+				.filter((event) => event.type === "workflow.agent_started")
+				.map((event) => (event.data as { label: string }).label);
+			expect(startedLabels).toEqual(expect.arrayContaining(["risk", "plan", "implement", "review", "fix", "validate"]));
+			const phaseEvents = events
+				.filter((event) => event.type === "workflow.phase")
+				.map((event) => (event.data as { phase: string }).phase);
+			expect(phaseEvents).toEqual(["Analyze", "Build", "Review", "Fix", "Validate"]);
+			const snapshot = ctx.taskManager.getSnapshot(task.task_id);
+			expect(snapshot?.phases).toEqual(["Analyze", "Build", "Review", "Fix", "Validate"]);
+			expect(snapshot?.agents.map((agent) => agent.label)).toEqual(
+				expect.arrayContaining(["risk", "plan", "implement", "review", "fix", "validate"]),
+			);
+		} finally {
+			ctx.cleanup();
+			cleanupBranches();
+		}
+	});
+});
+
+// ── E8: Lifecycle events ────────────────────────────────────────────────────
 
 describe("E2E — task lifecycle events", () => {
 	it("emits complete event sequence", async () => {
