@@ -2797,8 +2797,8 @@ class KanadePanel implements Component {
 		if (status === "running") return this.color("accent", "running");
 		if (status === "needs_human") return this.color("warning", "?");
 		if (status === "finished") return this.color("success", "✓");
-		if (status === "failed") return this.color("error", "✖");
-		if (status === "aborted") return this.color("error", "!");
+		if (status === "failed") return this.color("error", "×");
+		if (status === "aborted") return this.color("error", "×");
 		return this.color("dim", "○");
 	}
 
