@@ -52,7 +52,7 @@ const builtinHandlers: Record<string, AnnounceHandler> = {
 		if (!ctx.config.url) return false;
 		const res = await fetch(ctx.config.url, {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
+			headers: { "Content-Type": "application/json", ...ctx.config.headers },
 			body: JSON.stringify({
 				title: ctx.renderedTitle,
 				message: ctx.renderedBody,
@@ -92,7 +92,7 @@ const builtinHandlers: Record<string, AnnounceHandler> = {
 		const url = ctx.config.url ?? DEFAULT_TSUTAE_SPEAK_URL;
 		const res = await fetch(url, {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
+			headers: { "Content-Type": "application/json", ...ctx.config.headers },
 			body: JSON.stringify({
 				text: ctx.renderedBody,
 				source: ctx.config.source ?? "kanade",

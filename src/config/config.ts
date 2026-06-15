@@ -140,6 +140,8 @@ export interface AnnouncerConfig {
 	type: "http_post" | "macos_notification" | "tts_local" | "tsutae_tts";
 	/** URL for http_post, or Tsutae /v1/speak URL for tsutae_tts. */
 	url?: string;
+	/** Extra HTTP headers for http_post/tsutae_tts requests. */
+	headers?: Record<string, string>;
 	/** Events to listen for (e.g. task.finished, task.needs_human) */
 	events: string[];
 	/** Template for notification title. Supports {{task.id}}, {{event.summary}} */

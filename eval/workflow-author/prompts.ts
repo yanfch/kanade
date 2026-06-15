@@ -8,7 +8,7 @@ export type PromptVariant = "current-no-read" | "semantic-no-read";
 
 export function buildEvalPrompt(input: { evalCase: AuthorEvalCase; variant: PromptVariant }): string {
 	const taskBlock = [
-		`Task (${input.evalCase.complexity}):`,
+		`Task (${input.evalCase.complexity}; workflow_size=${input.evalCase.workflowSize}):`,
 		input.evalCase.task,
 		"",
 		"Workspace brief:",

@@ -6,16 +6,29 @@ import type { PromptVariant } from "./prompts.ts";
 export interface AuthorEvalResult {
 	caseId: string;
 	caseName: string;
+	model: string;
 	variant: PromptVariant;
 	score: number;
 	passed: boolean;
-	metrics: {
-		primarySteps: number;
-		lowLevelControlCount: number;
-		usesKinds: string[];
-	};
+	metrics: AuthorEvalMetrics;
 	notes: string[];
 	script: string;
+}
+
+export interface AuthorEvalMetrics {
+	workflowSize: "small" | "medium" | "large";
+	primarySteps: number;
+	agentCountEstimate: number;
+	lowLevelControlCount: number;
+	usesKinds: string[];
+	hasReview: boolean;
+	hasTest: boolean;
+	hasHumanGate: boolean;
+	usesParallel: boolean;
+	usesRawAgent: boolean;
+	usesRawPipeline: boolean;
+	workflowSizeFit: boolean;
+	projectAgnostic: boolean;
 }
 
 const KNOWN_KINDS = [
@@ -31,7 +44,8 @@ const KNOWN_KINDS = [
 ] as const;
 
 const RAW_API_CALL_NAMES = ["agent", "pipeline"] as const;
-const WORKFLOW_CALL_NAMES = new Set<string>([...KNOWN_KINDS, ...RAW_API_CALL_NAMES]);
+const EXTRA_SIGNAL_CALL_NAMES = ["parallel"] as const;
+const WORKFLOW_CALL_NAMES = new Set<string>([...KNOWN_KINDS, ...RAW_API_CALL_NAMES, ...EXTRA_SIGNAL_CALL_NAMES]);
 const LOW_LEVEL_OPTION_KEYS = new Set(["isolation", "reuseBranch", "agentType", "branch", "command", "testCommand"]);
 const ITERATE_ARG_KEYS = new Set(["instructions", "previousResult", "previousTaskId", "reuseBranch"]);
 
@@ -130,6 +144,7 @@ export function scoreAuthorOutput(input: {
 	evalCase: AuthorEvalCase;
 	variant: PromptVariant;
 	script: string;
+	model?: string;
 }): AuthorEvalResult {
 	const notes: string[] = [];
 	let score = 1;
@@ -137,7 +152,34 @@ export function scoreAuthorOutput(input: {
 	const signals = analyzeScriptStructure(input.script);
 	const usesKinds = KNOWN_KINDS.filter((kind) => (signals.callCounts.get(kind) ?? 0) > 0);
 	const primarySteps = usesKinds.filter((kind) => kind !== "request_human").length;
+	const agentCountEstimate = estimateAgentCount(signals);
 	const lowLevelControlCount = signals.lowLevelControlCount;
+	const hasReview = (signals.callCounts.get("reviewChange") ?? 0) > 0;
+	const hasTest = (signals.callCounts.get("testChange") ?? 0) > 0;
+	const hasHumanGate = (signals.callCounts.get("request_human") ?? 0) > 0;
+	const usesParallel = (signals.callCounts.get("parallel") ?? 0) > 0;
+	const usesRawAgent = (signals.callCounts.get("agent") ?? 0) > 0;
+	const usesRawPipeline = (signals.callCounts.get("pipeline") ?? 0) > 0;
+	const workflowSizeFit = evaluateWorkflowSizeFit(input.evalCase.workflowSize, {
+		primarySteps,
+		agentCountEstimate,
+		hasReview,
+		hasTest,
+		hasHumanGate,
+		usesParallel,
+		usesKinds,
+	});
+	const projectAgnostic = evaluateProjectAgnostic(input.evalCase.projectStack, signals.workflowGuidance);
+
+	if (!workflowSizeFit) {
+		score -= 0.12;
+		notes.push(`workflow size mismatch for ${input.evalCase.workflowSize} case`);
+	}
+
+	if (!projectAgnostic) {
+		score -= 0.12;
+		notes.push(`validation guidance is not project-appropriate for ${input.evalCase.projectStack ?? "unknown"}`);
+	}
 
 	if (!/export const meta\s*=\s*\{/.test(input.script)) {
 		score -= 0.3;
@@ -202,7 +244,6 @@ export function scoreAuthorOutput(input: {
 		}
 	}
 
-	const hasHumanGate = (signals.callCounts.get("request_human") ?? 0) > 0;
 	if (input.evalCase.expectations.requiresHumanGate && !hasHumanGate) {
 		score -= 0.18;
 		notes.push("missing human gate for risky/ambiguous task");
@@ -235,17 +276,69 @@ export function scoreAuthorOutput(input: {
 	return {
 		caseId: input.evalCase.id,
 		caseName: input.evalCase.name,
+		model: input.model ?? "default",
 		variant: input.variant,
 		score: normalized,
 		passed: normalized >= 0.7,
 		metrics: {
+			workflowSize: input.evalCase.workflowSize,
 			primarySteps,
+			agentCountEstimate,
 			lowLevelControlCount,
 			usesKinds: [...usesKinds],
+			hasReview,
+			hasTest,
+			hasHumanGate,
+			usesParallel,
+			usesRawAgent,
+			usesRawPipeline,
+			workflowSizeFit,
+			projectAgnostic,
 		},
 		notes,
 		script: input.script,
 	};
+}
+
+function estimateAgentCount(signals: ScriptSignals): number {
+	return [...KNOWN_KINDS, ...RAW_API_CALL_NAMES].reduce((sum, kind) => sum + (signals.callCounts.get(kind) ?? 0), 0);
+}
+
+function evaluateWorkflowSizeFit(
+	workflowSize: AuthorEvalCase["workflowSize"],
+	metrics: Pick<
+		AuthorEvalMetrics,
+		"primarySteps" | "agentCountEstimate" | "hasReview" | "hasTest" | "hasHumanGate" | "usesParallel"
+	> & {
+		usesKinds: string[];
+	},
+): boolean {
+	if (workflowSize === "small") {
+		return (
+			metrics.primarySteps >= 1 &&
+			metrics.primarySteps <= 2 &&
+			metrics.agentCountEstimate <= 2 &&
+			!metrics.hasReview &&
+			!metrics.hasHumanGate &&
+			!metrics.usesParallel &&
+			!metrics.usesKinds.includes("analyze") &&
+			!metrics.usesKinds.includes("continueImplementation")
+		);
+	}
+
+	if (workflowSize === "medium") {
+		return metrics.primarySteps >= 2 && metrics.primarySteps <= 4 && metrics.agentCountEstimate <= 5;
+	}
+
+	return metrics.primarySteps >= 2 && metrics.primarySteps <= 6 && metrics.agentCountEstimate <= 8;
+}
+
+function evaluateProjectAgnostic(stack: AuthorEvalCase["projectStack"], guidanceTexts: string[]): boolean {
+	if (!stack || stack === "node") return true;
+	const policy = STACK_VALIDATION_POLICIES[stack as keyof typeof STACK_VALIDATION_POLICIES];
+	if (!policy?.disallowNodeDefaults?.length) return true;
+	const joinedGuidance = guidanceTexts.join("\n");
+	return !policy.disallowNodeDefaults.some((pattern) => pattern.test(joinedGuidance));
 }
 
 function analyzeScriptStructure(script: string): ScriptSignals {

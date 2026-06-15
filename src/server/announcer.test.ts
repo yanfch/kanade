@@ -177,6 +177,7 @@ describe("AnnouncerRegistry", () => {
 					url: "http://127.0.0.1:1338/v1/speak",
 					events: ["task.finished"],
 					body_template: "任务 {{task.id}} 完成",
+					headers: { Authorization: "Bearer tsutae_test" },
 					source: "kanade-test",
 					interrupt: false,
 					presentationStyle: "minimal",
@@ -191,6 +192,7 @@ describe("AnnouncerRegistry", () => {
 				"http://127.0.0.1:1338/v1/speak",
 				expect.objectContaining({
 					method: "POST",
+					headers: { "Content-Type": "application/json", Authorization: "Bearer tsutae_test" },
 					body: JSON.stringify({
 						text: "任务 T-0001 完成",
 						source: "kanade-test",

@@ -271,6 +271,7 @@ describe("workflow author scorer", () => {
 		const result = scoreAuthorOutput({
 			evalCase: getCase("S3"),
 			variant: "semantic-no-read",
+			model: "xiaomi/mimo-v2.5-pro",
 			script: [
 				"export const meta = { name: 'simple_validate', description: 'Simple validate workflow' };",
 				"phase('Implement');",
@@ -282,6 +283,34 @@ describe("workflow author scorer", () => {
 		});
 
 		expect(result.passed).toBe(true);
+		expect(result.model).toBe("xiaomi/mimo-v2.5-pro");
+		expect(result.metrics.workflowSize).toBe("small");
+		expect(result.metrics.workflowSizeFit).toBe(true);
+		expect(result.metrics.hasTest).toBe(true);
 		expect(result.metrics.usesKinds).toEqual(["implement", "testChange"]);
+	});
+
+	it("flags over-complex workflows for small cases", () => {
+		const result = scoreAuthorOutput({
+			evalCase: getCase("S1"),
+			variant: "semantic-no-read",
+			script: [
+				"export const meta = { name: 'too_large_simple', description: 'Over-complex simple workflow' };",
+				"phase('Analyze');",
+				"const analysis = await analyze('Analyze broadly before a tiny fix.', { role: 'planner' });",
+				"phase('Implement');",
+				"const implementation = await implement('Fix the retry bug.', { role: 'developer' });",
+				"phase('Review');",
+				"const review = await reviewChange(implementation, { role: 'reviewer' });",
+				"phase('Validate');",
+				"const validation = await testChange(implementation, { role: 'tester' });",
+				"return { analysis, implementation, review, validation };",
+			].join("\n"),
+		});
+
+		expect(result.metrics.workflowSize).toBe("small");
+		expect(result.metrics.workflowSizeFit).toBe(false);
+		expect(result.metrics.agentCountEstimate).toBe(4);
+		expect(result.notes.join(" | ")).toContain("workflow size mismatch for small case");
 	});
 });

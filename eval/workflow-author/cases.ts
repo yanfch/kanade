@@ -1,6 +1,7 @@
 import type { ProjectProfileSnapshot } from "../../src/workspace/project-profile.ts";
 
 export type AuthorCaseComplexity = "simple" | "medium" | "complex";
+export type WorkflowSizeHint = "small" | "medium" | "large";
 
 export type WorkflowProjectStack =
 	| "node"
@@ -16,6 +17,7 @@ export interface AuthorEvalCase {
 	id: string;
 	name: string;
 	complexity: AuthorCaseComplexity;
+	workflowSize: WorkflowSizeHint;
 	task: string;
 	workspaceBrief: string;
 	projectStack?: WorkflowProjectStack;
@@ -192,6 +194,7 @@ export const AUTHOR_EVAL_CASES: AuthorEvalCase[] = [
 		id: "S1",
 		name: "single-file bugfix",
 		complexity: "simple",
+		workflowSize: "small",
 		task: "Fix a retry bug in the login flow and add one targeted regression test.",
 		workspaceBrief: KANADE_WORKSPACE_BRIEF,
 		projectStack: "node",
@@ -214,6 +217,7 @@ export const AUTHOR_EVAL_CASES: AuthorEvalCase[] = [
 		id: "S2",
 		name: "small CLI display tweak",
 		complexity: "simple",
+		workflowSize: "small",
 		task: "Add milliseconds to kanade tail event timestamps and update the relevant CLI tests.",
 		workspaceBrief: KANADE_WORKSPACE_BRIEF,
 		projectStack: "node",
@@ -236,6 +240,7 @@ export const AUTHOR_EVAL_CASES: AuthorEvalCase[] = [
 		id: "S3",
 		name: "small API tweak with explicit validation",
 		complexity: "simple",
+		workflowSize: "small",
 		task: "Add a small task-detail response field and run the focused app and CLI tests for that change only.",
 		workspaceBrief: KANADE_WORKSPACE_BRIEF,
 		projectStack: "node",
@@ -259,6 +264,7 @@ export const AUTHOR_EVAL_CASES: AuthorEvalCase[] = [
 		id: "M1",
 		name: "medium refactor with review",
 		complexity: "medium",
+		workflowSize: "medium",
 		task: "Refactor workflow author prompt code into a cleaner module structure, keep current behavior, add or update focused tests, and include a reviewer pass after implementation.",
 		workspaceBrief: KANADE_WORKSPACE_BRIEF,
 		projectStack: "node",
@@ -274,6 +280,7 @@ export const AUTHOR_EVAL_CASES: AuthorEvalCase[] = [
 		id: "M2",
 		name: "cache-key behavior change",
 		complexity: "medium",
+		workflowSize: "medium",
 		task: "Change journal cache key behavior so different workspaces do not incorrectly reuse results, then add tests covering the new behavior and run focused validation.",
 		workspaceBrief: KANADE_WORKSPACE_BRIEF,
 		projectStack: "node",
@@ -289,6 +296,7 @@ export const AUTHOR_EVAL_CASES: AuthorEvalCase[] = [
 		id: "M3",
 		name: "generated-task prompt cleanup with built-in iteration policy",
 		complexity: "medium",
+		workflowSize: "medium",
 		task: "Improve the generated workflow author prompt so routine tasks stay minimal, preserve the built-in iterate policy as a separate system path, and add focused tests for the prompt builder behavior.",
 		workspaceBrief: KANADE_WORKSPACE_BRIEF,
 		projectStack: "node",
@@ -304,6 +312,7 @@ export const AUTHOR_EVAL_CASES: AuthorEvalCase[] = [
 		id: "J1",
 		name: "java Maven module refactor",
 		complexity: "medium",
+		workflowSize: "medium",
 		task: "Refactor error handling in the Java scheduler module and update focused tests. Keep changes confined to the affected area.",
 		workspaceBrief: JAVA_MAVEN_WORKSPACE_BRIEF,
 		projectStack: "java-maven",
@@ -320,6 +329,7 @@ export const AUTHOR_EVAL_CASES: AuthorEvalCase[] = [
 		id: "P1",
 		name: "python CLI bugfix with pytest",
 		complexity: "medium",
+		workflowSize: "medium",
 		task: "Fix a Python CLI edge-case bug in argument parsing and add a regression test for it.",
 		workspaceBrief: PYTHON_PYTEST_WORKSPACE_BRIEF,
 		projectStack: "python",
@@ -336,6 +346,7 @@ export const AUTHOR_EVAL_CASES: AuthorEvalCase[] = [
 		id: "G1",
 		name: "java Gradle focused change",
 		complexity: "medium",
+		workflowSize: "medium",
 		task: "Fix billing retry classification in the Gradle worker and update focused unit tests.",
 		workspaceBrief: JAVA_GRADLE_WORKSPACE_BRIEF,
 		projectStack: "java-gradle",
@@ -352,6 +363,7 @@ export const AUTHOR_EVAL_CASES: AuthorEvalCase[] = [
 		id: "R1",
 		name: "Rust CLI bugfix",
 		complexity: "medium",
+		workflowSize: "medium",
 		task: "Fix a path normalization bug in the Rust file indexer CLI and add a regression test.",
 		workspaceBrief: RUST_WORKSPACE_BRIEF,
 		projectStack: "rust",
@@ -368,6 +380,7 @@ export const AUTHOR_EVAL_CASES: AuthorEvalCase[] = [
 		id: "GO1",
 		name: "Go handler bugfix",
 		complexity: "medium",
+		workflowSize: "medium",
 		task: "Fix webhook signature handling in the Go relay service and add a focused regression test.",
 		workspaceBrief: GO_WORKSPACE_BRIEF,
 		projectStack: "go",
@@ -384,6 +397,7 @@ export const AUTHOR_EVAL_CASES: AuthorEvalCase[] = [
 		id: "D1",
 		name: "docs-only handbook update",
 		complexity: "simple",
+		workflowSize: "small",
 		task: "Clarify the on-call escalation documentation and verify links/formatting. This is a docs-only repository.",
 		workspaceBrief: DOCS_ONLY_WORKSPACE_BRIEF,
 		projectStack: "docs-only",
@@ -416,6 +430,7 @@ export const AUTHOR_EVAL_CASES: AuthorEvalCase[] = [
 		id: "X1",
 		name: "explicit validation overrides profile",
 		complexity: "simple",
+		workflowSize: "small",
 		task: "Update README wording only. Even though the profile suggests npm test, do not run npm; validate with `make docs-check` because this repository's docs checks are Make-based.",
 		workspaceBrief: KANADE_WORKSPACE_BRIEF,
 		projectStack: "node",
@@ -441,6 +456,7 @@ export const AUTHOR_EVAL_CASES: AuthorEvalCase[] = [
 		id: "C1",
 		name: "complex implementation with bounded analysis",
 		complexity: "complex",
+		workflowSize: "large",
 		task: "Redesign the generated workflow author prompt so new tasks use a semantic V1 helper contract instead of raw agent orchestration, keep iterate on a separate built-in path, and update focused tests.",
 		workspaceBrief: KANADE_WORKSPACE_BRIEF,
 		projectStack: "node",
@@ -457,6 +473,7 @@ export const AUTHOR_EVAL_CASES: AuthorEvalCase[] = [
 		id: "C2",
 		name: "high-risk isolation redesign",
 		complexity: "complex",
+		workflowSize: "large",
 		task: "Redesign isolation semantics for dynamic workflows. If the correct direction is unclear or the change could invalidate existing behavior, require explicit human confirmation before major implementation proceeds.",
 		workspaceBrief: KANADE_WORKSPACE_BRIEF,
 		projectStack: "node",
