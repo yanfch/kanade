@@ -1318,22 +1318,39 @@ export class TaskManager {
 	}
 
 	/**
-	 * Recover tasks left in `created` or `running` status by a previous server process.
-	 * Called once at startup. Transitions orphaned tasks to `failed` with a clear
-	 * error message and emits `task.failed` for each. Preserves worktrees/branches.
+	 * Recover tasks left in `created`, `running`, or `needs_human` status by a
+	 * previous server process. Called once at startup. Transitions orphaned tasks
+	 * to `failed` with a clear error message and emits `task.failed` for each.
+	 * Preserves worktrees/branches.
+	 *
+	 * `needs_human` is included because the suspended JavaScript continuation is
+	 * in-memory only. After a server restart there is no safe workflow to resume;
+	 * pending inbox requests are closed so responding cannot create a fake running
+	 * task.
 	 *
 	 * @returns The number of tasks recovered.
 	 */
 	recoverStaleTasks(): number {
-		const staleTasks = this.store.listTasksByStatuses(["created", "running"], Number.MAX_SAFE_INTEGER);
+		const staleTasks = this.store.listTasksByStatuses(["created", "running", "needs_human"], Number.MAX_SAFE_INTEGER);
 		const now = Date.now();
-		const errorMsg = "Task recovered: server restarted while task was in progress";
 		for (const task of staleTasks) {
+			const errorMsg =
+				task.status === "needs_human"
+					? "Task recovered: server restarted while task was waiting for human input"
+					: "Task recovered: server restarted while task was in progress";
 			this.store.updateTask(task.id, {
 				status: "failed",
 				finished_at: now,
 				error: errorMsg,
 			});
+			for (const request of this.store.listNeedsHumanByTask(task.id)) {
+				if (request.status !== "pending") continue;
+				this.store.updateNeedsHuman(request.request_id, {
+					status: "timeout",
+					resolved_at: now,
+					response: JSON.stringify({ error: errorMsg, recovered: true }),
+				});
+			}
 			this.events.emit("task.failed", { taskId: task.id, error: errorMsg }, task.id);
 			this.logger.forTask(task.id).info("stale task recovered", {
 				previousStatus: task.status,

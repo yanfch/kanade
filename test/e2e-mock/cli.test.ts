@@ -74,17 +74,8 @@ async function createTask(script: string): Promise<string> {
 	return body.task_id;
 }
 
-beforeAll(async () => {
-	kanadeDir = mkdtempSync(join(tmpdir(), "kanade-cli-test-"));
-	mkdirSync(join(kanadeDir, "db"), { recursive: true });
-	const taskIdPrefix = `C${Math.random().toString(36).slice(2, 6)}`;
-	writeFileSync(
-		join(kanadeDir, "config.yml"),
-		`server:\n  port: 17777\n  bind: 127.0.0.1\nmodels:\n  mode: kanade\ndefaults:\n  taskIdPrefix: ${taskIdPrefix}\n`,
-	);
-	BASE_URL = "http://127.0.0.1:17777";
-
-	serverProcess = spawn("npx", ["tsx", "src/bin/server.ts"], {
+function spawnMainServer(): ReturnType<typeof spawn> {
+	const child = spawn("npx", ["tsx", "src/bin/server.ts"], {
 		cwd: join(import.meta.dirname, "../.."),
 		env: {
 			...process.env,
@@ -101,8 +92,45 @@ beforeAll(async () => {
 		},
 		stdio: "pipe",
 	});
-	serverProcess.stderr?.on("data", (d) => console.error("[server]", d.toString()));
+	child.stderr?.on("data", (d) => console.error("[server]", d.toString()));
+	return child;
+}
 
+async function waitForServerDown(url: string, timeoutMs = 10_000): Promise<void> {
+	const start = Date.now();
+	while (Date.now() - start < timeoutMs) {
+		try {
+			const res = await fetch(`${url}/health`);
+			if (!res.ok) return;
+		} catch {
+			return;
+		}
+		await new Promise((r) => setTimeout(r, 200));
+	}
+	throw new Error(`Server still reachable at ${url}`);
+}
+
+async function restartMainServer(): Promise<void> {
+	if (serverProcess) {
+		serverProcess.kill("SIGTERM");
+		serverProcess = null;
+	}
+	await waitForServerDown(BASE_URL);
+	serverProcess = spawnMainServer();
+	await waitForServer(BASE_URL);
+}
+
+beforeAll(async () => {
+	kanadeDir = mkdtempSync(join(tmpdir(), "kanade-cli-test-"));
+	mkdirSync(join(kanadeDir, "db"), { recursive: true });
+	const taskIdPrefix = `C${Math.random().toString(36).slice(2, 6)}`;
+	writeFileSync(
+		join(kanadeDir, "config.yml"),
+		`server:\n  port: 17777\n  bind: 127.0.0.1\nmodels:\n  mode: kanade\ndefaults:\n  taskIdPrefix: ${taskIdPrefix}\n`,
+	);
+	BASE_URL = "http://127.0.0.1:17777";
+
+	serverProcess = spawnMainServer();
 	await waitForServer(BASE_URL);
 }, 30_000);
 
@@ -208,6 +236,60 @@ describe("CLI — show", () => {
 		expect(body.task.id).toBe(taskId);
 		expect(body.task.status).toBe("finished");
 		expect(body).toHaveProperty("journal");
+	});
+});
+
+describe("CLI — request_human", () => {
+	it("lists inbox requests and resumes after respond", async () => {
+		const res = await fetch(`${BASE_URL}/tasks`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				source: "inline",
+				script: `export const meta = { name: 'cli-human', description: 'Test' }\nconst response = await request_human({ title: 'Approve?', options: ['yes', 'no'] })\nreturn response`,
+			}),
+		});
+		const task = (await res.json()) as { task_id: string };
+		await waitForTask(task.task_id, "needs_human");
+
+		const inbox = cliJson("inbox") as Array<{ request_id: string; task_id: string; payload: unknown }>;
+		const request = inbox.find((row) => row.task_id === task.task_id);
+		expect(request?.request_id).toBeTruthy();
+
+		const out = cli(`respond ${task.task_id} --request ${request!.request_id} --decision yes`);
+		expect(out).toContain("Responded");
+		await waitForTask(task.task_id, "finished");
+		const detail = cliJson(`show ${task.task_id}`) as { task: { result: string } };
+		expect(JSON.parse(detail.task.result)).toEqual({ decision: "yes" });
+	});
+
+	it("recovers needs_human task as failed after server restart", async () => {
+		const res = await fetch(`${BASE_URL}/tasks`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				source: "inline",
+				script: `export const meta = { name: 'cli-human-restart', description: 'Test' }\nreturn await request_human({ title: 'Approve after restart?', options: ['yes'] })`,
+			}),
+		});
+		const task = (await res.json()) as { task_id: string };
+		await waitForTask(task.task_id, "needs_human");
+		const inboxBefore = cliJson("inbox") as Array<{ request_id: string; task_id: string }>;
+		const request = inboxBefore.find((row) => row.task_id === task.task_id);
+		expect(request?.request_id).toBeTruthy();
+
+		await restartMainServer();
+		await waitForTask(task.task_id, "failed");
+
+		const detail = cliJson(`show ${task.task_id}`) as { task: { status: string; error: string } };
+		expect(detail.task).toMatchObject({
+			status: "failed",
+			error: "Task recovered: server restarted while task was waiting for human input",
+		});
+		const inboxAfter = cliJson("inbox") as Array<{ task_id: string }>;
+		expect(inboxAfter.some((row) => row.task_id === task.task_id)).toBe(false);
+		const respondOut = cli(`respond ${task.task_id} --request ${request!.request_id} --decision yes`);
+		expect(respondOut).toContain("Cannot respond to human request for task in failed state");
 	});
 });
 

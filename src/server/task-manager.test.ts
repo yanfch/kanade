@@ -765,10 +765,10 @@ describe("TaskManager — startup recovery", () => {
 		}
 	});
 
-	it("does not touch finished/failed/aborted/needs_human tasks", () => {
+	it("does not touch finished/failed/aborted tasks", () => {
 		const { store, manager } = setup();
 		try {
-			const statuses = ["finished", "failed", "aborted", "needs_human"] as const;
+			const statuses = ["finished", "failed", "aborted"] as const;
 			for (const status of statuses) {
 				store.insertTask({
 					id: `RN-${status}`,
@@ -795,6 +795,54 @@ describe("TaskManager — startup recovery", () => {
 				const task = store.getTask(`RN-${status}`);
 				expect(task?.status).toBe(status);
 			}
+		} finally {
+			store.close();
+		}
+	});
+
+	it("recovers needs_human tasks and closes pending inbox requests", () => {
+		const { store, manager } = setup();
+		try {
+			store.insertTask({
+				id: "RH-0001",
+				workflow_source: "inline",
+				workflow_name: null,
+				workflow_path: "/tmp/RH-0001/workflow.js",
+				status: "needs_human",
+				base_repo: null,
+				base_branch: "main",
+				cwd: "/tmp",
+				created_at: Date.now(),
+				started_at: Date.now(),
+				finished_at: null,
+				error: null,
+				options: "{}",
+				result: null,
+			});
+			store.insertNeedsHuman({
+				request_id: "req-RH-0001",
+				task_id: "RH-0001",
+				cache_key: "human:1",
+				payload: JSON.stringify({ title: "Approve?" }),
+				status: "pending",
+				created_at: Date.now(),
+				resolved_at: null,
+				response: null,
+			});
+
+			const count = manager.recoverStaleTasks();
+			expect(count).toBe(1);
+
+			const task = store.getTask("RH-0001");
+			expect(task?.status).toBe("failed");
+			expect(task?.error).toBe("Task recovered: server restarted while task was waiting for human input");
+			expect(store.listPendingNeedsHuman()).toHaveLength(0);
+			const request = store.getNeedsHuman("req-RH-0001");
+			expect(request?.status).toBe("timeout");
+			expect(request?.response).toContain("server restarted while task was waiting for human input");
+			expect(() => manager.respond("RH-0001", "req-RH-0001", { decision: "approve" })).toThrow(
+				/Cannot respond to human request for task in failed state/,
+			);
 		} finally {
 			store.close();
 		}
