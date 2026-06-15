@@ -1181,6 +1181,16 @@ class SettingsOverlay implements Component {
 				this.tui.requestRender();
 				return;
 			}
+			if (isKey(data, "up", "\x1b[A", "\x1bOA")) {
+				this.selected = Math.max(0, this.selected - 1);
+				this.tui.requestRender();
+				return;
+			}
+			if (isKey(data, "down", "\x1b[B", "\x1bOB")) {
+				this.selected = Math.min(this.displayItems().length - 1, this.selected + 1);
+				this.tui.requestRender();
+				return;
+			}
 			if (isKey(data, "return", "\r", "\n") || isKey(data, "enter", "\r", "\n")) {
 				this.searchMode = false;
 				this.tui.requestRender();

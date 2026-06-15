@@ -1794,6 +1794,15 @@ function assert(label: string, condition: boolean, detail?: string) {
 		assert("search prompt visible", text.includes("Search: proxy"), `output: ${text.slice(0, 600)}`);
 		assert("search finds proxy fields", text.includes("HTTP Proxy"), `output: ${text.slice(0, 600)}`);
 		assert("search filters unrelated fields", !text.includes("Max Concurrent Tasks"), `output: ${text.slice(0, 600)}`);
+		const selectedBefore = text.match(/▸\s+([^\n]+)/)?.[1] ?? "";
+		comp.handleInput?.("\x1b[B");
+		text = strip(comp.render(100).join("\n"));
+		const selectedAfter = text.match(/▸\s+([^\n]+)/)?.[1] ?? "";
+		assert(
+			"search mode down arrow moves selection",
+			Boolean(selectedBefore) && Boolean(selectedAfter) && selectedBefore !== selectedAfter,
+			`before=${selectedBefore} after=${selectedAfter} output: ${text.slice(0, 600)}`,
+		);
 		comp.handleInput?.("\x1b");
 		text = strip(comp.render(100).join("\n"));
 		assert("search clear restores groups", text.includes("[+] Defaults"), `output: ${text.slice(0, 600)}`);
