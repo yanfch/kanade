@@ -11,7 +11,15 @@ import type { KanadeConfig } from "../config/index.ts";
 import type { HumanGate } from "../human/index.ts";
 import { type IsolationContext, IsolationManager } from "../isolation/index.ts";
 import { Journal, type JournalAllEntries } from "../journal/index.ts";
-import type { NeedsHumanRow, StateStore, TaskRow, TaskStatus, WorkflowSource, WorktreeRow } from "../store/index.ts";
+import type {
+	AgentCallRow,
+	NeedsHumanRow,
+	StateStore,
+	TaskRow,
+	TaskStatus,
+	WorkflowSource,
+	WorktreeRow,
+} from "../store/index.ts";
 import * as Attrs from "../tracing/attributes.ts";
 import type { TracingHandle, Logger as TracingLogger } from "../tracing/index.ts";
 import {
@@ -1004,6 +1012,8 @@ export class TaskManager {
 		const traceContext = taskTrace.context;
 		const taskLog = this.logger.forTask(taskId).withContext(traceContext);
 		let taskPreparation: IsolationContext | null = null;
+		const agentCallIds = new Map<string, string[]>();
+		let agentCallSeq = 0;
 
 		try {
 			const task = this.store.getTask(taskId);
@@ -1101,8 +1111,57 @@ export class TaskManager {
 					this.store.insertPhase({ task_id: taskId, phase, started_at: Date.now(), ended_at: null });
 					this.events.emit("workflow.phase", { taskId, phase }, taskId);
 				},
-				onAgentStart: (event) => this.events.emit("workflow.agent_started", { taskId, ...event }, taskId),
-				onAgentEnd: (event) => this.events.emit("workflow.agent_completed", { taskId, ...event }, taskId),
+				onAgentStart: (event) => {
+					const id = `${taskId}:agent:${agentCallSeq++}`;
+					const queue = agentCallIds.get(event.label) ?? [];
+					queue.push(id);
+					agentCallIds.set(event.label, queue);
+					try {
+						this.store.insertAgentCall({
+							id,
+							task_id: taskId,
+							label: event.label,
+							role: null,
+							phase: event.phase ?? null,
+							isolation_mode: "none",
+							worktree_id: null,
+							status: "running",
+							started_at: Date.now(),
+							finished_at: null,
+							tokens_input: null,
+							tokens_output: null,
+							tokens_cache_read: null,
+							tokens_cache_creation: null,
+							cost_usd: null,
+							trace_id: null,
+							span_id: null,
+						});
+					} catch (error) {
+						taskLog.warn("agent call insert failed", {
+							error: error instanceof Error ? error.message : String(error),
+						});
+					}
+					this.events.emit("workflow.agent_started", { taskId, ...event }, taskId);
+				},
+				onAgentEnd: (event) => {
+					const queue = agentCallIds.get(event.label) ?? [];
+					const id = queue.shift();
+					if (queue.length > 0) agentCallIds.set(event.label, queue);
+					else agentCallIds.delete(event.label);
+					if (id) {
+						try {
+							this.store.updateAgentCall(id, {
+								status: event.fromCache ? "from_cache" : event.result === null ? "failed" : "completed",
+								finished_at: Date.now(),
+							});
+						} catch (error) {
+							taskLog.warn("agent call update failed", {
+								error: error instanceof Error ? error.message : String(error),
+							});
+						}
+					}
+					this.events.emit("workflow.agent_completed", { taskId, ...event }, taskId);
+				},
 				onUsage: (usage) => {
 					this.addDailyCost(usage.cost.total);
 				},
@@ -1255,6 +1314,11 @@ export class TaskManager {
 	/** Get worktrees for a task. */
 	getWorktrees(taskId: string): WorktreeRow[] {
 		return this.store.findWorktreesByTask(taskId);
+	}
+
+	/** Get recorded agent calls for a task. */
+	getAgentCalls(taskId: string): AgentCallRow[] {
+		return this.store.listAgentCalls(taskId);
 	}
 
 	/** Get persisted task-level usage data from tasks.usage. Returns null if task has no usage data. */

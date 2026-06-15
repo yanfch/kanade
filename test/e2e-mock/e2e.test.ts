@@ -6,7 +6,7 @@
  */
 
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createMockSessionFactory } from "./mock-session.ts";
@@ -283,6 +283,43 @@ return await agent('cached work', {
 			// Cached result from first run
 			expect(JSON.parse(ctx.taskManager.get(task2.task_id)?.result ?? "null")).toEqual({ n: 1 });
 			expect(callCount).toBe(1);
+			expect(ctx.store.listAgentCalls(task1.task_id).map((call) => call.status)).toEqual(["completed"]);
+			expect(ctx.store.listAgentCalls(task2.task_id).map((call) => call.status)).toEqual(["from_cache"]);
+		} finally {
+			ctx.cleanup();
+		}
+	});
+
+	it("does not reuse cached agent results after workspace content changes", async () => {
+		let callCount = 0;
+		const mock = createMockSessionFactory({
+			handler: () => ({ type: "structured", value: { n: ++callCount } }),
+		});
+		const ctx = createE2EContext(mock.createSession);
+		try {
+			const workspace = join(ctx.config.paths.root, "workspace-cache-change");
+			mkdirSync(workspace, { recursive: true });
+			writeFileSync(join(workspace, "state.txt"), "one\n");
+			const task1 = ctx.taskManager.create({
+				source: "inline",
+				script: `export const meta = { name: 'cache-change', description: 'Test' }
+return await agent('cached work', {
+  label: 'cached',
+  schema: { type: 'object', properties: { n: { type: 'number' } }, required: ['n'] }
+})`,
+				options: { cwd: workspace },
+			});
+
+			await waitForTask(ctx.taskManager, task1.task_id);
+			expect(JSON.parse(ctx.taskManager.get(task1.task_id)?.result ?? "null")).toEqual({ n: 1 });
+			writeFileSync(join(workspace, "state.txt"), "two\n");
+
+			const task2 = ctx.taskManager.rerun(task1.task_id);
+			await waitForTask(ctx.taskManager, task2.task_id);
+
+			expect(JSON.parse(ctx.taskManager.get(task2.task_id)?.result ?? "null")).toEqual({ n: 2 });
+			expect(callCount).toBe(2);
+			expect(ctx.store.listAgentCalls(task2.task_id).map((call) => call.status)).toEqual(["completed"]);
 		} finally {
 			ctx.cleanup();
 		}

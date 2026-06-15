@@ -62,7 +62,7 @@ export interface WorkflowRunOptions extends Omit<WorkflowAgentOptions, "journal"
 	onPhase?: (title: string) => void;
 	onHumanRequest?: (event: { requestId: string; cacheKey: string; request: HumanRequest }) => void;
 	onAgentStart?: (event: { label: string; phase?: string; prompt: string }) => void;
-	onAgentEnd?: (event: { label: string; phase?: string; result: unknown }) => void;
+	onAgentEnd?: (event: { label: string; phase?: string; result: unknown; fromCache?: boolean }) => void;
 	/** Called whenever per-agent usage is updated. Receives the full accumulated array. */
 	onAgentUsage?: (agentUsages: AgentUsageEntry[]) => void;
 }
@@ -382,7 +382,8 @@ export async function runWorkflow<T = unknown>(
 				if (usageObserved) state.spent += usageTokens;
 				else if (!servedFromCache) state.spent += estimateTokens(result);
 				agentSpan?.setStatus({ code: SpanStatusCode.OK });
-				options.onAgentEnd?.({ label, phase: assignedPhase, result });
+				agentSpan?.setAttribute(Attrs.AGENT_FROM_CACHE, servedFromCache);
+				options.onAgentEnd?.({ label, phase: assignedPhase, result, fromCache: servedFromCache });
 				dumpArtifact(options, state, label, result);
 				return result;
 			} catch (error) {

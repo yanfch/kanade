@@ -95,8 +95,9 @@ export function createApp(ctx: AppContext): Hono {
 		const task = ctx.taskManager.get(taskId);
 		if (!task) return c.json({ error: "Task not found" }, 404);
 		const usage = ctx.taskManager.getUsage(taskId);
+		const agentCalls = ctx.taskManager.getAgentCalls(taskId);
 		const { usage: _rawUsage, ...taskBody } = task;
-		return c.json({ task: taskBody, usage });
+		return c.json({ task: taskBody, usage, agent_calls: agentCalls });
 	});
 
 	app.get("/inbox", (c) => c.json({ requests: ctx.taskManager.inbox().map(formatInboxRow) }));

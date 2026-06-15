@@ -239,6 +239,45 @@ describe("CLI — show", () => {
 	});
 });
 
+describe("CLI — rerun", () => {
+	it("reruns a task and shows from_cache agent call evidence", async () => {
+		const taskId = await createTask(
+			`export const meta = { name: 'cli-rerun-cache', description: 'Test' }\nreturn await agent('cache me', { label: 'worker' })`,
+		);
+		const rerun = cliJson(`rerun ${taskId}`) as { task_id: string; rerun_of: string };
+		expect(rerun.rerun_of).toBe(taskId);
+		await waitForTask(rerun.task_id, "finished");
+
+		const detail = cliJson(`show ${rerun.task_id}`) as { agent_calls: Array<{ status: string }> };
+		expect(detail.agent_calls.map((call) => call.status)).toEqual(["from_cache"]);
+		const out = cli(`show ${rerun.task_id}`);
+		expect(out).toContain("Agent Calls");
+		expect(out).toContain("from_cache");
+	});
+
+	it("does not mark rerun as from_cache when workspace content changes", async () => {
+		const workspace = mkdtempSync(join(tmpdir(), "kanade-cli-cache-workspace-"));
+		writeFileSync(join(workspace, "state.txt"), "one\n");
+		const res = await fetch(`${BASE_URL}/tasks`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				source: "inline",
+				script: `export const meta = { name: 'cli-rerun-cache-change', description: 'Test' }\nreturn await agent('cache me', { label: 'worker' })`,
+				options: { cwd: workspace },
+			}),
+		});
+		const task = (await res.json()) as { task_id: string };
+		await waitForTask(task.task_id, "finished");
+		writeFileSync(join(workspace, "state.txt"), "two\n");
+
+		const rerun = cliJson(`rerun ${task.task_id}`) as { task_id: string };
+		await waitForTask(rerun.task_id, "finished");
+		const detail = cliJson(`show ${rerun.task_id}`) as { agent_calls: Array<{ status: string }> };
+		expect(detail.agent_calls.map((call) => call.status)).toEqual(["completed"]);
+	});
+});
+
 describe("CLI — request_human", () => {
 	it("lists inbox requests and resumes after respond", async () => {
 		const res = await fetch(`${BASE_URL}/tasks`, {
@@ -598,13 +637,14 @@ describe("CLI — show usage", () => {
 		expect(out).toContain("66");
 	});
 
-	it("labels journal cache entries separately from usage", async () => {
+	it("labels journal cache entries separately from usage and agent call status", async () => {
 		const taskId = await createTask(
 			`export const meta = { name: 'cli-show-journal-cache', description: 'Test' }\nreturn await agent('hello', { label: 'worker' })`,
 		);
 		const out = cli(`show ${taskId}`);
 		expect(out).toContain("Journal Cache");
-		expect(out).not.toContain("Agent Calls");
+		expect(out).toContain("Agent Calls");
+		expect(out).toContain("completed");
 	});
 
 	it("includes usage in --json output", async () => {

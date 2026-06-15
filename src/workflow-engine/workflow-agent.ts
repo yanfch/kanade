@@ -2,7 +2,7 @@
 // (https://github.com/Michaelliv/pi-dynamic-workflows), MIT licensed.
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
 	AuthStorage,
@@ -476,8 +476,41 @@ export class WorkflowAgent {
 				untracked,
 			});
 		} catch {
+			return this.computePlainDirectoryFingerprint(cwd);
+		}
+	}
+
+	private computePlainDirectoryFingerprint(cwd: string): string | undefined {
+		try {
+			return stableFingerprint({ root: cwd, files: this.walkWorkspaceForFingerprint(cwd, cwd, 0) });
+		} catch {
 			return undefined;
 		}
+	}
+
+	private walkWorkspaceForFingerprint(
+		root: string,
+		current: string,
+		depth: number,
+	): Array<{ path: string; hash: string }> {
+		if (depth > 4) return [];
+		const entries = readdirSync(current, { withFileTypes: true })
+			.filter((entry) => !entry.name.startsWith(".") && entry.name !== "node_modules")
+			.sort((a, b) => a.name.localeCompare(b.name));
+		const out: Array<{ path: string; hash: string }> = [];
+		for (const entry of entries) {
+			const fullPath = join(current, entry.name);
+			const relPath = relative(root, fullPath);
+			if (entry.isDirectory()) {
+				out.push({ path: `${relPath}/`, hash: "dir" });
+				out.push(...this.walkWorkspaceForFingerprint(root, fullPath, depth + 1));
+			} else if (entry.isFile()) {
+				const stat = statSync(fullPath);
+				if (stat.size > 1024 * 1024) out.push({ path: relPath, hash: `large:${stat.size}` });
+				else out.push({ path: relPath, hash: sha256(readFileSync(fullPath)) });
+			}
+		}
+		return out;
 	}
 
 	private hashWorkspacePath(path: string, repoRoot: string): string {

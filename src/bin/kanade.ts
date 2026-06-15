@@ -45,6 +45,8 @@ function statusIcon(status: string): string {
 		case "pending":
 			return pc.yellow("◦");
 		case "resolved":
+		case "completed":
+		case "from_cache":
 			return pc.green("✔");
 		default:
 			return pc.dim("?");
@@ -61,6 +63,8 @@ function statusLabel(status: string): string {
 		failed: pc.red("failed"),
 		pending: pc.yellow("pending"),
 		resolved: pc.green("resolved"),
+		completed: pc.green("completed"),
+		from_cache: pc.green("from_cache"),
 	}[status];
 	return `${statusIcon(status)} ${text ?? status}`;
 }
@@ -230,6 +234,7 @@ async function cmdShow(taskId: string, args: ReturnType<typeof parseArgs>["value
 	const taskResponse = (await api(`/tasks/${taskId}`)) as {
 		task: Record<string, unknown>;
 		usage: Record<string, unknown> | null;
+		agent_calls?: Record<string, unknown>[];
 	};
 	const journal = (await api(`/tasks/${taskId}/journal`)) as { agents: unknown[]; humans: unknown[] };
 	const worktrees = (await api(`/tasks/${taskId}/worktrees`)) as { worktrees: Record<string, unknown>[] };
@@ -237,7 +242,13 @@ async function cmdShow(taskId: string, args: ReturnType<typeof parseArgs>["value
 	if (json) {
 		console.log(
 			JSON.stringify(
-				{ task: taskResponse.task, usage: taskResponse.usage, journal, worktrees: worktrees.worktrees },
+				{
+					task: taskResponse.task,
+					usage: taskResponse.usage,
+					agent_calls: taskResponse.agent_calls ?? [],
+					journal,
+					worktrees: worktrees.worktrees,
+				},
 				null,
 				2,
 			),
@@ -247,6 +258,7 @@ async function cmdShow(taskId: string, args: ReturnType<typeof parseArgs>["value
 
 	const t = taskResponse.task;
 	const usage = taskResponse.usage;
+	const agentCalls = taskResponse.agent_calls ?? [];
 
 	header(`Task ${pc.bold(String(t.id))}`);
 
@@ -304,6 +316,27 @@ async function cmdShow(taskId: string, args: ReturnType<typeof parseArgs>["value
 	console.log(
 		`  ${pc.dim("Journal:")}   ${pc.white(String(journal.agents.length))} agent entries, ${pc.white(String(journal.humans.length))} human entries`,
 	);
+
+	if (agentCalls.length > 0) {
+		console.log();
+		header("Agent Calls");
+		printTable(agentCalls, [
+			{ key: "label", label: "Label", width: 24, render: (v) => pc.white(String(v ?? "-")) },
+			{ key: "phase", label: "Phase", width: 14, render: (v) => (v ? pc.magenta(String(v)) : pc.dim("-")) },
+			{
+				key: "status",
+				label: "Status",
+				width: 12,
+				render: (v) => (v === "from_cache" ? pc.green("from_cache") : statusLabel(String(v))),
+			},
+			{
+				key: "finished_at",
+				label: "Duration",
+				width: 10,
+				render: (_, row) => duration(row.started_at as number, row.finished_at as number),
+			},
+		]);
+	}
 
 	console.log();
 	header("Usage & Cost");
@@ -965,6 +998,40 @@ async function cmdReject(taskId: string | undefined) {
 	console.log(pc.yellow(`⚑ Task ${pc.bold(taskId)} rejected. Preserved worktree/branch removed if present.`));
 }
 
+async function cmdRerun(taskId: string | undefined, args: ReturnType<typeof parseArgs>["values"]) {
+	if (!taskId) {
+		console.error(pc.red("✖ Task ID required. Usage: kanade rerun <task-id> [--args '{}'] [--follow]"));
+		process.exit(1);
+	}
+	const argsStr = args.args as string | undefined;
+	let parsedArgs: unknown;
+	if (argsStr) {
+		try {
+			parsedArgs = JSON.parse(argsStr);
+		} catch {
+			console.error(pc.red("✖ --args must be valid JSON"));
+			process.exit(1);
+		}
+	}
+	const body = (await api(`/tasks/${taskId}/rerun`, {
+		method: "POST",
+		body: JSON.stringify(argsStr ? { args: parsedArgs } : {}),
+	})) as { task_id: string; rerun_of?: string };
+
+	if (args.json) {
+		console.log(JSON.stringify(body, null, 2));
+		return;
+	}
+	console.log(pc.green(`✔ Rerun task ${pc.bold(body.task_id)} created.`));
+	console.log(pc.dim(`  Parent: ${body.rerun_of ?? taskId}`));
+	if (args.follow) {
+		console.log();
+		await cmdTail(body.task_id);
+	} else {
+		console.log(pc.dim(`  Run 'kanade tail ${body.task_id}' to follow progress.`));
+	}
+}
+
 async function cmdIterate(taskId: string | undefined, args: ReturnType<typeof parseArgs>["values"]) {
 	if (!taskId) {
 		console.error(pc.red("✖ Task ID required. Usage: kanade iterate <task-id> --instructions '...'"));
@@ -1139,6 +1206,8 @@ async function main() {
 			return cmdGenerateWorkflow(values);
 		case "run":
 			return cmdRun(positionals[1] as string | undefined, values);
+		case "rerun":
+			return cmdRerun(positionals[1] as string | undefined, values);
 		case "iterate":
 			return cmdIterate(positionals[1] as string | undefined, values);
 		case "save":
@@ -1176,6 +1245,7 @@ ${pc.bold("Commands:")}
                       ${pc.dim("--prompt '...' [--workflow-size small|medium|large] [--author-model ...] [--agent-model ...] [--role-model reviewer=...] [--prepare-command cmd] [--follow]")} Generate workflow and run
   ${pc.cyan("generate-workflow")} ${pc.dim("--prompt '...' [--workflow-size small|medium|large] [--json]")} Generate workflow script without running
   ${pc.cyan("iterate")}       ${pc.dim("<task-id> --instructions '...'")} Iterate on task
+  ${pc.cyan("rerun")}         ${pc.dim("<task-id> [--args '{}'] [--follow]")} Rerun task with journal cache
   ${pc.cyan("save")}          ${pc.dim("<task-id> --as <name>")}          Save script as workflow
   ${pc.cyan("workflows")}     ${pc.dim("[--json]")}                      List workflows
   ${pc.cyan("merge")}         ${pc.dim("<task-id>")}                     Merge branch
