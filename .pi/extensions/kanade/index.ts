@@ -276,6 +276,12 @@ type ActionItem = {
 	danger?: boolean;
 };
 
+type ActiveOperation = {
+	label: string;
+	detail?: string;
+	startedAt: number;
+};
+
 type RecoveryCleanupResult = {
 	dry_run: boolean;
 	matched: number;
@@ -1749,6 +1755,8 @@ class KanadePanel implements Component {
 	private cachedLines?: string[];
 	private closed = false;
 	private actionInProgress = false;
+	private activeOperation?: ActiveOperation;
+	private operationTimer: ReturnType<typeof setInterval> | undefined;
 	private detailLoadSeq = 0;
 	private detailLoadTimer: ReturnType<typeof setTimeout> | undefined;
 	private actionMenu?: { taskId: string; items: ActionItem[]; selected: number };
@@ -1800,7 +1808,10 @@ class KanadePanel implements Component {
 			else this.renderNarrow(body, innerWidth);
 		}
 
-		if (this.lastNotice) {
+		if (this.activeOperation) {
+			body.push(rule(innerWidth, this.theme));
+			body.push(this.activeOperationLine(innerWidth));
+		} else if (this.lastNotice) {
 			body.push(rule(innerWidth, this.theme));
 			body.push(this.color(this.lastNotice.kind === "info" ? "muted" : this.lastNotice.kind, this.lastNotice.text));
 		}
@@ -1929,6 +1940,7 @@ class KanadePanel implements Component {
 		if (this.closed) return;
 		this.closed = true;
 		if (this.detailLoadTimer) clearTimeout(this.detailLoadTimer);
+		this.stopOperation();
 		this.done();
 	}
 
@@ -2070,7 +2082,11 @@ class KanadePanel implements Component {
 				danger: true,
 				onConfirm: () => this.mergeTask(task),
 			});
-			if (confirmed) await this.runPanelAction(() => this.mergeTask(task));
+			if (confirmed)
+				await this.runPanelAction(() => this.mergeTask(task), {
+					label: "Merge in progress",
+					detail: `${task.id} · please wait`,
+				});
 			return;
 		}
 		if (item.key === "abort") {
@@ -2081,7 +2097,11 @@ class KanadePanel implements Component {
 				danger: true,
 				onConfirm: () => this.abortTask(task),
 			});
-			if (confirmed) await this.runPanelAction(() => this.abortTask(task));
+			if (confirmed)
+				await this.runPanelAction(() => this.abortTask(task), {
+					label: "Abort in progress",
+					detail: task.id,
+				});
 			return;
 		}
 		if (item.key === "reject") {
@@ -2101,17 +2121,23 @@ class KanadePanel implements Component {
 			return;
 		}
 		if (item.key === "reconcile") {
-			await this.runPanelAction(() => this.reconcileTask(task));
+			await this.runPanelAction(() => this.reconcileTask(task), {
+				label: "Reconcile in progress",
+				detail: task.id,
+			});
 			return;
 		}
 		if (item.key === "agent") {
 			await this.openAgentDetail();
 			return;
 		}
-		await this.runPanelAction(async () => {
-			if (item.key === "recovery") this.activeTab = "Worktree";
-			else if (item.key === "refresh") await this.refresh();
-		});
+		await this.runPanelAction(
+			async () => {
+				if (item.key === "recovery") this.activeTab = "Worktree";
+				else if (item.key === "refresh") await this.refresh();
+			},
+			item.key === "refresh" ? { label: "Refresh in progress" } : undefined,
+		);
 	}
 
 	private async confirmOverlay(dialog: ConfirmDialog): Promise<boolean> {
@@ -2121,10 +2147,13 @@ class KanadePanel implements Component {
 		});
 	}
 
-	private async runPanelAction(action: () => Promise<void>): Promise<void> {
+	private async runPanelAction(
+		action: () => Promise<void>,
+		operation?: Omit<ActiveOperation, "startedAt">,
+	): Promise<void> {
 		this.actionInProgress = true;
 		this.lastNotice = undefined;
-		this.invalidateAndRender();
+		this.startOperation(operation ?? { label: "Action in progress" });
 		try {
 			await action();
 			this.invalidateAndRender();
@@ -2134,6 +2163,7 @@ class KanadePanel implements Component {
 			this.ui.notify(this.lastNotice.text, "error");
 		} finally {
 			this.actionInProgress = false;
+			this.stopOperation();
 			this.invalidateAndRender();
 		}
 	}
@@ -2214,7 +2244,11 @@ class KanadePanel implements Component {
 			danger: true,
 			onConfirm: () => this.cleanupRecoveryTask(task),
 		});
-		if (confirmed) await this.runPanelAction(() => this.cleanupRecoveryTask(task));
+		if (confirmed)
+			await this.runPanelAction(() => this.cleanupRecoveryTask(task), {
+				label: "Cleanup in progress",
+				detail: task.id,
+			});
 	}
 
 	private async cleanupRecoveryTask(task: KanadeTask): Promise<void> {
@@ -2856,9 +2890,11 @@ class KanadePanel implements Component {
 			? "Enter run action"
 			: this.confirmDialog
 				? "Enter confirm"
-				: this.actionInProgress
-					? "action running"
-					: "Enter actions";
+				: this.activeOperation
+					? this.activeOperation.label.toLowerCase()
+					: this.actionInProgress
+						? "action running"
+						: "Enter actions";
 		const searchHint = this.searchMode
 			? "type search · Backspace edit · Enter actions"
 			: this.searchQuery.length > 0
@@ -2947,6 +2983,30 @@ class KanadePanel implements Component {
 
 	private runningToken(): string {
 		return `${this.color("accent", "running")} `;
+	}
+
+	private activeOperationLine(width: number): string {
+		const operation = this.activeOperation;
+		if (!operation) return "";
+		const elapsedSeconds = Math.max(0, Math.floor((Date.now() - operation.startedAt) / 1000));
+		const detail = operation.detail ? ` · ${operation.detail}` : "";
+		return truncateAnsi(
+			`${this.color("accent", operation.label)}${this.color("dim", `${detail} · ${elapsedSeconds}s elapsed`)}`,
+			width,
+		);
+	}
+
+	private startOperation(operation: Omit<ActiveOperation, "startedAt">): void {
+		this.stopOperation();
+		this.activeOperation = { ...operation, startedAt: Date.now() };
+		this.operationTimer = setInterval(() => this.invalidateAndRender(), 1000);
+		this.invalidateAndRender();
+	}
+
+	private stopOperation(): void {
+		if (this.operationTimer) clearInterval(this.operationTimer);
+		this.operationTimer = undefined;
+		this.activeOperation = undefined;
 	}
 
 	private tickSpinner(): void {}
