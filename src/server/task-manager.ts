@@ -853,7 +853,7 @@ export class TaskManager {
 		return this.workflowStore.delete(name);
 	}
 
-	save(taskId: string, name: string): void {
+	save(taskId: string, name: string, overwrite = false): void {
 		if (!name?.trim()) throw new Error("name is required");
 		if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
 			throw new Error("name must contain only alphanumeric characters, hyphens, and underscores");
@@ -861,6 +861,10 @@ export class TaskManager {
 		const task = this.store.getTask(taskId);
 		if (!task) throw new Error(`Task not found: ${taskId}`);
 		if (!existsSync(task.workflow_path)) throw new Error(`Workflow script not found for task: ${taskId}`);
+
+		if (!overwrite && this.workflowStore.exists(name)) {
+			throw new AppError(`Workflow '${name}' already exists. Use overwrite=true to replace it.`, 409);
+		}
 
 		const script = readFileSync(task.workflow_path, "utf8");
 		const dest = join(this.config.paths.workflowsDir, `${name}.js`);

@@ -216,12 +216,12 @@ export function createApp(ctx: AppContext): Hono {
 
 	app.post("/tasks/:id/save", async (c) => {
 		const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
-		const { name } = body;
+		const { name, overwrite } = body;
 		if (typeof name !== "string" || !name.trim()) throw new AppError("name is required", 400);
 		if (!/^[a-zA-Z0-9_-]+$/.test(name))
 			throw new AppError("name must contain only alphanumeric characters, hyphens, and underscores", 400);
 		if (!ctx.taskManager.get(c.req.param("id"))) return c.json({ error: "Task not found" }, 404);
-		ctx.taskManager.save(c.req.param("id"), name);
+		ctx.taskManager.save(c.req.param("id"), name, overwrite === true);
 		return c.json({ ok: true });
 	});
 

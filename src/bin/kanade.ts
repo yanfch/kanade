@@ -802,9 +802,10 @@ async function cmdSave(taskId: string, args: ReturnType<typeof parseArgs>["value
 		console.error(pc.red("✖ --as <name> is required"));
 		process.exit(1);
 	}
+	const force = Boolean(args.force);
 	await api(`/tasks/${taskId}/save`, {
 		method: "POST",
-		body: JSON.stringify({ name }),
+		body: JSON.stringify({ name, overwrite: force }),
 	});
 	console.log(pc.green(`✔ Saved as workflow '${pc.bold(name)}'.`));
 }
@@ -1155,6 +1156,7 @@ async function main() {
 			state: { type: "string" },
 			actionable: { type: "boolean" },
 			all: { type: "boolean" },
+			force: { type: "boolean" },
 			task: { type: "string" },
 			"older-than": { type: "string" },
 			execute: { type: "boolean" },
@@ -1246,7 +1248,7 @@ ${pc.bold("Commands:")}
   ${pc.cyan("generate-workflow")} ${pc.dim("--prompt '...' [--workflow-size small|medium|large] [--json]")} Generate workflow script without running
   ${pc.cyan("iterate")}       ${pc.dim("<task-id> --instructions '...'")} Iterate on task
   ${pc.cyan("rerun")}         ${pc.dim("<task-id> [--args '{}'] [--follow]")} Rerun task with journal cache
-  ${pc.cyan("save")}          ${pc.dim("<task-id> --as <name>")}          Save script as workflow
+  ${pc.cyan("save")}          ${pc.dim("<task-id> --as <name> [--force]")}          Save script as workflow
   ${pc.cyan("workflows")}     ${pc.dim("[--json]")}                      List workflows
   ${pc.cyan("merge")}         ${pc.dim("<task-id>")}                     Merge branch
   ${pc.cyan("reconcile")}     ${pc.dim("<task-id> [--merge-commit sha]")} Mark a manually merged task branch as merged
