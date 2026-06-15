@@ -317,6 +317,7 @@ const SESSIONS: unknown[] = [];
 
 const fetchCalls: string[] = [];
 const patchBodies: Record<string, unknown>[] = [];
+const recoveryCleanupBodies: Record<string, unknown>[] = [];
 
 function mockFetch(url: string | URL | Request, init?: RequestInit): Promise<Response> {
 	const raw = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
@@ -331,6 +332,19 @@ function mockFetch(url: string | URL | Request, init?: RequestInit): Promise<Res
 	if (path === "/tasks" && method === "GET")
 		return json({ tasks: [TASK, TASK_FAILED, TASK_MERGED, TASK_BLOCKED, TASK_CHECKS_MISSING, TASK_FAILED_MERGED] });
 	if (path === "/inbox") return json({ requests: [] });
+	if (path === "/recovery/cleanup" && method === "POST") {
+		let body: Record<string, unknown> = {};
+		try {
+			body = JSON.parse((init?.body as string) ?? "{}");
+		} catch {}
+		recoveryCleanupBodies.push(body);
+		return json({
+			dry_run: body.execute !== true,
+			matched: 1,
+			cleaned: body.execute === true ? 1 : 0,
+			tasks: [TASK_FAILED],
+		});
+	}
 	if (/^\/tasks\/T-0001\/snapshot$/.test(path)) return json({ snapshot: SNAPSHOT });
 	if (/^\/tasks\/T-0001\/script$/.test(path)) return json({ script: SCRIPT });
 	if (/^\/tasks\/T-0001\/worktrees$/.test(path)) return json({ worktrees: WORKTREES });
@@ -880,9 +894,9 @@ function assert(label: string, condition: boolean, detail?: string) {
 	}
 }
 
-// ---------- Test 5b: failed task action menu includes reconcile ----------
+// ---------- Test 5b: failed task action menu includes recovery actions ----------
 {
-	console.log("\nTest 5b: failed task action menu includes reconcile");
+	console.log("\nTest 5b: failed task action menu includes recovery actions");
 	customCalls.length = 0;
 	const panel = await createPanel();
 	panel.handleInput("/");
@@ -897,6 +911,7 @@ function assert(label: string, condition: boolean, detail?: string) {
 		const text = strip(overlayComp.render(80).join("\n"));
 		assert("action menu opened", text.includes("Actions"), `overlay: ${text.slice(0, 300)}`);
 		assert("shows reconcile action", text.includes("Reconcile manual merge"), `overlay: ${text.slice(0, 300)}`);
+		assert("shows cleanup action", text.includes("Cleanup preserved worktree"), `overlay: ${text.slice(0, 300)}`);
 		overlayComp.handleInput?.("\x1b");
 		actionCall.resolve(null);
 	}
@@ -924,7 +939,11 @@ function assert(label: string, condition: boolean, detail?: string) {
 			!text.includes("Reconcile manual merge"),
 			`overlay: ${text.slice(0, 400)}`,
 		);
-		assert("hides reject cleanup for merged task", !text.includes("Reject cleanup"), `overlay: ${text.slice(0, 400)}`);
+		assert(
+			"hides cleanup for merged task",
+			!text.includes("Cleanup preserved worktree"),
+			`overlay: ${text.slice(0, 400)}`,
+		);
 		assert(
 			"hides iterate for merged failed task",
 			!text.includes("Iterate with instructions"),
@@ -932,6 +951,86 @@ function assert(label: string, condition: boolean, detail?: string) {
 		);
 		overlayComp.handleInput?.("\x1b");
 		actionCall.resolve(null);
+	}
+}
+
+// ---------- Test 5d: cleanup action dry-runs before confirmation ----------
+{
+	console.log("\nTest 5d: cleanup action dry-runs before confirmation");
+	customCalls.length = 0;
+	recoveryCleanupBodies.length = 0;
+	const panel = await createPanel();
+	panel.handleInput("/");
+	for (const ch of "T-0002") panel.handleInput(ch);
+	panel.handleInput("\r");
+	await delay(150);
+	const actionCall = customCalls.at(-1);
+	if (!actionCall) {
+		assert("action menu opened", false);
+	} else {
+		const overlayComp = actionCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
+		for (let i = 0; i < 3; i++) overlayComp.handleInput?.("\x1b[B");
+		overlayComp.handleInput?.("\r");
+		await delay(250);
+		assert("dry-run POST sent", recoveryCleanupBodies.length === 1, JSON.stringify(recoveryCleanupBodies));
+		assert(
+			"dry-run targets task",
+			recoveryCleanupBodies[0]?.task_id === "T-0002",
+			JSON.stringify(recoveryCleanupBodies[0]),
+		);
+		assert(
+			"dry-run does not execute",
+			recoveryCleanupBodies[0]?.execute !== true,
+			JSON.stringify(recoveryCleanupBodies[0]),
+		);
+		const confirmCall = customCalls.at(-1);
+		const confirmComp = confirmCall?.component as
+			| { render(w: number): string[]; handleInput?: (d: string) => void }
+			| undefined;
+		const text = strip(confirmComp?.render(90).join("\n") ?? "");
+		assert("confirm overlay shows dry-run summary", text.includes("Dry-run matched"), `overlay: ${text.slice(0, 400)}`);
+		confirmCall?.resolve(false);
+		await delay(150);
+		assert(
+			"cancel does not execute cleanup",
+			recoveryCleanupBodies.length === 1,
+			JSON.stringify(recoveryCleanupBodies),
+		);
+	}
+}
+
+// ---------- Test 5e: cleanup action executes only after confirmation ----------
+{
+	console.log("\nTest 5e: cleanup action executes only after confirmation");
+	customCalls.length = 0;
+	recoveryCleanupBodies.length = 0;
+	const panel = await createPanel();
+	panel.handleInput("/");
+	for (const ch of "T-0002") panel.handleInput(ch);
+	panel.handleInput("\r");
+	await delay(150);
+	const actionCall = customCalls.at(-1);
+	if (!actionCall) {
+		assert("action menu opened", false);
+	} else {
+		const overlayComp = actionCall.component as { handleInput?: (d: string) => void };
+		for (let i = 0; i < 3; i++) overlayComp.handleInput?.("\x1b[B");
+		overlayComp.handleInput?.("\r");
+		await delay(250);
+		const confirmCall = customCalls.at(-1);
+		confirmCall?.resolve(true);
+		await delay(300);
+		assert("dry-run and execute POST sent", recoveryCleanupBodies.length === 2, JSON.stringify(recoveryCleanupBodies));
+		assert(
+			"execute cleanup confirmed",
+			recoveryCleanupBodies[1]?.execute === true,
+			JSON.stringify(recoveryCleanupBodies[1]),
+		);
+		assert(
+			"execute cleanup has confirmed flag",
+			recoveryCleanupBodies[1]?.confirmed === true,
+			JSON.stringify(recoveryCleanupBodies[1]),
+		);
 	}
 }
 

@@ -276,6 +276,13 @@ type ActionItem = {
 	danger?: boolean;
 };
 
+type RecoveryCleanupResult = {
+	dry_run: boolean;
+	matched: number;
+	cleaned: number;
+	tasks: Array<{ id?: string; worktree_summary?: WorktreeSummary }>;
+};
+
 type ConfirmDialog = {
 	title: string;
 	message: string;
@@ -1849,7 +1856,7 @@ class KanadePanel implements Component {
 				items.push({ key: "recovery", label: "Open recovery view" });
 				items.push({ key: "reconcile", label: "Reconcile manual merge" });
 				items.push({ key: "iterate", label: "Iterate with instructions" });
-				items.push({ key: "reject", label: "Reject cleanup preserved worktree", danger: true });
+				items.push({ key: "reject", label: "Cleanup preserved worktree", danger: true });
 				break;
 			case "terminal_merged":
 				items.push({ key: "recovery", label: "Open merge summary" });
@@ -1935,15 +1942,7 @@ class KanadePanel implements Component {
 			return;
 		}
 		if (item.key === "reject") {
-			const confirmed = await this.confirmOverlay({
-				title: `Delete preserved worktree for ${task.id}?`,
-				message:
-					"This rejects the task and cleans up its preserved worktree/branch. Prefer inspect or iterate first if partial work may be useful.",
-				confirmLabel: "Delete preserved worktree",
-				danger: true,
-				onConfirm: () => this.rejectTask(task),
-			});
-			if (confirmed) await this.runPanelAction(() => this.rejectTask(task));
+			await this.previewAndCleanupRecovery(task);
 			return;
 		}
 		if (item.key === "respond" || item.key === "iterate") {
@@ -2047,9 +2046,42 @@ class KanadePanel implements Component {
 		await this.refresh();
 	}
 
-	private async rejectTask(task: KanadeTask): Promise<void> {
-		await postJson(`/tasks/${encodeURIComponent(task.id)}/reject`, {});
-		this.ui.notify(`Rejected and cleaned up ${task.id}`, "warning");
+	private async previewAndCleanupRecovery(task: KanadeTask): Promise<void> {
+		let preview: RecoveryCleanupResult;
+		try {
+			preview = await postJson<RecoveryCleanupResult>("/recovery/cleanup", { task_id: task.id });
+		} catch (error) {
+			this.lastNotice = { kind: "error", text: error instanceof Error ? error.message : String(error) };
+			this.ui.notify(this.lastNotice.text, "error");
+			this.invalidateAndRender();
+			return;
+		}
+		if (preview.matched === 0) {
+			this.lastNotice = { kind: "warning", text: `No preserved recovery worktree matched ${task.id}` };
+			this.ui.notify(this.lastNotice.text, "warning");
+			this.invalidateAndRender();
+			return;
+		}
+		const summary = preview.tasks[0]?.worktree_summary ?? task.worktree_summary;
+		const target = [summary?.branch, summary?.path].filter(Boolean).join(" · ") || task.id;
+		const confirmed = await this.confirmOverlay({
+			title: `Cleanup preserved worktree for ${task.id}?`,
+			message: `Dry-run matched ${preview.matched} preserved recovery item(s): ${target}. This will remove the preserved worktree/branch and mark the task rejected. Prefer inspect or iterate first if partial work may be useful.`,
+			confirmLabel: "Cleanup preserved worktree",
+			danger: true,
+			onConfirm: () => this.cleanupRecoveryTask(task),
+		});
+		if (confirmed) await this.runPanelAction(() => this.cleanupRecoveryTask(task));
+	}
+
+	private async cleanupRecoveryTask(task: KanadeTask): Promise<void> {
+		const result = await postJson<RecoveryCleanupResult>("/recovery/cleanup", {
+			task_id: task.id,
+			execute: true,
+			confirmed: true,
+		});
+		this.lastNotice = { kind: "info", text: `Cleaned ${result.cleaned} preserved worktree(s) for ${task.id}` };
+		this.ui.notify(`Cleaned preserved worktree for ${task.id}`, "warning");
 		await this.refresh();
 	}
 
