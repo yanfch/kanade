@@ -821,7 +821,7 @@ async function cmdMerge(taskId: string | undefined) {
 async function cmdRecovery(args: ReturnType<typeof parseArgs>["values"]) {
 	const state = parseRecoveryStateArg(args.state);
 	const showAll = Boolean(args.all);
-	const actionable = Boolean(args.actionable) || !showAll;
+	const actionable = Boolean(args.actionable) || (!showAll && !state);
 	const query = new URLSearchParams();
 	if (state) query.set("state", state);
 	if (actionable) query.set("actionable", "true");
@@ -832,7 +832,12 @@ async function cmdRecovery(args: ReturnType<typeof parseArgs>["values"]) {
 		return;
 	}
 	if (body.tasks.length === 0) {
-		console.log(pc.green(showAll ? "✔ No failed/aborted tasks need recovery." : "✔ No actionable recovery tasks."));
+		const emptyMessage = state
+			? `✔ No ${state} recovery tasks.`
+			: showAll
+				? "✔ No failed/aborted tasks need recovery."
+				: "✔ No actionable recovery tasks.";
+		console.log(pc.green(emptyMessage));
 		return;
 	}
 	header("Recovery");
@@ -852,9 +857,11 @@ async function cmdRecovery(args: ReturnType<typeof parseArgs>["values"]) {
 	]);
 	console.log(
 		pc.dim(
-			showAll
-				? "\n  Use 'kanade show <id>' to inspect or 'kanade reconcile <id>' after a manual merge."
-				: "\n  Showing actionable items only. Use 'kanade recovery --all' to include rejected/no-worktree history.",
+			state
+				? "\n  Filtered by recovery state. Use 'kanade recovery' for actionable preserved worktrees."
+				: showAll
+					? "\n  Use 'kanade show <id>' to inspect or 'kanade reconcile <id>' after a manual merge."
+					: "\n  Showing actionable preserved worktrees only. Use 'kanade recovery --all' to include merged/rejected/no-worktree history.",
 		),
 	);
 }

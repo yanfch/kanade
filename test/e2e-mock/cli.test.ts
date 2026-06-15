@@ -245,7 +245,7 @@ describe("CLI — recovery", () => {
 			const all = cliJson("recovery --all") as Array<{ id: string; recovery_state: string }>;
 			expect(all.some((task) => task.id === noWorktree.task_id && task.recovery_state === "no_worktree")).toBe(true);
 
-			const noWorktreeOnly = cliJson("recovery --all --state no_worktree") as Array<{ id: string }>;
+			const noWorktreeOnly = cliJson("recovery --state no_worktree") as Array<{ id: string }>;
 			expect(noWorktreeOnly.some((task) => task.id === noWorktree.task_id)).toBe(true);
 			expect(noWorktreeOnly.some((task) => task.id === preserved.task_id)).toBe(false);
 		} finally {
@@ -278,6 +278,10 @@ describe("CLI — recovery", () => {
 			expect(out).toContain(branchTip.slice(0, 12));
 			const body = cliJson(`show ${task.task_id}`) as { worktrees: Array<{ status: string; merge_commit: string }> };
 			expect(body.worktrees[0]).toMatchObject({ status: "merged", merge_commit: branchTip });
+			const actionable = cliJson("recovery") as Array<{ id: string; recovery_state: string }>;
+			expect(actionable.some((row) => row.id === task.task_id)).toBe(false);
+			const mergedOnly = cliJson("recovery --state merged") as Array<{ id: string; recovery_state: string }>;
+			expect(mergedOnly.some((row) => row.id === task.task_id && row.recovery_state === "merged")).toBe(true);
 		} finally {
 			cli(`reject ${task.task_id}`);
 		}

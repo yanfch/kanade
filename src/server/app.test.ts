@@ -133,6 +133,36 @@ describe("GET /recovery", () => {
 				options: "{}",
 				result: null,
 			});
+			store.insertTask({
+				id: "TR-merged",
+				workflow_source: "inline",
+				workflow_name: null,
+				workflow_path: join(root, "merged.js"),
+				status: "aborted",
+				base_repo: process.cwd(),
+				base_branch: "main",
+				cwd: process.cwd(),
+				created_at: now - 2,
+				started_at: now - 2,
+				finished_at: now,
+				error: "aborted but manually merged",
+				options: "{}",
+				result: null,
+			});
+			store.insertWorktree({
+				id: "wt-merged",
+				task_id: "TR-merged",
+				label: "dev",
+				branch: "kanade/TR-merged",
+				base_branch: "main",
+				worktree_path: join(root, "merged"),
+				status: "merged",
+				base_repo: process.cwd(),
+				created_at: now,
+				last_used_at: now,
+				finished_at: now,
+				merge_commit: "abc123",
+			});
 
 			const res = await app.request("/recovery");
 			const body = (await res.json()) as { tasks: Array<Record<string, unknown>> };
@@ -148,6 +178,10 @@ describe("GET /recovery", () => {
 			const actionableRes = await app.request("/recovery?actionable=true");
 			const actionable = (await actionableRes.json()) as { tasks: Array<Record<string, unknown>> };
 			expect(actionable.tasks.map((task) => task.id)).toEqual(["TR-preserved"]);
+
+			const mergedRes = await app.request("/recovery?state=merged");
+			const merged = (await mergedRes.json()) as { tasks: Array<Record<string, unknown>> };
+			expect(merged.tasks.map((task) => task.id)).toEqual(["TR-merged"]);
 
 			const noWorktreeRes = await app.request("/recovery?state=no_worktree");
 			const noWorktree = (await noWorktreeRes.json()) as { tasks: Array<Record<string, unknown>> };

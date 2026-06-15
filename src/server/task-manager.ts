@@ -674,7 +674,7 @@ export class TaskManager {
 				};
 			})
 			.filter((row) => !options.state || row.recovery_state === options.state)
-			.filter((row) => !options.actionable || row.recovery_state === "preserved" || row.recovery_state === "merged");
+			.filter((row) => !options.actionable || row.recovery_state === "preserved");
 	}
 
 	inbox(): NeedsHumanRow[] {
