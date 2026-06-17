@@ -9,6 +9,7 @@ import {
 	DIFF_PATCH_TRUNCATE_LIMIT,
 	classifyAcceptance,
 	collectWorktreeDiffEvidence,
+	evaluateWorkflowQuality,
 	extractWorkflowSummary,
 	formatTaskEvent,
 	isUsageZero,
@@ -66,6 +67,15 @@ describe("live-acceptance argument parsing", () => {
 
 		expect(args.roleModels).toEqual({ reviewer: "gpt-5.4", dev: "gpt-5.3-codex-spark" });
 	});
+
+	it("parses workflow size for generated acceptance gates", () => {
+		const args = parseArgs(["--prompt", "run this", "--workflow-size", "large"]);
+
+		expect(args.workflowSize).toBe("large");
+		expect(() => parseArgs(["--prompt", "run this", "--workflow-size", "huge"])).toThrow(
+			"--workflow-size must be one of",
+		);
+	});
 });
 
 describe("live-acceptance event formatting", () => {
@@ -121,6 +131,37 @@ describe("live-acceptance workflow summary helper", () => {
 		expect(summary.hasReview).toBe(true);
 		expect(summary.hasValidation).toBe(true);
 		expect(summary.hasFixLoop).toBe(true);
+	});
+
+	it("evaluates workflow quality gates by workflow size", () => {
+		const summary = {
+			phases: [],
+			helperCalls: {
+				analyze: 0,
+				implement: 1,
+				reviewChange: 0,
+				continueImplementation: 0,
+				testChange: 0,
+				request_human: 0,
+				parallel: 0,
+			},
+			hasImplementation: true,
+			hasReview: false,
+			hasValidation: false,
+			hasFixLoop: false,
+		};
+
+		const small = evaluateWorkflowQuality(summary, "small");
+		expect(small.ok).toBe(true);
+
+		const medium = evaluateWorkflowQuality(summary, "medium");
+		expect(medium.ok).toBe(false);
+		expect(medium.reasons).toContain("medium workflow has no review step");
+		expect(medium.reasons).toContain("medium workflow has no validation step");
+
+		const large = evaluateWorkflowQuality({ ...summary, hasReview: true, hasValidation: true }, "large");
+		expect(large.ok).toBe(false);
+		expect(large.reasons).toContain("large workflow has no fix-loop step");
 	});
 });
 
@@ -312,6 +353,14 @@ describe("live-acceptance usage/result helpers", () => {
 		const inspect = classifyAcceptance({ ...base, hasAtLeastOneWorktreeCommit: false });
 		expect(inspect.recommendation).toBe("inspect");
 		expect(inspect.reasons).toContain("no worktree commit was recorded");
+
+		const missingQualityGate = classifyAcceptance({
+			...base,
+			workflowQualityOk: false,
+			workflowQualityReasons: ["medium workflow has no review step"],
+		});
+		expect(missingQualityGate.recommendation).toBe("inspect");
+		expect(missingQualityGate.reasons).toContain("medium workflow has no review step");
 
 		const reject = classifyAcceptance({
 			...base,

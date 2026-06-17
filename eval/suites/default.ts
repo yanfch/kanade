@@ -37,15 +37,14 @@ return r`,
 
 	{
 		id: "E002",
-		name: "agent failure returns null",
+		name: "agent failure fails task",
 		category: "bugfix",
 		source: "inline",
 		script: `export const meta = { name: 'test', description: 'Failure test' }
-const r = await agent('fail', { label: 'broken' })
-return { result: r, failed: r === null }`,
+await agent('fail', { label: 'broken' })
+return { unreachable: true }`,
 		expected: {
-			status: "finished",
-			resultContains: { failed: true },
+			status: "failed",
 			maxAgentCalls: 1,
 		},
 		scoring: { weights: { completion: 0.4, correctness: 0.4, efficiency: 0.2 } },
@@ -184,7 +183,7 @@ return await agent('summarize', { label: 's', instructions: 'be concise', schema
 		script: `export const meta = { name: 'throw', description: 'Throw test' }
 throw new Error('intentional error')`,
 		expected: {
-			status: "finished", // task finishes (with error in result)
+			status: "failed",
 			maxAgentCalls: 0,
 		},
 		scoring: { weights: { completion: 0.5, correctness: 0.3, efficiency: 0.2 } },

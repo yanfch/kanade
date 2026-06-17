@@ -24,7 +24,7 @@ export interface EvalCase {
 
 	expected: {
 		/** Expected final task status */
-		status: "finished" | "needs_human";
+		status: "finished" | "failed" | "aborted" | "needs_human";
 		/** Result should contain these fields (deep partial match) */
 		resultContains?: unknown;
 		/** Maximum allowed agent calls */

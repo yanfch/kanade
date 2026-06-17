@@ -1,11 +1,14 @@
 import { resolve } from "node:path";
 
+export type WorkflowSizeHint = "small" | "medium" | "large";
+
 export interface Args {
 	baseUrl: string;
 	prompt?: string;
 	promptFile?: string;
 	authorModel?: string;
 	agentModel?: string;
+	workflowSize?: WorkflowSizeHint;
 	roleModels: Record<string, string>;
 	cwd: string;
 	timeoutMs: number;
@@ -46,6 +49,7 @@ export function parseArgs(
 		else if (arg === "--prompt-file") args.promptFile = next();
 		else if (arg === "--author-model") args.authorModel = next();
 		else if (arg === "--agent-model") args.agentModel = next();
+		else if (arg === "--workflow-size") args.workflowSize = parseWorkflowSize(next());
 		else if (arg === "--role-model") {
 			const value = next();
 			const sep = value.indexOf("=");
@@ -65,10 +69,15 @@ export function parseArgs(
 	return args;
 }
 
+function parseWorkflowSize(value: string): WorkflowSizeHint {
+	if (value === "small" || value === "medium" || value === "large") return value;
+	throw new Error("--workflow-size must be one of: small, medium, large");
+}
+
 export function usageAndExit(code: number): never {
 	console.log(`Usage:
   npm run live:accept -- --prompt-file /tmp/task.txt
-  npm run live:accept -- --prompt "..." --check "npm test"
+  npm run live:accept -- --prompt "..." --workflow-size medium --check "npm test"
 
 Defaults are read from ~/.kanade/config.yml: defaults author/agent/role models, isolation.prepareCommands, and liveAcceptance prepare/checks/timeouts. CLI flags override config for one run.
 
@@ -77,6 +86,7 @@ Options:
   --prompt-file PATH         Read generated task prompt from file
   --author-model MODEL       Model used by the workflow author
   --agent-model MODEL        Default model used by workflow subagents
+  --workflow-size SIZE       small, medium, or large; also drives acceptance quality gates
   --role-model R=M           Per-role subagent model override; repeatable
   --prepare-command COMMAND  Task-level prepare command, passed in task options.prepare_commands; repeatable
   --prepare COMMAND          Worktree-local pre-check command before checks, e.g. npm install; repeatable

@@ -61,16 +61,16 @@ export async function runCase(evalCase: EvalCase, opts: EvalRunnerOptions = {}):
 
 		// Wait for task to finish
 		const row = await waitForTask(tm, taskResult.task_id);
-		const task = tm.get(taskResult.task_id);
 
 		// Collect metrics
 		const journal = tm.getJournal(taskResult.task_id);
+		const phases = store.listPhases(taskResult.task_id).map((phase) => phase.phase);
 		const metrics: RunMetrics = {
 			agentCalls: journal?.agents?.length ?? 0,
 			durationMs: row.durationMs,
 			tokensUsed: 0, // TODO: extract from tracing
 			journalHits: 0, // TODO: extract from journal
-			phases: task?.phases?.split(",").filter(Boolean) ?? [],
+			phases,
 		};
 
 		// Parse result

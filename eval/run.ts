@@ -22,7 +22,19 @@ async function main() {
 	const suite = DEFAULT_SUITE;
 	console.log(`Running ${suite.length} eval cases...\n`);
 
-	const opts = useMock ? { createSession: createMockSessionFactory({ text: "mock result" }).createSession } : {};
+	const opts = useMock
+		? {
+				createSession: createMockSessionFactory({
+					text: "mock result",
+					handler: (prompt, tools) => {
+						if (/\bfail\b/i.test(prompt)) return { type: "error", error: new Error("mock failure") };
+						if (tools?.some((tool) => tool.name === "structured_output"))
+							return { type: "structured", value: { ok: true } };
+						return { type: "text", text: "mock result" };
+					},
+				}).createSession,
+			}
+		: {};
 
 	const results = await runSuite(suite, opts);
 	const report = buildReport(results);

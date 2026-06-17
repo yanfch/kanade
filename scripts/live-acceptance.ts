@@ -5,7 +5,7 @@ import { dirname, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadConfig } from "../src/config/config.ts";
 import { validateSemanticWorkflowScript } from "../src/workflow-engine/runtime.ts";
-import { parseArgs, usageAndExit } from "./live-acceptance-args.ts";
+import { type WorkflowSizeHint, parseArgs, usageAndExit } from "./live-acceptance-args.ts";
 
 export const DIFF_PATCH_TRUNCATE_LIMIT = 4000;
 
@@ -81,6 +81,15 @@ interface WorktreeDiffEvidence {
 	originalPatchLength: number;
 }
 
+interface WorkflowQualityEvidence {
+	workflowSize: WorkflowSizeHint;
+	ok: boolean;
+	requiresReview: boolean;
+	requiresValidation: boolean;
+	requiresFixLoop: boolean;
+	reasons: string[];
+}
+
 interface AcceptanceEvidence {
 	usage: {
 		hasUsageRecord: boolean;
@@ -94,12 +103,14 @@ interface AcceptanceEvidence {
 		count: number;
 		atLeastOneCommit: boolean;
 	};
+	workflowQuality: WorkflowQualityEvidence;
 }
 
 interface TaskLaunchOptions {
 	cwd: string;
 	author_model?: string;
 	agent_model?: string;
+	workflow_size?: WorkflowSizeHint;
 	role_models?: Record<string, string>;
 	prepare_commands?: string[];
 }
@@ -159,6 +170,8 @@ interface RecommendationInput {
 	taskError: string | null;
 	hasResult: boolean;
 	usageIsZero: boolean;
+	workflowQualityOk?: boolean;
+	workflowQualityReasons?: string[];
 }
 
 interface RecommendationResult {
@@ -540,6 +553,30 @@ export function extractWorkflowSummary(script: string): WorkflowSummary {
 	};
 }
 
+export function evaluateWorkflowQuality(
+	summary: WorkflowSummary,
+	workflowSize: WorkflowSizeHint = "medium",
+): WorkflowQualityEvidence {
+	const requiresReview = workflowSize === "medium" || workflowSize === "large";
+	const requiresValidation = workflowSize === "medium" || workflowSize === "large";
+	const requiresFixLoop = workflowSize === "large";
+	const reasons: string[] = [];
+
+	if (!summary.hasImplementation) reasons.push("workflow has no implementation step");
+	if (requiresReview && !summary.hasReview) reasons.push(`${workflowSize} workflow has no review step`);
+	if (requiresValidation && !summary.hasValidation) reasons.push(`${workflowSize} workflow has no validation step`);
+	if (requiresFixLoop && !summary.hasFixLoop) reasons.push("large workflow has no fix-loop step");
+
+	return {
+		workflowSize,
+		ok: reasons.length === 0,
+		requiresReview,
+		requiresValidation,
+		requiresFixLoop,
+		reasons,
+	};
+}
+
 export function isUsageZero(value: unknown): boolean {
 	if (value === null || value === undefined) return true;
 	if (typeof value === "number") return value === 0;
@@ -590,6 +627,8 @@ export function classifyAcceptance(inputs: RecommendationInput): RecommendationR
 	if (inputs.usageIsZero) reasons.push("usage appears to be zero");
 	if (inputs.taskError) reasons.push(`task error: ${inputs.taskError}`);
 	if (inputs.hasFailedValidation) reasons.push("result contains failed validation status");
+	if (inputs.workflowQualityOk === false)
+		reasons.push(...(inputs.workflowQualityReasons ?? ["workflow quality gate failed"]));
 
 	const hardRejectStatuses: TerminalRejectStatus[] = ["failed", "aborted", "needs_human"];
 	const isHardReject =
@@ -613,7 +652,8 @@ export function classifyAcceptance(inputs: RecommendationInput): RecommendationR
 		inputs.allWorktreesClean &&
 		inputs.mainClean &&
 		inputs.prepareOk &&
-		inputs.checksOk;
+		inputs.checksOk &&
+		inputs.workflowQualityOk !== false;
 
 	if (canAccept) {
 		return { recommendation: "accept", reasons: [] };
@@ -680,7 +720,7 @@ function formatUsageSection(usage: unknown, worktreeCommitEvidence: boolean): vo
 	if (totalTokens !== undefined) console.log(`  tokens.total=${Math.round(totalTokens)}`);
 }
 
-function formatWorkflowSummary(summary: WorkflowSummary): void {
+function formatWorkflowSummary(summary: WorkflowSummary, quality?: WorkflowQualityEvidence): void {
 	console.log("workflow summary:");
 	console.log(`  phases: ${summary.phases.length > 0 ? summary.phases.join(" -> ") : "(none)"}`);
 	const helperSummary = WORKFLOW_HELPERS.map((name) => `${name}=${summary.helperCalls[name]}`).join(", ");
@@ -690,6 +730,10 @@ function formatWorkflowSummary(summary: WorkflowSummary): void {
 			summary.hasValidation ? "yes" : "no"
 		}, fix-loop=${summary.hasFixLoop ? "yes" : "no"}`,
 	);
+	if (quality) {
+		console.log(`  quality gate: ${quality.ok ? "ok" : "inspect"} (${quality.workflowSize})`);
+		for (const reason of quality.reasons) console.log(`    - ${reason}`);
+	}
 }
 
 function writeEvidenceFile(path: string, report: AcceptanceReport): void {
@@ -702,7 +746,7 @@ function printNonJsonReport(report: AcceptanceReport): void {
 	console.log(`status: ${report.status}`);
 	console.log(`recommendation: ${report.recommendation}`);
 	console.log(`evidence: ${report.evidencePath}`);
-	formatWorkflowSummary(report.workflowSummary);
+	formatWorkflowSummary(report.workflowSummary, report.evidence.workflowQuality);
 
 	console.log("\nDiff summary:");
 	if (report.worktreeDiffs.length === 0) {
@@ -759,10 +803,12 @@ async function main() {
 	const localPrepare = args.prepare.length ? args.prepare : config.liveAcceptance.prepare;
 	const checksToRun = args.checks.length ? args.checks : config.liveAcceptance.checks;
 
+	const workflowSize = args.workflowSize ?? "medium";
 	const taskOptions: TaskLaunchOptions = {
 		cwd: args.cwd,
 		...(args.authorModel ? { author_model: args.authorModel } : {}),
 		...(args.agentModel ? { agent_model: args.agentModel } : {}),
+		workflow_size: workflowSize,
 		...(Object.keys(roleModels).length ? { role_models: roleModels } : {}),
 		...prepareCommandsOption,
 	};
@@ -801,6 +847,7 @@ async function main() {
 	);
 	const workflowScript = existsSync(detail.task.workflow_path) ? readFileSync(detail.task.workflow_path, "utf8") : "";
 	const workflowSummary = extractWorkflowSummary(workflowScript);
+	const workflowQuality = evaluateWorkflowQuality(workflowSummary, workflowSize);
 
 	let semanticWorkflowOk = true;
 	let semanticWorkflowError: string | undefined;
@@ -841,6 +888,8 @@ async function main() {
 		taskError: detail.task.error,
 		hasResult: Boolean(detail.task.result),
 		usageIsZero,
+		workflowQualityOk: workflowQuality.ok,
+		workflowQualityReasons: workflowQuality.reasons,
 	});
 
 	const reasons = decision.reasons;
@@ -879,6 +928,7 @@ async function main() {
 				count: worktreesResponse.worktrees.length,
 				atLeastOneCommit: hasAtLeastOneWorktreeCommit,
 			},
+			workflowQuality,
 		},
 		git: {
 			mainDirty: mainStatus.trim().length > 0,

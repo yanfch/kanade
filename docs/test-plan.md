@@ -82,6 +82,7 @@ Use the harness against a running Kanade server to submit a generated task and c
 ```bash
 npm run live:accept -- \
   --prompt "Update the Java scheduler error handling..." \
+  --workflow-size medium \
   --prepare-command "./mvnw -q -DskipTests dependency:go-offline" \
   --check "./mvnw test"
 ```
@@ -91,6 +92,7 @@ npm run live:accept -- \
 ```bash
 npm run live:accept -- \
   --prompt "Update the Java service validation path..." \
+  --workflow-size medium \
   --prepare-command "./gradlew --version" \
   --check "./gradlew test"
 ```
@@ -175,6 +177,7 @@ Each run writes a machine-readable evidence report to `<run_dir>/acceptance-evid
 
 Live acceptance now emits v2 evidence sections for review:
 - `workflowSummary`: regex-extracted ordered phases and helper call counts (`analyze`, `implement`, `reviewChange`, `continueImplementation`, `testChange`, `request_human`, `parallel`) plus `hasImplementation/hasReview/hasValidation/hasFixLoop`.
+- `evidence.workflowQuality`: size-aware unattended-acceptance gate. `small` requires implementation, `medium` requires implementation + review + validation, and `large` additionally requires a fix-loop step. Missing quality gates produce `inspect` instead of `accept`.
 - `worktreeDiffs`: per-worktree short `HEAD`, changed file list, diff stat, and diff patch from the worktree path. Each patch is deterministically truncated to `DIFF_PATCH_TRUNCATE_LIMIT` characters (default 4000) so the evidence file stays bounded. The `truncated` and `originalPatchLength` fields on each entry record whether truncation occurred and the full patch size before clipping, enabling audit.
 - `events`: recent task event stream entries captured from `/tasks/:id/events`, including workflow phase/log/agent events and terminal task events.
 - `evidence.usage`, `evidence.result`, and `evidence.worktrees`: includes zero-usage and at-least-one-worktree-commit flags.

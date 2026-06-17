@@ -779,4 +779,23 @@ export const AUTHOR_EVAL_CASES: AuthorEvalCase[] = [
 			requiredGuidancePatterns: [/theme|restart|raw/i],
 		},
 	},
+	{
+		id: "C8",
+		name: "complex Java Maven bugfix with review gate",
+		complexity: "complex",
+		workflowSize: "large",
+		task: "Fix an intermittent scheduling bug across two Maven modules, add regression coverage, preserve public API compatibility, and require a reviewer pass plus a validation/fix loop before completion.",
+		workspaceBrief: JAVA_MAVEN_WORKSPACE_BRIEF,
+		projectStack: "java-maven",
+		projectProfile: MAVEN_PROFILE,
+		expectations: {
+			requiresKinds: ["analyze", "implement", "reviewChange", "continueImplementation", "testChange"],
+			forbidsKinds: ["compareCandidates", "integrateChanges", "request_human"],
+			preferNoLowLevelControls: true,
+			maxPrimarySteps: 6,
+			minPrimarySteps: 5,
+			requiredGuidancePatterns: [/Maven|mvnw|mvn test/i, /public API|compat/i],
+			forbiddenGuidancePatterns: [/\bnpm\b/i, /\bnpx\b/i, /\btypecheck\b/i],
+		},
+	},
 ];
