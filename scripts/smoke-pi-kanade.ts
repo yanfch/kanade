@@ -333,6 +333,14 @@ const WORKTREES_MERGED: unknown[] = [
 	},
 ];
 const SESSIONS: unknown[] = [];
+const LONG_SESSION_ENTRIES = Array.from({ length: 24 }, (_, index) => ({
+	type: "message",
+	timestamp: Date.now() - (24 - index) * 1000,
+	message: {
+		role: "assistant",
+		content: [{ type: "text", text: `activity event ${String(index + 1).padStart(2, "0")}` }],
+	},
+}));
 
 const fetchCalls: string[] = [];
 const patchBodies: Record<string, unknown>[] = [];
@@ -469,7 +477,10 @@ function mockFetch(url: string | URL | Request, init?: RequestInit): Promise<Res
 	if (/^\/tasks\/T-0007\/snapshot$/.test(path)) return json({ snapshot: { ...SNAPSHOT, name: "ready-workflow" } });
 	if (/^\/tasks\/T-0007\/script$/.test(path)) return json({ script: SCRIPT });
 	if (/^\/tasks\/T-0007\/worktrees$/.test(path)) return json({ worktrees: WORKTREES_READY });
-	if (/^\/tasks\/T-0007\/sessions$/.test(path)) return json({ sessions: [] });
+	if (/^\/tasks\/T-0007\/sessions$/.test(path))
+		return json({ sessions: [{ label: "long", files: ["session.jsonl"] }] });
+	if (/^\/tasks\/T-0007\/sessions\/long$/.test(path))
+		return json({ label: "long", entries: LONG_SESSION_ENTRIES, file: "session.jsonl" });
 	if (path === "/config" && method === "GET") return json(MOCK_CONFIG);
 	if (path === "/config" && method === "PATCH") {
 		let body: Record<string, unknown> = {};
@@ -1433,6 +1444,45 @@ function assert(label: string, condition: boolean, detail?: string) {
 		assert("shows active timing", detailText.includes("active"), `output: ${detailText.slice(0, 500)}`);
 		// Clean up
 		(detailComp as { handleInput?: (d: string) => void }).handleInput?.("\x1b");
+		detailEntry.resolve(undefined);
+	}
+}
+
+// ---------- Test 17a: Agent Detail Activity supports scrolling ----------
+{
+	console.log("\nTest 17a: Agent Detail Activity supports scrolling");
+	customCalls.length = 0;
+	const panel = await createPanel();
+	await delay(300);
+	panel.handleInput("/");
+	for (const ch of "T-0007") panel.handleInput(ch);
+	panel.handleInput("\x1b");
+	await delay(500);
+	panel.handleInput("f");
+	await delay(800);
+	const detailEntry = customCalls.at(-1);
+	if (!detailEntry) {
+		assert("Agent Detail overlay opened for scroll", false, "ui.custom not called");
+	} else {
+		const detailComp = detailEntry.component as { render(w: number): string[]; handleInput?: (d: string) => void };
+		await delay(500);
+		const latestText = strip(detailComp.render(110).join("\n"));
+		assert(
+			"shows latest activity page",
+			latestText.includes("activity event 24"),
+			`output: ${latestText.slice(0, 800)}`,
+		);
+		assert("shows scroll hint", latestText.includes("scroll"), `output: ${latestText.slice(0, 800)}`);
+		detailComp.handleInput?.("\x1b[A");
+		detailComp.handleInput?.("\x1b[A");
+		detailComp.handleInput?.("\x1b[A");
+		const olderText = strip(detailComp.render(110).join("\n"));
+		assert(
+			"scrolling reveals older activity",
+			olderText.includes("activity event 21"),
+			`output: ${olderText.slice(0, 800)}`,
+		);
+		detailComp.handleInput?.("\x1b");
 		detailEntry.resolve(undefined);
 	}
 }

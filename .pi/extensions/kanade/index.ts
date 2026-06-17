@@ -1622,6 +1622,7 @@ class AgentDetailOverlay implements Component {
 	private loading = true;
 	private disposed = false;
 	private inFlight = false;
+	private activityScroll = 0;
 	private cachedWidth?: number;
 	private cachedLines?: string[];
 
@@ -1673,15 +1674,21 @@ class AgentDetailOverlay implements Component {
 		const model = latestSessionModel(this.detail?.sessionEvents ?? []);
 		if (model) body.push(this.theme.fg("dim", `Model: ${model}`));
 		body.push(rule(contentWidth, this.theme));
-		body.push(this.theme.fg("muted", "Activity"));
 		const events = this.detail?.sessionEvents ?? [];
+		const visibleEvents = this.visibleActivityEvents(events, 14);
+		const activityLabel =
+			events.length > visibleEvents.length
+				? `Activity · ${visibleEvents.start + 1}-${visibleEvents.end}/${events.length}`
+				: "Activity";
+		body.push(this.theme.fg("muted", activityLabel));
 		if (events.length === 0) body.push(this.theme.fg("dim", "No persisted session events yet."));
-		for (const event of events.slice(-20)) {
+		for (const event of visibleEvents.items) {
 			const state = event.state === "running" ? "active" : event.state === "error" ? "!" : "·";
 			body.push(truncateAnsi(`${event.time} ${state} ${eventLabel(event)} ${event.summary}`, contentWidth));
 			if (event.detail) body.push(this.theme.fg("dim", truncatePlain(`    ${event.detail}`, contentWidth)));
 		}
-		body.push(this.theme.fg("dim", "r refresh · Esc close"));
+		const scrollHint = events.length > visibleEvents.items.length ? "↑↓ scroll · PgUp/PgDn page · " : "";
+		body.push(this.theme.fg("dim", `${scrollHint}r refresh · Esc close`));
 		this.cachedWidth = width;
 		this.cachedLines = box(fitBodyRows(body, 24, 27), width, "Kanade Agent Detail", this.theme);
 		return this.cachedLines;
@@ -1693,13 +1700,62 @@ class AgentDetailOverlay implements Component {
 			this.done();
 			return;
 		}
+		if (isKey(data, "up", "\x1b[A", "\x1bOA")) {
+			this.scrollActivity(1);
+			return;
+		}
+		if (isKey(data, "down", "\x1b[B", "\x1bOB")) {
+			this.scrollActivity(-1);
+			return;
+		}
+		if (isKey(data, "pageup", "\x1b[5~")) {
+			this.scrollActivity(8);
+			return;
+		}
+		if (isKey(data, "pagedown", "\x1b[6~")) {
+			this.scrollActivity(-8);
+			return;
+		}
+		if (isKey(data, "home", "\x1b[H", "\x1b[1~")) {
+			this.activityScroll = Math.max(0, (this.detail?.sessionEvents?.length ?? 0) - 1);
+			this.invalidate();
+			this.tui.requestRender();
+			return;
+		}
+		if (isKey(data, "end", "\x1b[F", "\x1b[4~")) {
+			this.activityScroll = 0;
+			this.invalidate();
+			this.tui.requestRender();
+			return;
+		}
 		if (data === "r" || data === "R") void this.refresh(true);
+	}
+
+	private visibleActivityEvents(
+		events: SessionEvent[],
+		limit: number,
+	): { items: SessionEvent[]; start: number; end: number } {
+		if (events.length === 0) return { items: [], start: 0, end: 0 };
+		const maxScroll = Math.max(0, events.length - 1);
+		this.activityScroll = Math.min(Math.max(0, this.activityScroll), maxScroll);
+		const end = Math.max(0, events.length - this.activityScroll);
+		const start = Math.max(0, end - limit);
+		return { items: events.slice(start, end), start, end };
+	}
+
+	private scrollActivity(delta: number): void {
+		const eventCount = this.detail?.sessionEvents?.length ?? 0;
+		if (eventCount === 0) return;
+		this.activityScroll = Math.min(Math.max(0, this.activityScroll + delta), Math.max(0, eventCount - 1));
+		this.invalidate();
+		this.tui.requestRender();
 	}
 
 	private async refresh(showLoading: boolean): Promise<void> {
 		if (this.disposed || this.inFlight) return;
 		this.inFlight = true;
 		if (showLoading) this.loading = true;
+		this.activityScroll = 0;
 		this.error = undefined;
 		this.invalidate();
 		this.tui.requestRender();
