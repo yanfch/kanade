@@ -262,6 +262,7 @@ type ActionKey =
 	| "respond"
 	| "iterate"
 	| "merge"
+	| "save"
 	| "reconcile"
 	| "abort"
 	| "reject"
@@ -2049,9 +2050,11 @@ class KanadePanel implements Component {
 				break;
 			case "merge_ready":
 				items.push({ key: "merge", label: "Merge task", danger: true });
+				if (task.workflow_source === "generated") items.push({ key: "save", label: "Save generated workflow" });
 				items.push({ key: "iterate", label: "Iterate with instructions" });
 				break;
 			case "finished_review":
+				if (task.workflow_source === "generated") items.push({ key: "save", label: "Save generated workflow" });
 				items.push({ key: "iterate", label: "Iterate with instructions" });
 				break;
 			case "terminal_preserved":
@@ -2167,6 +2170,10 @@ class KanadePanel implements Component {
 			}
 			return;
 		}
+		if (item.key === "save") {
+			await this.saveGeneratedWorkflow(task);
+			return;
+		}
 		if (item.key === "reconcile") {
 			await this.runPanelAction(() => this.reconcileTask(task), {
 				label: "Reconcile in progress",
@@ -2251,6 +2258,30 @@ class KanadePanel implements Component {
 		});
 		this.ui.notify(`Created iteration ${result.task_id ?? ""}`.trim(), "info");
 		await this.refresh();
+	}
+
+	private async saveGeneratedWorkflow(task: KanadeTask): Promise<void> {
+		const suggestedName = sanitizeWorkflowName(task.workflow_name ?? taskTitle(task, 48) ?? task.id.toLowerCase());
+		const name = (await this.ui.editor(`Save generated workflow from ${task.id}`, suggestedName))?.trim();
+		if (!name) return;
+		if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+			this.lastNotice = {
+				kind: "warning",
+				text: "Workflow name must contain only alphanumeric characters, hyphens, and underscores.",
+			};
+			this.ui.notify(this.lastNotice.text, "warning");
+			this.invalidateAndRender();
+			return;
+		}
+		await this.runPanelAction(
+			async () => {
+				await postJson(`/tasks/${encodeURIComponent(task.id)}/save`, { name });
+				this.lastNotice = { kind: "info", text: `Saved generated workflow '${name}'.` };
+				this.ui.notify(`Saved workflow ${name}`, "info");
+				await this.refresh();
+			},
+			{ label: "Save workflow in progress", detail: name },
+		);
 	}
 
 	private async mergeTask(task: KanadeTask): Promise<void> {
@@ -3104,6 +3135,16 @@ function countTasks(tasks: KanadeTask[]): Counts {
 		failed: tasks.filter((task) => task.status === "failed" || task.status === "aborted").length,
 		finished: tasks.filter((task) => task.status === "finished").length,
 	};
+}
+
+function sanitizeWorkflowName(value: string): string {
+	const cleaned = value
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z0-9_-]+/g, "_")
+		.replace(/^_+|_+$/g, "")
+		.slice(0, 64);
+	return cleaned || "generated_workflow";
 }
 
 function taskTitle(task: KanadeTask, max = 80): string {

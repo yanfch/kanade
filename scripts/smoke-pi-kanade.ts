@@ -92,7 +92,7 @@ const TASK_CHECKS_MISSING: Record<string, unknown> = {
 const TASK_READY_TO_MERGE: Record<string, unknown> = {
 	id: "T-0007",
 	status: "finished",
-	workflow_source: "saved",
+	workflow_source: "generated",
 	workflow_name: "ready-workflow",
 	created_at: Date.now() - 90_000,
 	started_at: Date.now() - 80_000,
@@ -345,6 +345,8 @@ const LONG_SESSION_ENTRIES = Array.from({ length: 24 }, (_, index) => ({
 const fetchCalls: string[] = [];
 const patchBodies: Record<string, unknown>[] = [];
 const recoveryCleanupBodies: Record<string, unknown>[] = [];
+const saveBodies: Record<string, unknown>[] = [];
+const editorResponses: Array<string | undefined> = [];
 
 function mockFetch(url: string | URL | Request, init?: RequestInit): Promise<Response> {
 	const raw = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
@@ -472,6 +474,14 @@ function mockFetch(url: string | URL | Request, init?: RequestInit): Promise<Res
 	if (/^\/tasks\/T-0006\/sessions$/.test(path)) return json({ sessions: [] });
 	if (/^\/tasks\/T-0007\/merge$/.test(path) && method === "POST")
 		return json({ success: true, mergeCommit: "mergeabc123456" });
+	if (/^\/tasks\/T-0007\/save$/.test(path) && method === "POST") {
+		let body: Record<string, unknown> = {};
+		try {
+			body = JSON.parse((init?.body as string) ?? "{}");
+		} catch {}
+		saveBodies.push(body);
+		return json({ ok: true });
+	}
 	if (/^\/tasks\/T-0007\/review$/.test(path)) return json(REVIEW_READY);
 	if (/^\/tasks\/T-0007$/.test(path) && method === "GET") return json({ task: TASK_READY_TO_MERGE, usage: USAGE });
 	if (/^\/tasks\/T-0007\/snapshot$/.test(path)) return json({ snapshot: { ...SNAPSHOT, name: "ready-workflow" } });
@@ -656,7 +666,7 @@ function createFakeContext(overrides?: { mode?: string; confirmResult?: boolean 
 			pasteToEditor: () => {},
 			setEditorText: () => {},
 			getEditorText: () => "",
-			editor: async () => undefined,
+			editor: async (_title: string, initial?: string) => editorResponses.shift() ?? initial,
 			addAutocompleteProvider: () => {},
 			setEditorComponent: () => {},
 			getEditorComponent: () => undefined,
@@ -1185,6 +1195,47 @@ function assert(label: string, condition: boolean, detail?: string) {
 		assert("switches to Worktree tab", text.includes("[Worktree]"), `output: ${text.slice(0, 800)}`);
 		assert("shows merge success notice", text.includes("Merged T-0007"), `output: ${text.slice(0, 800)}`);
 		assert("shows merge commit suffix", text.includes("mergeabc1234"), `output: ${text.slice(0, 800)}`);
+	}
+}
+
+// ---------- Test 8c: generated workflow can be saved from actions ----------
+{
+	console.log("\nTest 8c: generated workflow can be saved from actions");
+	customCalls.length = 0;
+	fetchCalls.length = 0;
+	saveBodies.length = 0;
+	editorResponses.length = 0;
+	editorResponses.push("promoted_t0007");
+	const panel = await createPanel();
+	await delay(300);
+	panel.handleInput("/");
+	for (const ch of "T-0007") panel.handleInput(ch);
+	panel.handleInput("\x1b");
+	await delay(500);
+	panel.handleInput("\r");
+	await delay(150);
+	const actionCall = customCalls.at(-1);
+	if (!actionCall) {
+		assert("action menu opened", false);
+	} else {
+		const overlayComp = actionCall.component as { render(w: number): string[]; handleInput?: (d: string) => void };
+		const menuText = strip(overlayComp.render(90).join("\n"));
+		assert("save action visible", menuText.includes("Save generated workflow"), `overlay: ${menuText.slice(0, 400)}`);
+		overlayComp.handleInput?.("\x1b[B");
+		overlayComp.handleInput?.("\r");
+		await delay(500);
+		const text = strip(panel.render(120).join("\n"));
+		assert(
+			"save POST sent",
+			fetchCalls.some((call) => call.includes("POST http://127.0.0.1:7777/tasks/T-0007/save")),
+			fetchCalls.join("\n"),
+		);
+		assert("save uses entered name", saveBodies[0]?.name === "promoted_t0007", JSON.stringify(saveBodies));
+		assert(
+			"shows save notice",
+			text.includes("Saved generated workflow 'promoted_t0007'"),
+			`output: ${text.slice(0, 800)}`,
+		);
 	}
 }
 
