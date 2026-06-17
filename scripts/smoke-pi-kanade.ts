@@ -89,6 +89,17 @@ const TASK_CHECKS_MISSING: Record<string, unknown> = {
 	worktree_summary: { status: "none", count: 0 },
 };
 
+const TASK_READY_TO_MERGE: Record<string, unknown> = {
+	id: "T-0007",
+	status: "finished",
+	workflow_source: "saved",
+	workflow_name: "ready-workflow",
+	created_at: Date.now() - 90_000,
+	started_at: Date.now() - 80_000,
+	finished_at: Date.now() - 20_000,
+	worktree_summary: { status: "inactive", count: 1, branch: "kanade/T-0007", path: "/tmp/T-0007" },
+};
+
 const SNAPSHOT: Record<string, unknown> = {
 	name: "test-workflow",
 	phases: ["implement"],
@@ -305,6 +316,14 @@ const MOCK_CONFIG: Record<string, unknown> = {
 };
 
 const WORKTREES: unknown[] = [];
+const WORKTREES_READY: unknown[] = [
+	{
+		branch: "kanade/T-0007",
+		worktree_path: "/tmp/T-0007",
+		status: "inactive",
+		merge_commit: null,
+	},
+];
 const WORKTREES_MERGED: unknown[] = [
 	{
 		branch: "kanade/T-0003",
@@ -330,7 +349,17 @@ function mockFetch(url: string | URL | Request, init?: RequestInit): Promise<Res
 
 	if (path === "/health") return json({ ok: true });
 	if (path === "/tasks" && method === "GET")
-		return json({ tasks: [TASK, TASK_FAILED, TASK_MERGED, TASK_BLOCKED, TASK_CHECKS_MISSING, TASK_FAILED_MERGED] });
+		return json({
+			tasks: [
+				TASK,
+				TASK_FAILED,
+				TASK_MERGED,
+				TASK_BLOCKED,
+				TASK_CHECKS_MISSING,
+				TASK_FAILED_MERGED,
+				TASK_READY_TO_MERGE,
+			],
+		});
 	if (path === "/inbox") return json({ requests: [] });
 	if (path === "/recovery/cleanup" && method === "POST") {
 		let body: Record<string, unknown> = {};
@@ -345,6 +374,8 @@ function mockFetch(url: string | URL | Request, init?: RequestInit): Promise<Res
 			tasks: [TASK_FAILED],
 		});
 	}
+	if (/^\/tasks\/T-0001\/merge$/.test(path) && method === "POST")
+		return json({ success: true, mergeCommit: "mergeabc123456" });
 	if (/^\/tasks\/T-0001\/snapshot$/.test(path)) return json({ snapshot: SNAPSHOT });
 	if (/^\/tasks\/T-0001\/script$/.test(path)) return json({ script: SCRIPT });
 	if (/^\/tasks\/T-0001\/worktrees$/.test(path)) return json({ worktrees: WORKTREES });
@@ -431,6 +462,14 @@ function mockFetch(url: string | URL | Request, init?: RequestInit): Promise<Res
 			worktrees: [{ branch: "kanade/T-0006", worktree_path: "/tmp/T-0006", status: "merged", merge_commit: "def456" }],
 		});
 	if (/^\/tasks\/T-0006\/sessions$/.test(path)) return json({ sessions: [] });
+	if (/^\/tasks\/T-0007\/merge$/.test(path) && method === "POST")
+		return json({ success: true, mergeCommit: "mergeabc123456" });
+	if (/^\/tasks\/T-0007\/review$/.test(path)) return json(REVIEW_READY);
+	if (/^\/tasks\/T-0007$/.test(path) && method === "GET") return json({ task: TASK_READY_TO_MERGE, usage: USAGE });
+	if (/^\/tasks\/T-0007\/snapshot$/.test(path)) return json({ snapshot: { ...SNAPSHOT, name: "ready-workflow" } });
+	if (/^\/tasks\/T-0007\/script$/.test(path)) return json({ script: SCRIPT });
+	if (/^\/tasks\/T-0007\/worktrees$/.test(path)) return json({ worktrees: WORKTREES_READY });
+	if (/^\/tasks\/T-0007\/sessions$/.test(path)) return json({ sessions: [] });
 	if (path === "/config" && method === "GET") return json(MOCK_CONFIG);
 	if (path === "/config" && method === "PATCH") {
 		let body: Record<string, unknown> = {};
@@ -494,6 +533,9 @@ function mockFetch(url: string | URL | Request, init?: RequestInit): Promise<Res
 			`event: task.merged\nid: 2\ndata: ${JSON.stringify({ id: 2, type: "task.merged", taskId: "T-0006", data: { mergeCommit: "def456" }, ts: now - 90000 })}\n\n`,
 		].join("");
 		return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+	}
+	if (/^\/tasks\/T-0007\/events$/.test(path)) {
+		return new Response("", { status: 200, headers: { "content-type": "text/event-stream" } });
 	}
 
 	// Task-detail sub-requests that return errors (for test 5)
@@ -1097,6 +1139,41 @@ function assert(label: string, condition: boolean, detail?: string) {
 		assert("Merge task hidden for merged task", !text.includes("Merge task"), `overlay: ${text.slice(0, 300)}`);
 		overlayComp.handleInput?.("\x1b");
 		actionCall.resolve(null);
+	}
+}
+
+// ---------- Test 8b: merge success switches to Worktree and shows commit ----------
+{
+	console.log("\nTest 8b: merge success switches to Worktree and shows commit");
+	customCalls.length = 0;
+	fetchCalls.length = 0;
+	const panel = await createPanel();
+	await delay(300);
+	panel.handleInput("/");
+	for (const ch of "T-0007") panel.handleInput(ch);
+	panel.handleInput("\x1b");
+	await delay(500);
+	panel.handleInput("\r");
+	await delay(150);
+	const actionCall = customCalls.at(-1);
+	if (!actionCall) {
+		assert("action menu opened", false);
+	} else {
+		const overlayComp = actionCall.component as { handleInput?: (d: string) => void };
+		overlayComp.handleInput?.("\r");
+		await delay(150);
+		const confirmCall = customCalls.at(-1);
+		confirmCall?.resolve(true);
+		await delay(500);
+		const text = strip(panel.render(120).join("\n"));
+		assert(
+			"merge POST sent",
+			fetchCalls.some((call) => call.includes("POST http://127.0.0.1:7777/tasks/T-0007/merge")),
+			fetchCalls.join("\n"),
+		);
+		assert("switches to Worktree tab", text.includes("[Worktree]"), `output: ${text.slice(0, 800)}`);
+		assert("shows merge success notice", text.includes("Merged T-0007"), `output: ${text.slice(0, 800)}`);
+		assert("shows merge commit suffix", text.includes("mergeabc1234"), `output: ${text.slice(0, 800)}`);
 	}
 }
 

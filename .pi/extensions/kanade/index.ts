@@ -2198,9 +2198,11 @@ class KanadePanel implements Component {
 	}
 
 	private async mergeTask(task: KanadeTask): Promise<void> {
-		await postJson(`/tasks/${encodeURIComponent(task.id)}/merge`, {});
-		this.lastNotice = { kind: "info", text: `Merged ${task.id} into base branch.` };
-		this.ui.notify(`Merged ${task.id}`, "info");
+		const result = await postJson<{ mergeCommit?: string }>(`/tasks/${encodeURIComponent(task.id)}/merge`, {});
+		const suffix = result.mergeCommit ? ` (${result.mergeCommit.slice(0, 12)})` : "";
+		this.activeTab = "Worktree";
+		this.lastNotice = { kind: "info", text: `Merged ${task.id} into base branch${suffix}. Showing merge summary.` };
+		this.ui.notify(`Merged ${task.id}${suffix}`, "info");
 		await this.refresh();
 	}
 
@@ -3302,13 +3304,20 @@ function rule(width: number, theme: Theme): string {
 }
 
 function normalizeBodyRows(body: string[], rows: number, _width: number, _theme: Theme): string[] {
-	const help = body.at(-1) ?? "";
-	const content = body.slice(0, -1);
-	if (content.length < rows - 1) {
-		return [...content, ...Array.from({ length: rows - 1 - content.length }, () => ""), help];
+	const noticeRuleIndex = body.length >= 3 && isRuleText(body.at(-3) ?? "") ? body.length - 3 : -1;
+	const footer = noticeRuleIndex >= 0 ? body.slice(noticeRuleIndex) : [body.at(-1) ?? ""];
+	const content = noticeRuleIndex >= 0 ? body.slice(0, noticeRuleIndex) : body.slice(0, -1);
+	const contentRows = Math.max(0, rows - footer.length);
+	if (content.length < contentRows) {
+		return [...content, ...Array.from({ length: contentRows - content.length }, () => ""), ...footer];
 	}
-	if (content.length === rows - 1) return [...content, help];
-	return [...content.slice(0, Math.max(0, rows - 1)), help];
+	if (content.length === contentRows) return [...content, ...footer];
+	return [...content.slice(0, contentRows), ...footer];
+}
+
+function isRuleText(text: string): boolean {
+	const plain = stripAnsi(text).trim();
+	return plain.length > 0 && /^─+$/.test(plain);
 }
 
 function fitBodyRows(body: string[], minRows: number, maxRows: number): string[] {
