@@ -1,4 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { ActionMenuOverlay } from "./components/action-menu.ts";
+import { AgentDetailOverlay } from "./components/agent-detail-overlay.ts";
+import { ConfirmOverlay } from "./components/confirm-overlay.ts";
 
 import {
 	fetchInbox,
@@ -19,7 +22,6 @@ import {
 	TABS,
 } from "./constants.ts";
 import {
-	agentDetailTimingLabel,
 	agentSummaryLine,
 	checkLabel,
 	costTotal,
@@ -51,7 +53,6 @@ import {
 	isKey,
 	normalizeBodyRows,
 	padAnsi,
-	padToRight,
 	rule,
 	truncateAnsi,
 	truncatePlain,
@@ -67,7 +68,6 @@ import type {
 	KanadeOverview,
 	KanadeTask,
 	RecoveryCleanupResult,
-	SessionEvent,
 	SettingsDisplayItem,
 	SettingsFieldDef,
 	Tab,
@@ -81,91 +81,6 @@ import type {
 	WorkflowPlanStep,
 	WorkflowSnapshot,
 } from "./types.ts";
-
-class ActionMenuOverlay implements Component {
-	private selected = 0;
-	private cachedWidth?: number;
-	private cachedLines?: string[];
-
-	constructor(
-		private readonly theme: Theme,
-		private readonly taskId: string,
-		private readonly items: ActionItem[],
-		private readonly done: (value: ActionItem | null) => void,
-	) {}
-
-	invalidate(): void {
-		this.cachedLines = undefined;
-	}
-
-	render(width: number): string[] {
-		if (this.cachedLines && this.cachedWidth === width) return this.cachedLines;
-		const body = [this.theme.fg("muted", `Actions · ${this.taskId}`), ""];
-		for (let i = 0; i < this.items.length; i++) {
-			const item = this.items[i];
-			const prefix = i === this.selected ? this.theme.fg("accent", "▸") : " ";
-			const label = item.danger ? this.theme.fg("warning", item.label) : item.label;
-			body.push(`${prefix} ${label}`);
-		}
-		body.push("");
-		body.push(this.theme.fg("dim", "↑↓ select · Enter run · Esc cancel"));
-		this.cachedWidth = width;
-		this.cachedLines = box(body, Math.min(width, 58), "Kanade Actions", this.theme);
-		return this.cachedLines;
-	}
-
-	handleInput(data: string): void {
-		this.cachedLines = undefined;
-		if (isKey(data, "escape", "\x1b") || isKey(data, "ctrl+c") || data === "q" || data === "Q") {
-			this.done(null);
-			return;
-		}
-		if (isKey(data, "up", "\x1b[A", "\x1bOA")) {
-			this.selected = Math.max(0, this.selected - 1);
-			return;
-		}
-		if (isKey(data, "down", "\x1b[B", "\x1bOB")) {
-			this.selected = Math.min(Math.max(0, this.items.length - 1), this.selected + 1);
-			return;
-		}
-		if (isKey(data, "return", "\r", "\n") || isKey(data, "enter", "\r", "\n")) {
-			this.done(this.items[this.selected] ?? null);
-		}
-	}
-}
-
-class ConfirmOverlay implements Component {
-	constructor(
-		private readonly theme: Theme,
-		private readonly dialog: ConfirmDialog,
-		private readonly done: (value: boolean) => void,
-	) {}
-
-	invalidate(): void {}
-
-	render(width: number): string[] {
-		const body = [this.theme.fg(this.dialog.danger ? "warning" : "muted", this.dialog.title), ""];
-		const contentWidth = Math.max(40, width - 4);
-		for (const line of wrapPlain(this.dialog.message, contentWidth).slice(0, 7)) {
-			body.push(this.theme.fg("dim", line));
-		}
-		body.push("");
-		body.push(
-			`${this.theme.fg(this.dialog.danger ? "error" : "warning", `Enter / y: ${this.dialog.confirmLabel}`)}    ${this.theme.fg("dim", "Esc / n: cancel")}`,
-		);
-		return box(body, width, "Confirm", this.theme);
-	}
-
-	handleInput(data: string): void {
-		if (isKey(data, "escape", "\x1b") || isKey(data, "ctrl+c") || data === "n" || data === "N" || data === "q") {
-			this.done(false);
-			return;
-		}
-		if (data === "y" || data === "Y" || isKey(data, "return", "\r", "\n") || isKey(data, "enter", "\r", "\n")) {
-			this.done(true);
-		}
-	}
-}
 
 class SettingsOverlay implements Component {
 	private selected = 0;
@@ -841,164 +756,6 @@ function moveCursorVertically(buffer: string, cursor: number, direction: -1 | 1)
 	const nextLineStart = lineEnd + 1;
 	const nextLineEnd = lineEndOffset(buffer, nextLineStart);
 	return Math.min(nextLineStart + column, nextLineEnd);
-}
-
-class AgentDetailOverlay implements Component {
-	private detail?: TaskDetail;
-	private error?: string;
-	private loading = true;
-	private disposed = false;
-	private inFlight = false;
-	private activityScroll = 0;
-	private cachedWidth?: number;
-	private cachedLines?: string[];
-
-	constructor(
-		private readonly tui: TuiHandle,
-		private readonly theme: Theme,
-		private readonly task: KanadeTask,
-		private readonly done: () => void,
-		initialDetail?: TaskDetail,
-		initialError?: string,
-	) {
-		this.detail = initialDetail;
-		this.error = initialError;
-		this.loading = !initialDetail && !initialError;
-		if (!initialError) void this.refresh(false);
-	}
-
-	invalidate(): void {
-		this.cachedLines = undefined;
-	}
-
-	dispose(): void {
-		this.disposed = true;
-	}
-
-	render(width: number): string[] {
-		if (this.cachedLines && this.cachedWidth === width) return this.cachedLines;
-		const contentWidth = Math.max(72, width - 4);
-		const body: string[] = [];
-		body.push(`${this.task.id} · ${taskTitle(this.task, 32)}${padToRight(this.task.status, 8)}`);
-		body.push(rule(contentWidth, this.theme));
-		if (this.loading) body.push(this.theme.fg("dim", "loading agent detail..."));
-		if (this.error) body.push(this.theme.fg("warning", truncatePlain(this.error, contentWidth)));
-		const agents = this.detail?.snapshot?.agents ?? [];
-		const activeAgent = agents.find((agent) => agent.status === "running") ?? agents.at(-1);
-		if (activeAgent) {
-			body.push(`${this.theme.fg("muted", "Agent:")} ${activeAgent.label} · ${activeAgent.status}`);
-			const summary = activeAgent.error || activeAgent.resultPreview;
-			if (summary) body.push(this.theme.fg("dim", agentSummaryLine(summary, contentWidth)));
-		} else {
-			body.push(this.theme.fg("dim", "No agent snapshot yet."));
-		}
-		const timing = agentDetailTimingLabel(this.task, this.detail?.timing);
-		if (timing) body.push(this.theme.fg("dim", timing));
-		const sessions = this.detail?.sessions ?? [];
-		if (this.detail?.sessionLabel) body.push(this.theme.fg("dim", `Session: ${this.detail.sessionLabel}`));
-		else if (sessions.length > 0)
-			body.push(this.theme.fg("dim", `Sessions: ${sessions.map((s) => s.label).join(", ")}`));
-		const model = latestSessionModel(this.detail?.sessionEvents ?? []);
-		if (model) body.push(this.theme.fg("dim", `Model: ${model}`));
-		body.push(rule(contentWidth, this.theme));
-		const events = this.detail?.sessionEvents ?? [];
-		const visibleEvents = this.visibleActivityEvents(events, 14);
-		const activityLabel =
-			events.length > visibleEvents.length
-				? `Activity · ${visibleEvents.start + 1}-${visibleEvents.end}/${events.length}`
-				: "Activity";
-		body.push(this.theme.fg("muted", activityLabel));
-		if (events.length === 0) body.push(this.theme.fg("dim", "No persisted session events yet."));
-		for (const event of visibleEvents.items) {
-			const state = event.state === "running" ? "active" : event.state === "error" ? "!" : "·";
-			body.push(truncateAnsi(`${event.time} ${state} ${eventLabel(event)} ${event.summary}`, contentWidth));
-			if (event.detail) body.push(this.theme.fg("dim", truncatePlain(`    ${event.detail}`, contentWidth)));
-		}
-		const scrollHint = events.length > visibleEvents.items.length ? "↑↓ scroll · PgUp/PgDn page · " : "";
-		body.push(this.theme.fg("dim", `${scrollHint}r refresh · Esc close`));
-		this.cachedWidth = width;
-		this.cachedLines = box(fitBodyRows(body, 24, 27), width, "Kanade Agent Detail", this.theme);
-		return this.cachedLines;
-	}
-
-	handleInput(data: string): void {
-		if (isKey(data, "escape", "\x1b") || isKey(data, "ctrl+c") || data === "q" || data === "Q") {
-			this.dispose();
-			this.done();
-			return;
-		}
-		if (isKey(data, "up", "\x1b[A", "\x1bOA")) {
-			this.scrollActivity(1);
-			return;
-		}
-		if (isKey(data, "down", "\x1b[B", "\x1bOB")) {
-			this.scrollActivity(-1);
-			return;
-		}
-		if (isKey(data, "pageup", "\x1b[5~")) {
-			this.scrollActivity(8);
-			return;
-		}
-		if (isKey(data, "pagedown", "\x1b[6~")) {
-			this.scrollActivity(-8);
-			return;
-		}
-		if (isKey(data, "home", "\x1b[H", "\x1b[1~")) {
-			this.activityScroll = Math.max(0, (this.detail?.sessionEvents?.length ?? 0) - 1);
-			this.invalidate();
-			this.tui.requestRender();
-			return;
-		}
-		if (isKey(data, "end", "\x1b[F", "\x1b[4~")) {
-			this.activityScroll = 0;
-			this.invalidate();
-			this.tui.requestRender();
-			return;
-		}
-		if (data === "r" || data === "R") void this.refresh(true);
-	}
-
-	private visibleActivityEvents(
-		events: SessionEvent[],
-		limit: number,
-	): { items: SessionEvent[]; start: number; end: number } {
-		if (events.length === 0) return { items: [], start: 0, end: 0 };
-		const maxScroll = Math.max(0, events.length - 1);
-		this.activityScroll = Math.min(Math.max(0, this.activityScroll), maxScroll);
-		const end = Math.max(0, events.length - this.activityScroll);
-		const start = Math.max(0, end - limit);
-		return { items: events.slice(start, end), start, end };
-	}
-
-	private scrollActivity(delta: number): void {
-		const eventCount = this.detail?.sessionEvents?.length ?? 0;
-		if (eventCount === 0) return;
-		this.activityScroll = Math.min(Math.max(0, this.activityScroll + delta), Math.max(0, eventCount - 1));
-		this.invalidate();
-		this.tui.requestRender();
-	}
-
-	private async refresh(showLoading: boolean): Promise<void> {
-		if (this.disposed || this.inFlight) return;
-		this.inFlight = true;
-		if (showLoading) this.loading = true;
-		this.activityScroll = 0;
-		this.error = undefined;
-		this.invalidate();
-		this.tui.requestRender();
-		try {
-			this.detail = await fetchTaskDetail(this.task.id, true);
-		} catch (error) {
-			this.error = error instanceof Error ? error.message : String(error);
-		} finally {
-			this.inFlight = false;
-			this.loading = false;
-			if (!this.disposed) {
-				this.invalidate();
-				this.tui.requestRender();
-			}
-		}
-	}
 }
 
 class KanadePanel implements Component {
