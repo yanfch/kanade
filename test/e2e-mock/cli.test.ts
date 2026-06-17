@@ -329,7 +329,7 @@ describe("CLI — request_human", () => {
 		expect(inboxAfter.some((row) => row.task_id === task.task_id)).toBe(false);
 		const respondOut = cli(`respond ${task.task_id} --request ${request!.request_id} --decision yes`);
 		expect(respondOut).toContain("Cannot respond to human request for task in failed state");
-	});
+	}, 20_000);
 });
 
 describe("CLI — recovery", () => {

@@ -1103,12 +1103,13 @@ async function cmdStart(args: ReturnType<typeof parseArgs>["values"]) {
 		if (existsSync(pathJoin(projectRoot, "package.json"))) break;
 		projectRoot = pathJoin(projectRoot, "..");
 	}
-	const tsxPath = pathJoin(projectRoot, "node_modules", ".bin", "tsx");
+	const tsxCliPath = pathJoin(projectRoot, "node_modules", "tsx", "dist", "cli.mjs");
+	const serverArgs = [tsxCliPath, "src/bin/server.ts"];
 	if (daemon) {
 		const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 		const logPath = pathJoin(resolvedDir, "logs", `server-${stamp}.log`);
 		const fd = openSync(logPath, "a");
-		const child = spawn(tsxPath, ["src/bin/server.ts"], {
+		const child = spawn(process.execPath, serverArgs, {
 			cwd: projectRoot,
 			env: { ...process.env, KANADE_DIR: resolvedDir },
 			detached: true,
@@ -1116,12 +1117,16 @@ async function cmdStart(args: ReturnType<typeof parseArgs>["values"]) {
 		});
 		child.unref();
 		closeSync(fd);
+		if (!child.pid) {
+			console.error(pc.red("✖ Failed to start kanade server in background."));
+			process.exit(1);
+		}
 		console.log(pc.green(`✔ Server started in background: ${pc.bold(String(child.pid))}`));
 		console.log(pc.dim(`  Log: ${logPath}`));
 		return;
 	}
 
-	const child = spawn(tsxPath, ["src/bin/server.ts"], {
+	const child = spawn(process.execPath, serverArgs, {
 		cwd: projectRoot,
 		env: { ...process.env, KANADE_DIR: resolvedDir },
 		stdio: "inherit",
