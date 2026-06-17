@@ -1121,7 +1121,7 @@ async function cmdStart(args: ReturnType<typeof parseArgs>["values"]) {
 			console.error(pc.red("✖ Failed to start kanade server in background."));
 			process.exit(1);
 		}
-		console.log(pc.green(`✔ Server started in background: ${pc.bold(String(child.pid))}`));
+		console.log(pc.green(`✔ Server started in background: ${String(child.pid)}`));
 		console.log(pc.dim(`  Log: ${logPath}`));
 		return;
 	}

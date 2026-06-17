@@ -7,6 +7,9 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
+
+const repoRoot = join(import.meta.dirname, "../..");
+const tsxCli = join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs");
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 let BASE_URL = "http://127.0.0.1:17777";
@@ -18,7 +21,7 @@ function cli(args: string): string {
 	try {
 		return execSync(`npx tsx src/bin/kanade.ts ${args}`, {
 			encoding: "utf8",
-			cwd: join(import.meta.dirname, "../.."),
+			cwd: repoRoot,
 			env: { ...process.env, KANADE_URL: BASE_URL, KANADE_DIR: kanadeDir },
 			timeout: 15_000,
 		}).trim();
@@ -75,8 +78,8 @@ async function createTask(script: string): Promise<string> {
 }
 
 function spawnMainServer(): ReturnType<typeof spawn> {
-	const child = spawn("npx", ["tsx", "src/bin/server.ts"], {
-		cwd: join(import.meta.dirname, "../.."),
+	const child = spawn(process.execPath, [tsxCli, "src/bin/server.ts"], {
+		cwd: repoRoot,
 		env: {
 			...process.env,
 			KANADE_DIR: kanadeDir,
