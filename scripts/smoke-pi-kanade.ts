@@ -1351,9 +1351,9 @@ function assert(label: string, condition: boolean, detail?: string) {
 		const detailComp = detailEntry.component as { render(w: number): string[] };
 		await delay(500);
 		const detailText = strip(detailComp.render(100).join("\n"));
-		assert("shows started timing", detailText.includes("started"), `output: ${detailText.slice(0, 500)}`);
+		assert("shows running state", detailText.includes("running"), `output: ${detailText.slice(0, 500)}`);
 		assert("shows elapsed timing", detailText.includes("elapsed"), `output: ${detailText.slice(0, 500)}`);
-		assert("shows last activity", detailText.includes("last activity"), `output: ${detailText.slice(0, 500)}`);
+		assert("shows active timing", detailText.includes("active"), `output: ${detailText.slice(0, 500)}`);
 		// Clean up
 		(detailComp as { handleInput?: (d: string) => void }).handleInput?.("\x1b");
 		detailEntry.resolve(undefined);
@@ -1372,7 +1372,7 @@ function assert(label: string, condition: boolean, detail?: string) {
 	await delay(200);
 	const output = panel.render(120);
 	const text = strip(output.join("\n"));
-	assert("detail header shows duration", /finished.*\d+[smh]/.test(text), `output: ${text.slice(0, 500)}`);
+	assert("detail header shows duration", /finished.*duration .*\d+[smh]/.test(text), `output: ${text.slice(0, 500)}`);
 	// Also check running task shows elapsed
 	customCalls.length = 0;
 	const panel2 = await createPanel();

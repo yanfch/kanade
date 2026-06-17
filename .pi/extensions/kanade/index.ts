@@ -1664,17 +1664,8 @@ class AgentDetailOverlay implements Component {
 		} else {
 			body.push(this.theme.fg("dim", "No agent snapshot yet."));
 		}
-		// Timing fields
-		const timing = this.detail?.timing;
-		if (timing) {
-			const parts: string[] = [];
-			if (timing.startedAt) parts.push(`started ${relativeTime(timing.startedAt)}`);
-			if (typeof timing.elapsedMs === "number") parts.push(`elapsed ${formatDuration(timing.elapsedMs)}`);
-			if (timing.lastActivityAt) parts.push(`last activity ${relativeTime(timing.lastActivityAt)}`);
-			if (typeof timing.idleMs === "number" && timing.idleMs > 5000)
-				parts.push(`idle ${formatDuration(timing.idleMs)}`);
-			if (parts.length > 0) body.push(this.theme.fg("dim", parts.join(" · ")));
-		}
+		const timing = agentDetailTimingLabel(this.task, this.detail?.timing);
+		if (timing) body.push(this.theme.fg("dim", timing));
 		const sessions = this.detail?.sessions ?? [];
 		if (this.detail?.sessionLabel) body.push(this.theme.fg("dim", `Session: ${this.detail.sessionLabel}`));
 		else if (sessions.length > 0)
@@ -2384,8 +2375,7 @@ class KanadePanel implements Component {
 		if (this.confirmDialog) return this.confirmDialogLines(width);
 		const detail = this.details.get(task.id);
 		const lines: string[] = [];
-		const taskDuration = taskDurationLabel(task);
-		const status = `${task.status}${taskDuration ? ` · ${taskDuration}` : relativeTime(task.started_at) ? ` · ${relativeTime(task.started_at)}` : ""}`;
+		const status = taskStatusSummaryLabel(task);
 		const titleText = `${task.id} · ${taskTitle(task, Math.max(12, width - 30))}`;
 		const pad = Math.max(1, width - visibleWidth(titleText) - visibleWidth(status));
 		lines.push(`${titleText}${" ".repeat(pad)}${status}`);
@@ -3191,6 +3181,40 @@ function taskDurationLabel(task: KanadeTask): string {
 	const end = task.finished_at;
 	if (end) return formatDuration(end - started);
 	return `elapsed ${formatDuration(Date.now() - started)}`;
+}
+
+function taskStatusSummaryLabel(task: KanadeTask): string {
+	const duration = taskDurationLabel(task);
+	if (terminalTask(task)) {
+		const end = task.finished_at;
+		const verb = task.status === "finished" ? "completed" : task.status;
+		return [task.status, duration ? `duration ${duration}` : "", end ? `${verb} ${relativeTime(end)}` : ""]
+			.filter(Boolean)
+			.join(" · ");
+	}
+	return [task.status, duration || relativeTime(task.started_at ?? task.created_at)].filter(Boolean).join(" · ");
+}
+
+function agentDetailTimingLabel(task: KanadeTask, timing?: AgentTiming): string {
+	if (!timing) return "";
+	if (terminalTask(task)) {
+		const verb = task.status === "finished" ? "completed" : task.status;
+		const end = task.finished_at ?? timing.lastActivityAt;
+		return [
+			task.status,
+			typeof timing.elapsedMs === "number" ? `duration ${formatDuration(timing.elapsedMs)}` : "",
+			end ? `${verb} ${relativeTime(end)}` : "",
+		]
+			.filter(Boolean)
+			.join(" · ");
+	}
+	return [
+		task.status,
+		typeof timing.elapsedMs === "number" ? `elapsed ${formatDuration(timing.elapsedMs)}` : "",
+		timing.lastActivityAt ? `active ${relativeTime(timing.lastActivityAt)}` : "",
+	]
+		.filter(Boolean)
+		.join(" · ");
 }
 
 function nodeDurationLabel(node: WorkflowGraphNode, isTerminal: boolean): string {
