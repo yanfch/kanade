@@ -4,6 +4,21 @@
 	"private": true,
 	"description": "Multi-agent workflow runtime. LLM writes scripts, you save the good ones.",
 	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/yanfch/kanade.git"
+	},
+	"bugs": {
+		"url": "https://github.com/yanfch/kanade/issues"
+	},
+	"homepage": "https://github.com/yanfch/kanade#readme",
+	"keywords": [
+		"ai",
+		"agents",
+		"workflow",
+		"coding-agent",
+		"automation"
+	],
 	"type": "module",
 	"engines": {
 		"node": ">=22"
@@ -35,14 +50,14 @@
 		"@earendil-works/pi-ai": "^0.79.1",
 		"@earendil-works/pi-coding-agent": "^0.79.1",
 		"@earendil-works/pi-tui": "^0.79.1",
-		"@opentelemetry/api": "^1.9.0",
-		"@opentelemetry/api-logs": "^0.218.0",
-		"@opentelemetry/core": "^1.30.0",
-		"@opentelemetry/resources": "^1.30.0",
-		"@opentelemetry/sdk-logs": "^0.218.0",
-		"@opentelemetry/sdk-metrics": "^2.7.1",
-		"@opentelemetry/sdk-trace-base": "^1.30.0",
-		"@opentelemetry/semantic-conventions": "^1.28.0",
+		"@opentelemetry/api": "^1.9.1",
+		"@opentelemetry/api-logs": "^0.219.0",
+		"@opentelemetry/core": "^2.8.0",
+		"@opentelemetry/resources": "^2.8.0",
+		"@opentelemetry/sdk-logs": "^0.219.0",
+		"@opentelemetry/sdk-metrics": "^2.8.0",
+		"@opentelemetry/sdk-trace-base": "^2.8.0",
+		"@opentelemetry/semantic-conventions": "^1.41.1",
 		"acorn": "^8.14.0",
 		"better-sqlite3": "^11.7.0",
 		"hono": "^4.6.0",
@@ -61,9 +76,11 @@
 		"lint-staged": "^16.4.0",
 		"tsx": "^4.19.0",
 		"typescript": "^5.7.0",
-		"vitest": "^2.1.0"
+		"vitest": "^4.1.9"
 	},
 	"lint-staged": {
-		"*.ts": ["biome check --write --no-errors-on-unmatched"]
+		"*.ts": [
+			"biome check --write --no-errors-on-unmatched"
+		]
 	}
 }

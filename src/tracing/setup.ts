@@ -6,7 +6,7 @@
 
 import { trace } from "@opentelemetry/api";
 import { logs } from "@opentelemetry/api-logs";
-import { Resource } from "@opentelemetry/resources";
+import { resourceFromAttributes } from "@opentelemetry/resources";
 import { LoggerProvider, SimpleLogRecordProcessor } from "@opentelemetry/sdk-logs";
 import { BasicTracerProvider, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import type { KanadeConfig } from "../config/index.ts";
@@ -29,13 +29,12 @@ export function setupTracing(config: KanadeConfig): TracingHandle {
 	const exporters = resolveExporters(config);
 
 	// ── Trace provider ────────────────────────────────────────────────────
-	const resource = new Resource({ "service.name": serviceName });
-	const tracerProvider = new BasicTracerProvider({ resource });
-
+	const resource = resourceFromAttributes({ "service.name": serviceName });
 	const traceDir = exporters.find((e) => e.type === "file")?.dir ?? config.paths.tracesDir;
-	tracerProvider.addSpanProcessor(
-		new SimpleSpanProcessor(new FileSpanExporter({ dir: traceDir, serviceName, rotate: "daily" })),
-	);
+	const tracerProvider = new BasicTracerProvider({
+		resource,
+		spanProcessors: [new SimpleSpanProcessor(new FileSpanExporter({ dir: traceDir, serviceName, rotate: "daily" }))],
+	});
 
 	trace.setGlobalTracerProvider(tracerProvider);
 

@@ -4,7 +4,9 @@
 
 Kanade runs a local HTTP server plus CLI. A task is a workflow script that can call agents, run phases, ask humans for decisions, preserve worktrees for recovery, and be rerun or iterated with context from previous attempts.
 
-![Kanade Cockpit in Pi](docs/assets/kanade-cockpit.png)
+<p align="center">
+  <img src="docs/assets/kanade-cockpit.png" alt="Kanade Cockpit in Pi" width="860">
+</p>
 
 ## Why Kanade?
 
@@ -30,8 +32,10 @@ Kanade is an early public-preview project. The core runtime, server, CLI, tests,
 
 ## Quick start
 
+You do **not** need Pi to use Kanade. Start with the CLI.
+
 ```bash
-git clone <repo-url> kanade
+git clone https://github.com/yanfch/kanade.git
 cd kanade
 npm install
 
@@ -50,7 +54,16 @@ npm run cli -- start --daemon
 npm run cli -- health
 ```
 
-Run a generated workflow from a prompt:
+For first-time setup, including model configuration and expected output, follow [docs/getting-started.md](docs/getting-started.md).
+
+Run a safe read-only first task:
+
+```bash
+kanade run --prompt "Inspect this repository and summarize its test commands. Do not modify files." --follow
+kanade ls
+```
+
+Then try a code-changing generated workflow when you are ready:
 
 ```bash
 kanade run --prompt "Add retry handling to the API client and update tests" --follow
@@ -218,7 +231,7 @@ cleanup:
 announcers: []
 ```
 
-See [docs/configuration.md](docs/configuration.md) for the full configuration reference.
+See [docs/getting-started.md](docs/getting-started.md) for first-run setup and [docs/configuration.md](docs/configuration.md) for the full configuration reference.
 
 Useful environment variables:
 

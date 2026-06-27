@@ -53,7 +53,7 @@ export class FileSpanExporter implements SpanExporter {
 		const record: Record<string, unknown> = {
 			traceId: span.spanContext().traceId,
 			spanId: span.spanContext().spanId,
-			parentSpanId: span.parentSpanId || undefined,
+			parentSpanId: span.parentSpanContext?.spanId,
 			name: span.name,
 			kind: span.kind,
 			startTime: span.startTime,
