@@ -49,6 +49,7 @@ logs/
 runs/
 .tmp/
 eval-artifacts/
+docs-archive/
 journal.db
 journal.db-wal
 journal.db-shm
@@ -63,11 +64,8 @@ journal.db-shm
 !.pi/themes/**
 sessions/
 
-# Vendored fork (in case we add a marker)
-# (注意：fork 自 pi-dynamic-workflows 的代码会进 src/workflow-engine/
-
-# Personal workflows (stored in ~/.kanade/workflows/)，
-#  我们要 commit 它，所以这里不 ignore。LICENSE 和 NOTICE 保留。)
+# Derived workflow-engine code is tracked in src/ and documented in NOTICE.md.
+# User workflows live under ~/.kanade/workflows by default and are not part of this repo.
 
 # OS
 Thumbs.db

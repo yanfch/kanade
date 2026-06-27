@@ -808,6 +808,11 @@ function assert(label: string, condition: boolean, detail?: string) {
 	const text = strip(output.join("\n"));
 	assert("render does not throw", !threw);
 	assert("contains panel title", text.includes("Kanade Cockpit"), `missing title in ${text.slice(0, 200)}`);
+	assert(
+		"all wide render lines match requested width",
+		output.every((line) => strip(line).length === 120),
+		output.map((line) => strip(line).length).join(", "),
+	);
 	assert("shows task count", text.includes("Tasks"));
 	assert("shows task id", text.includes("T-0001"), `missing T-0001 in ${text.slice(0, 300)}`);
 	assert("contains vertical divider (│)", text.includes("│"), "missing divider");

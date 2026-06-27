@@ -3,6 +3,7 @@
 	"version": "0.0.1",
 	"private": true,
 	"description": "Multi-agent workflow runtime. LLM writes scripts, you save the good ones.",
+	"license": "MIT",
 	"type": "module",
 	"engines": {
 		"node": ">=22"
@@ -45,6 +46,7 @@
 		"acorn": "^8.14.0",
 		"better-sqlite3": "^11.7.0",
 		"hono": "^4.6.0",
+		"picocolors": "^1.1.1",
 		"simple-git": "^3.27.0",
 		"typebox": "^1.1.0",
 		"undici": "^8.3.0",

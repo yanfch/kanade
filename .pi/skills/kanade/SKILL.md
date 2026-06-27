@@ -1,6 +1,6 @@
 ---
 name: kanade
-description: Use Kanade for multi-agent workflow tasks, generated workflows, background implementation/review/test loops, task monitoring, human gates, iteration, and safe merge/reject decisions from inside Pi.
+description: Use Kanade for multi-agent workflow tasks, generated workflows, background implementation/review/test loops, task monitoring, human gates, iteration, and safe merge/reject decisions. Portable CLI-first guidance; Pi cockpit optional.
 ---
 
 # Kanade
@@ -33,7 +33,7 @@ curl -s http://127.0.0.1:7777/tasks/<task-id> | jq '{id:.task.id,status:.task.st
 tail -n 40 <session.jsonl>
 ```
 
-Use the `/kanade` cockpit for human-visible inspection and actions when available. Do not depend on project-specific custom tools for normal Kanade operation, and do not add extra slash commands unless the user explicitly asks.
+Use the `/kanade` cockpit for human-visible inspection and actions when available, but never require it. This skill can be copied into other coding agents and composed with project-specific skills; keep `kanade` CLI/HTTP as the baseline interface. Do not depend on project-specific custom tools for normal Kanade operation, and do not add extra slash commands unless the user explicitly asks.
 
 Dangerous actions (`merge`, `reject cleanup`, `abort`) must require explicit user confirmation. Prefer Cockpit/dialog confirmation when available; otherwise ask the user clearly before running CLI commands such as `kanade merge`, `kanade reject`, or abort endpoints.
 

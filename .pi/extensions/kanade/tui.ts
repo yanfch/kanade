@@ -46,10 +46,11 @@ export function windowAroundSelection<T>(items: T[], selected: number, size: num
 
 export function box(body: string[], width: number, title: string, theme: Theme): string[] {
 	const inner = Math.max(10, width - 4);
+	const borderInner = inner + 2;
 	const titleText = ` ${title} `;
-	const topRight = Math.max(0, inner - visibleWidth(titleText));
+	const topRight = Math.max(0, borderInner - visibleWidth(titleText));
 	const top = `╭${"─".repeat(2)}${titleText}${"─".repeat(Math.max(0, topRight - 2))}╮`;
-	const bottom = `╰${"─".repeat(inner)}╯`;
+	const bottom = `╰${"─".repeat(borderInner)}╯`;
 	return [theme.fg("muted", top), ...body.map((line) => `│ ${padAnsi(line, inner)} │`), theme.fg("muted", bottom)];
 }
 
