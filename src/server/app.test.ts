@@ -14,6 +14,10 @@ import { createMockSessionFactory } from "./test-session-mock.ts";
 const SIMPLE_SCRIPT = "export const meta = { name: 'demo', description: 'Demo' }\nreturn { ok: true }";
 const TEST_GIT_AUTHOR = ["-c", "user.name=Kanade Test", "-c", "user.email=kanade@example.com"];
 
+function tempWorktreePath(prefix: string): string {
+	return join(tmpdir(), `${prefix}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+}
+
 function setup(
 	author?: {
 		generate(
@@ -555,7 +559,7 @@ describe("GET /tasks", () => {
 	it("list returns no git-derived fields while review returns them", async () => {
 		const { store, app } = setup();
 		const branchName = "kanade/TL-struct-test";
-		const tmpDir = "/tmp/wt-struct-test";
+		const tmpDir = tempWorktreePath("kanade-wt-struct-test");
 		const cleanupGitFixture = () => {
 			execFileSync("git", ["worktree", "remove", tmpDir, "--force"], { encoding: "utf8", stdio: "ignore" });
 			execFileSync("git", ["branch", "-D", branchName], { encoding: "utf8", stdio: "ignore" });
@@ -1493,7 +1497,7 @@ describe("GET /tasks/:id/review", () => {
 
 			// Create a real branch with a commit so branchDiffSummary finds changes
 			const branchName = `kanade/${created.task_id}`;
-			const tmpDir = `/tmp/wt-${created.task_id}`;
+			const tmpDir = tempWorktreePath(`kanade-wt-${created.task_id}`);
 			execFileSync("git", ["branch", branchName], { encoding: "utf8" });
 			execFileSync("git", ["worktree", "add", tmpDir, branchName], { encoding: "utf8" });
 			// Make a commit in the worktree
@@ -1836,7 +1840,7 @@ describe("POST /tasks/:id/merge — review gating", () => {
 
 			// Create a real branch with changes
 			const branchName = `kanade/${created.task_id}`;
-			const tmpDir = `/tmp/wt-blocked-${created.task_id}`;
+			const tmpDir = tempWorktreePath(`kanade-wt-blocked-${created.task_id}`);
 			execFileSync("git", ["branch", branchName], { encoding: "utf8" });
 			execFileSync("git", ["worktree", "add", tmpDir, branchName], { encoding: "utf8" });
 			writeFileSync(join(tmpDir, "test.txt"), "content");

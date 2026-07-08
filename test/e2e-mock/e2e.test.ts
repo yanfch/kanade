@@ -812,7 +812,8 @@ return 'done'`,
 		try {
 			// Create old and recent trace dirs
 			const oldDir = join(ctx.config.paths.tracesDir, "2020-01-01");
-			const recentDir = join(ctx.config.paths.tracesDir, "2026-05-30");
+			const recentDate = new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10);
+			const recentDir = join(ctx.config.paths.tracesDir, recentDate);
 			const { mkdirSync, writeFileSync } = await import("node:fs");
 			mkdirSync(oldDir, { recursive: true });
 			mkdirSync(recentDir, { recursive: true });

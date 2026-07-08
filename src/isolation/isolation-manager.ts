@@ -84,7 +84,6 @@ export class IsolationManager {
 		for (const command of commands) {
 			try {
 				execSync(command, {
-					shell: "/bin/bash",
 					cwd: context.cwd,
 					encoding: "utf8",
 					stdio: ["ignore", "pipe", "pipe"],

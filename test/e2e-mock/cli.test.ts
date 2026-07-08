@@ -2,7 +2,7 @@
  * CLI E2E tests — spawn kanade CLI against a real server with mock LLM.
  */
 
-import { execSync, spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,9 +17,48 @@ let serverProcess: ReturnType<typeof spawn> | null = null;
 let kanadeDir: string;
 const extraServerPids: number[] = [];
 
+function splitCliArgs(input: string): string[] {
+	const args: string[] = [];
+	let current = "";
+	let quote: "'" | '"' | null = null;
+	let escaped = false;
+	for (const ch of input) {
+		if (escaped) {
+			current += ch;
+			escaped = false;
+			continue;
+		}
+		if (ch === "\\" && quote !== "'") {
+			escaped = true;
+			continue;
+		}
+		if (quote) {
+			if (ch === quote) quote = null;
+			else current += ch;
+			continue;
+		}
+		if (ch === "'" || ch === '"') {
+			quote = ch;
+			continue;
+		}
+		if (/\s/.test(ch)) {
+			if (current) {
+				args.push(current);
+				current = "";
+			}
+			continue;
+		}
+		current += ch;
+	}
+	if (escaped) current += "\\";
+	if (quote) throw new Error(`Unterminated quote in CLI args: ${input}`);
+	if (current) args.push(current);
+	return args;
+}
+
 function cli(args: string): string {
 	try {
-		return execSync(`npx tsx src/bin/kanade.ts ${args}`, {
+		return execFileSync(process.execPath, [tsxCli, "src/bin/kanade.ts", ...splitCliArgs(args)], {
 			encoding: "utf8",
 			cwd: repoRoot,
 			env: { ...process.env, KANADE_URL: BASE_URL, KANADE_DIR: kanadeDir },
@@ -410,7 +449,7 @@ describe("CLI — recovery", () => {
 		const before = cliJson(`show ${task.task_id}`) as { worktrees: Array<{ branch: string }> };
 		const branch = before.worktrees[0]?.branch;
 		expect(branch).toBeTruthy();
-		const branchTip = execSync(`git rev-parse ${branch}`, {
+		const branchTip = execFileSync("git", ["rev-parse", branch], {
 			encoding: "utf8",
 			cwd: join(import.meta.dirname, "../.."),
 		}).trim();
@@ -469,7 +508,8 @@ describe("CLI — run", () => {
 			}),
 		});
 
-		const out = cli("run cli-run-test --cwd /tmp");
+		const explicitCwd = tmpdir();
+		const out = cli(`run cli-run-test --cwd "${explicitCwd}"`);
 		expect(out).toContain("Task");
 		expect(out).toContain("created");
 	});
@@ -551,11 +591,12 @@ describe("CLI — run", () => {
 			}),
 		});
 
-		const out = cli("run cli-run-show-cwd --cwd /tmp");
+		const explicitCwd = tmpdir();
+		const out = cli(`run cli-run-show-cwd --cwd "${explicitCwd}"`);
 		expect(out).toContain("Task");
 		expect(out).toContain("created");
 		expect(out).toContain("Workspace:");
-		expect(out).toContain("/tmp");
+		expect(out).toContain(explicitCwd);
 	});
 });
 

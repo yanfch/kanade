@@ -6,12 +6,20 @@
  */
 
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import pc from "picocolors";
 
 let BASE_URL = process.env.KANADE_URL ?? "http://127.0.0.1:7777";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+
+function resolveCliDir(dir: string): string {
+	if (dir === "~") return homedir();
+	if (dir.startsWith("~/") || dir.startsWith("~\\")) return join(homedir(), dir.slice(2));
+	return resolve(dir);
+}
 
 async function api(path: string, init?: RequestInit): Promise<unknown> {
 	const url = `${BASE_URL}${path}`;
@@ -584,24 +592,30 @@ async function cmdKill(taskId: string | undefined) {
 }
 
 async function cmdClean() {
-	const { execSync } = await import("node:child_process");
+	const { execFileSync, execSync } = await import("node:child_process");
 	console.log(pc.yellow("Cleaning orphan processes..."));
 
-	// Kill orphan vitest workers
-	try {
-		execSync("pkill -9 -f 'node.*vitest'", { stdio: "ignore" });
-		console.log(pc.dim("  Killed orphan vitest processes"));
-	} catch {
-		console.log(pc.dim("  No orphan vitest processes"));
+	function killByPattern(pattern: string, label: string): void {
+		try {
+			if (process.platform === "win32") {
+				const escapedPattern = pattern.replaceAll("'", "''");
+				const command = [
+					`$matches = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match '${escapedPattern}' }`,
+					"if (-not $matches) { exit 1 }",
+					"$matches | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }",
+				].join("; ");
+				execFileSync("powershell.exe", ["-NoProfile", "-Command", command], { stdio: "ignore" });
+			} else {
+				execSync(`pkill -9 -f '${pattern}'`, { stdio: "ignore" });
+			}
+			console.log(pc.dim(`  Killed orphan ${label} processes`));
+		} catch {
+			console.log(pc.dim(`  No orphan ${label} processes`));
+		}
 	}
 
-	// Kill orphan tsx server processes
-	try {
-		execSync("pkill -9 -f 'tsx.*server.ts'", { stdio: "ignore" });
-		console.log(pc.dim("  Killed orphan server processes"));
-	} catch {
-		console.log(pc.dim("  No orphan server processes"));
-	}
+	killByPattern("node.*vitest", "vitest");
+	killByPattern("tsx.*server.ts", "server");
 
 	console.log(pc.green("✔ Done."));
 }
@@ -1074,15 +1088,14 @@ async function cmdStart(args: ReturnType<typeof parseArgs>["values"]) {
 	const daemon = Boolean(args.daemon);
 
 	const { mkdirSync, writeFileSync, existsSync, openSync, closeSync } = await import("node:fs");
-	const { join: pathJoin } = await import("node:path");
 
-	const resolvedDir = dir.replace(/^~/, process.env.HOME ?? "");
+	const resolvedDir = resolveCliDir(dir);
 	if (!existsSync(resolvedDir)) mkdirSync(resolvedDir, { recursive: true });
-	mkdirSync(pathJoin(resolvedDir, "db"), { recursive: true });
-	mkdirSync(pathJoin(resolvedDir, "logs"), { recursive: true });
+	mkdirSync(join(resolvedDir, "db"), { recursive: true });
+	mkdirSync(join(resolvedDir, "logs"), { recursive: true });
 
 	const portNum = port ?? "7777";
-	const configPath = pathJoin(resolvedDir, "config.yml");
+	const configPath = join(resolvedDir, "config.yml");
 	if (!existsSync(configPath)) {
 		writeFileSync(configPath, `server:\n  port: ${portNum}\n  bind: 127.0.0.1\n`);
 	}
@@ -1097,17 +1110,12 @@ async function cmdStart(args: ReturnType<typeof parseArgs>["values"]) {
 	console.log();
 
 	const { spawn } = await import("node:child_process");
-	// Find project root by looking for package.json
-	let projectRoot = process.cwd();
-	while (projectRoot !== "/") {
-		if (existsSync(pathJoin(projectRoot, "package.json"))) break;
-		projectRoot = pathJoin(projectRoot, "..");
-	}
-	const tsxCliPath = pathJoin(projectRoot, "node_modules", "tsx", "dist", "cli.mjs");
+	const projectRoot = resolve(import.meta.dirname, "../..");
+	const tsxCliPath = join(projectRoot, "node_modules", "tsx", "dist", "cli.mjs");
 	const serverArgs = [tsxCliPath, "src/bin/server.ts"];
 	if (daemon) {
 		const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-		const logPath = pathJoin(resolvedDir, "logs", `server-${stamp}.log`);
+		const logPath = join(resolvedDir, "logs", `server-${stamp}.log`);
 		const fd = openSync(logPath, "a");
 		const child = spawn(process.execPath, serverArgs, {
 			cwd: projectRoot,

@@ -1,5 +1,5 @@
 #!/usr/bin/env tsx
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -265,13 +265,13 @@ function startEventMonitor(baseUrl: string, taskId: string, json: boolean): { ev
 	return { events, stop: () => controller.abort() };
 }
 
-function git(cwd: string, command: string): string {
-	return execSync(`git ${command}`, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+function git(cwd: string, args: string[]): string {
+	return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
-function safeGit(cwd: string, command: string): string {
+function safeGit(cwd: string, args: string[]): string {
 	try {
-		return git(cwd, command);
+		return git(cwd, args);
 	} catch (error) {
 		return error instanceof Error ? error.message : String(error);
 	}
@@ -283,7 +283,6 @@ function runCheck(cwd: string, command: string): CheckResult {
 			cwd,
 			encoding: "utf8",
 			stdio: ["ignore", "pipe", "pipe"],
-			shell: "/bin/bash",
 		});
 		return { command, ok: true, output: output.trim() };
 	} catch (error) {
@@ -669,10 +668,6 @@ function isGitCommandError(value: string): boolean {
 	return /^\s*fatal:/.test(value) || value.includes("fatal:") || /not a git repository/.test(value);
 }
 
-function shellQuote(value: string): string {
-	return `'${value.replaceAll("'", `'\\''`)}'`;
-}
-
 export function truncateDiffPatch(
 	patch: string,
 	limit: number = DIFF_PATCH_TRUNCATE_LIMIT,
@@ -684,17 +679,19 @@ export function truncateDiffPatch(
 }
 
 export function collectWorktreeDiffEvidence(worktree: WorktreeRow): WorktreeDiffEvidence {
-	const rawHead = safeGit(worktree.worktree_path, "log --oneline -1 --no-decorate");
+	const rawHead = safeGit(worktree.worktree_path, ["log", "--oneline", "-1", "--no-decorate"]);
 	const hasHead = rawHead.trim().length > 0 && !isGitCommandError(rawHead);
 	const baseRef = worktree.base_branch?.trim();
-	const diffRange = baseRef ? `${shellQuote(baseRef)}...HEAD` : "HEAD^..HEAD";
-	let diffStat = hasHead ? safeGit(worktree.worktree_path, `diff --stat ${diffRange} --`) : "";
-	let nameStatus = hasHead ? safeGit(worktree.worktree_path, `diff --name-status ${diffRange} --`) : "";
-	let diffPatch = hasHead ? safeGit(worktree.worktree_path, `diff ${diffRange} --`) : "";
+	const diffRange = baseRef ? `${baseRef}...HEAD` : "HEAD^..HEAD";
+	let diffStat = hasHead ? safeGit(worktree.worktree_path, ["diff", "--stat", diffRange, "--"]) : "";
+	let nameStatus = hasHead ? safeGit(worktree.worktree_path, ["diff", "--name-status", diffRange, "--"]) : "";
+	let diffPatch = hasHead ? safeGit(worktree.worktree_path, ["diff", diffRange, "--"]) : "";
 	if (isGitCommandError(diffStat) || isGitCommandError(nameStatus) || isGitCommandError(diffPatch)) {
-		diffStat = hasHead ? safeGit(worktree.worktree_path, "show --stat --pretty=format: HEAD --") : "";
-		nameStatus = hasHead ? safeGit(worktree.worktree_path, "show --name-status --pretty=format: HEAD --") : "";
-		diffPatch = hasHead ? safeGit(worktree.worktree_path, "show --format=medium --patch HEAD --") : "";
+		diffStat = hasHead ? safeGit(worktree.worktree_path, ["show", "--stat", "--pretty=format:", "HEAD", "--"]) : "";
+		nameStatus = hasHead
+			? safeGit(worktree.worktree_path, ["show", "--name-status", "--pretty=format:", "HEAD", "--"])
+			: "";
+		diffPatch = hasHead ? safeGit(worktree.worktree_path, ["show", "--format=medium", "--patch", "HEAD", "--"]) : "";
 	}
 	const cleanedPatch = isGitCommandError(diffPatch) ? "" : diffPatch.trim();
 	const { patch: finalPatch, truncated, originalPatchLength } = truncateDiffPatch(cleanedPatch);
@@ -865,13 +862,13 @@ async function main() {
 	const checks = prepareOk ? checksToRun.map((check) => runCheck(checksCwd, check)) : [];
 	const checksOk = checks.every((step) => step.ok);
 	const worktreeDirty = worktreesResponse.worktrees.map((worktree) => {
-		const status = safeGit(worktree.worktree_path, "status --short");
+		const status = safeGit(worktree.worktree_path, ["status", "--short"]);
 		return { path: worktree.worktree_path, dirty: status.trim().length > 0, status };
 	});
 	const allWorktreesClean = !worktreeDirty.some((entry) => entry.dirty);
 	const worktreeDiffs = worktreesResponse.worktrees.map(collectWorktreeDiffEvidence);
 	const commits = worktreeDiffs.map((diff) => ({ path: diff.path, head: diff.head }));
-	const mainStatus = safeGit(args.cwd, "status --short");
+	const mainStatus = safeGit(args.cwd, ["status", "--short"]);
 	const hasAtLeastOneWorktreeCommit = worktreeDiffs.some((diff) => diff.head.length > 0);
 	const usageIsZero = isUsageZero(detail.usage);
 
