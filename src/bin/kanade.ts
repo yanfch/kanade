@@ -678,6 +678,160 @@ function parseStringArray(value: unknown): string[] {
 	return out;
 }
 
+function parseNumberOption(value: unknown, name: string): number | undefined {
+	if (value === undefined) return undefined;
+	const parsed = Number(value);
+	if (!Number.isFinite(parsed) || parsed < 0) throw new Error(`${name} must be a non-negative number`);
+	return parsed;
+}
+
+function applyPiOptions(options: Record<string, unknown>, args: ReturnType<typeof parseArgs>["values"]): void {
+	const thinkingLevel = args["thinking-level"] as string | undefined;
+	if (thinkingLevel !== undefined && !["off", "minimal", "low", "medium", "high", "xhigh"].includes(thinkingLevel)) {
+		throw new Error("--thinking-level must be one of: off, minimal, low, medium, high, xhigh");
+	}
+	const noTools = args["pi-no-tools"] as string | undefined;
+	if (noTools !== undefined && noTools !== "all" && noTools !== "builtin") {
+		throw new Error("--pi-no-tools must be one of: all, builtin");
+	}
+	const tools = parseStringArray(args["pi-tool"]);
+	const excludeTools = parseStringArray(args["pi-exclude-tool"]);
+	const skillPaths = parseStringArray(args.skill).map(resolveCliDir);
+	const pi: Record<string, unknown> = {};
+	if (thinkingLevel) pi.thinking_level = thinkingLevel;
+	if (tools.length > 0) pi.tools = tools;
+	if (excludeTools.length > 0) pi.exclude_tools = excludeTools;
+	if (noTools) pi.no_tools = noTools;
+	if (skillPaths.length > 0) pi.skill_paths = skillPaths;
+	if (Object.keys(pi).length > 0) options.pi = pi;
+}
+
+function buildScheduledTaskOptions(args: ReturnType<typeof parseArgs>["values"]): Record<string, unknown> {
+	const cwd = resolveCliDir((args.cwd as string | undefined) ?? process.cwd());
+	const options: Record<string, unknown> = { cwd };
+	const agentModel = args["agent-model"] as string | undefined;
+	if (agentModel) options.agent_model = agentModel;
+	const roleModels = parseRoleModels(args["role-model"]);
+	if (roleModels) options.role_models = roleModels;
+	const prepareCommands = parseStringArray(args["prepare-command"]);
+	if (prepareCommands.length > 0) options.prepare_commands = prepareCommands;
+	for (const [flag, key] of [
+		["concurrency", "concurrency"],
+		["token-budget", "token_budget"],
+		["cost-budget", "cost_budget"],
+		["agent-timeout-ms", "agent_timeout_ms"],
+	] as const) {
+		const value = parseNumberOption(args[flag], `--${flag}`);
+		if (value !== undefined) options[key] = value;
+	}
+	applyPiOptions(options, args);
+	return options;
+}
+
+async function cmdSchedule(
+	action: string | undefined,
+	idOrName: string | undefined,
+	args: ReturnType<typeof parseArgs>["values"],
+) {
+	if (action === "add") {
+		if (!idOrName) throw new Error("Usage: kanade schedule add <name> --workflow <name> --cron '<expr>'");
+		const workflow = args.workflow as string | undefined;
+		const cron = args.cron as string | undefined;
+		if (!workflow) throw new Error("--workflow is required");
+		if (!cron) throw new Error("--cron is required");
+		let taskArgs: Record<string, unknown> = {};
+		const argsJson = args.args as string | undefined;
+		if (argsJson) {
+			const parsed = JSON.parse(argsJson) as unknown;
+			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+				throw new Error("--args must be a JSON object for scheduled tasks");
+			}
+			taskArgs = parsed as Record<string, unknown>;
+		}
+		const prompt = args.prompt as string | undefined;
+		if (prompt?.trim()) taskArgs.prompt = prompt;
+		const body = (await api("/schedules", {
+			method: "POST",
+			body: JSON.stringify({
+				name: idOrName,
+				cron,
+				timezone: args.timezone,
+				overlap_policy: args.overlap,
+				misfire_policy: args.misfire,
+				task: {
+					source: "saved",
+					workflow_name: workflow,
+					args: taskArgs,
+					options: buildScheduledTaskOptions(args),
+				},
+			}),
+		})) as Record<string, unknown>;
+		if (args.json) return console.log(JSON.stringify(body, null, 2));
+		console.log(pc.green(`✔ Schedule ${pc.bold(String(body.name))} created.`));
+		console.log(pc.dim(`  Next run: ${timestamp(body.next_run_at as number)}`));
+		return;
+	}
+
+	if (action === "ls" || action === "list" || action === undefined) {
+		const body = (await api("/schedules")) as { schedules: Record<string, unknown>[] };
+		if (args.json) return console.log(JSON.stringify(body.schedules, null, 2));
+		if (body.schedules.length === 0) return console.log(pc.dim("No schedules found."));
+		header("Schedules");
+		printTable(
+			body.schedules.map((schedule) => ({
+				...schedule,
+				workflow: (schedule.task as Record<string, unknown>)?.workflow_name,
+			})),
+			[
+				{ key: "name", label: "Name", width: 20, render: (value) => pc.bold(String(value)) },
+				{ key: "enabled", label: "Enabled", width: 10, render: (value) => (value ? pc.green("yes") : pc.dim("no")) },
+				{ key: "cron", label: "Cron", width: 16 },
+				{ key: "timezone", label: "Timezone", width: 20 },
+				{ key: "workflow", label: "Workflow", width: 20 },
+				{ key: "next_run_at", label: "Next Run", width: 20, render: (value) => timestamp(value as number) },
+			],
+		);
+		return;
+	}
+
+	if (!idOrName) throw new Error(`Schedule name is required for ${action}`);
+	if (action === "show") {
+		const body = await api(`/schedules/${encodeURIComponent(idOrName)}`);
+		console.log(JSON.stringify(body, null, 2));
+		return;
+	}
+	if (action === "runs") {
+		const body = await api(`/schedules/${encodeURIComponent(idOrName)}/runs`);
+		console.log(JSON.stringify(body, null, 2));
+		return;
+	}
+	if (action === "run") {
+		const body = (await api(`/schedules/${encodeURIComponent(idOrName)}/run`, { method: "POST" })) as Record<
+			string,
+			unknown
+		>;
+		if (args.json) return console.log(JSON.stringify(body, null, 2));
+		if (body.status === "launched") console.log(pc.green(`✔ Task ${pc.bold(String(body.task_id))} launched.`));
+		else console.log(pc.yellow(`⚑ Schedule run ${String(body.status)}: ${String(body.reason ?? "")}`));
+		return;
+	}
+	if (action === "pause" || action === "resume") {
+		const body = await api(`/schedules/${encodeURIComponent(idOrName)}`, {
+			method: "PATCH",
+			body: JSON.stringify({ enabled: action === "resume" }),
+		});
+		if (args.json) return console.log(JSON.stringify(body, null, 2));
+		console.log(pc.green(`✔ Schedule ${idOrName} ${action === "pause" ? "paused" : "resumed"}.`));
+		return;
+	}
+	if (action === "rm" || action === "delete") {
+		await api(`/schedules/${encodeURIComponent(idOrName)}`, { method: "DELETE" });
+		console.log(pc.green(`✔ Schedule ${idOrName} deleted.`));
+		return;
+	}
+	throw new Error(`Unknown schedule action: ${action}`);
+}
+
 function parseWorkflowSize(value: unknown): "small" | "medium" | "large" | undefined {
 	if (value === undefined) return undefined;
 	if (value === "small" || value === "medium" || value === "large") return value;
@@ -726,6 +880,7 @@ async function cmdRun(workflowName: string | undefined, args: ReturnType<typeof 
 		if (roleModels) options.role_models = roleModels;
 		const prepareCommands = parseStringArray(args["prepare-command"]);
 		if (prepareCommands.length > 0) options.prepare_commands = prepareCommands;
+		applyPiOptions(options, args);
 
 		const body = (await api("/tasks", {
 			method: "POST",
@@ -787,6 +942,7 @@ async function cmdRun(workflowName: string | undefined, args: ReturnType<typeof 
 	if (roleModels) options.role_models = roleModels;
 	const prepareCommands = parseStringArray(args["prepare-command"]);
 	if (prepareCommands.length > 0) options.prepare_commands = prepareCommands;
+	applyPiOptions(options, args);
 
 	const body = (await api("/tasks", {
 		method: "POST",
@@ -1164,6 +1320,20 @@ async function main() {
 			"agent-model": { type: "string" },
 			"role-model": { type: "string", multiple: true },
 			"prepare-command": { type: "string", multiple: true },
+			"thinking-level": { type: "string" },
+			"pi-tool": { type: "string", multiple: true },
+			"pi-exclude-tool": { type: "string", multiple: true },
+			"pi-no-tools": { type: "string" },
+			skill: { type: "string", multiple: true },
+			workflow: { type: "string" },
+			cron: { type: "string" },
+			timezone: { type: "string" },
+			overlap: { type: "string" },
+			misfire: { type: "string" },
+			concurrency: { type: "string" },
+			"token-budget": { type: "string" },
+			"cost-budget": { type: "string" },
+			"agent-timeout-ms": { type: "string" },
 			"workflow-size": { type: "string" },
 			"merge-commit": { type: "string" },
 			state: { type: "string" },
@@ -1221,6 +1391,8 @@ async function main() {
 			return cmdGenerateWorkflow(values);
 		case "run":
 			return cmdRun(positionals[1] as string | undefined, values);
+		case "schedule":
+			return cmdSchedule(positionals[1] as string | undefined, positionals[2] as string | undefined, values);
 		case "rerun":
 			return cmdRerun(positionals[1] as string | undefined, values);
 		case "iterate":
@@ -1263,6 +1435,8 @@ ${pc.bold("Commands:")}
   ${pc.cyan("rerun")}         ${pc.dim("<task-id> [--args '{}'] [--follow]")} Rerun task with journal cache
   ${pc.cyan("save")}          ${pc.dim("<task-id> --as <name> [--force]")}          Save script as workflow
   ${pc.cyan("workflows")}     ${pc.dim("[--json]")}                      List workflows
+  ${pc.cyan("schedule")}      ${pc.dim("add <name> --workflow <name> --prompt '...' --cron '0 9 * * *' [--timezone Asia/Shanghai] [--cwd /path] [--thinking-level high] [--skill /path]")} Create schedule
+  ${pc.cyan("schedule")}      ${pc.dim("ls | show|runs|run|pause|resume|rm <name>")} Manage schedules
   ${pc.cyan("merge")}         ${pc.dim("<task-id>")}                     Merge branch
   ${pc.cyan("reconcile")}     ${pc.dim("<task-id> [--merge-commit sha]")} Mark a manually merged task branch as merged
   ${pc.cyan("recovery")}      ${pc.dim("[--state preserved|merged|rejected|no_worktree] [--all] [--json]")} List recovery tasks

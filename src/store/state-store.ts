@@ -40,6 +40,7 @@ export interface TaskRow {
 	options: string;
 	result: string | null;
 	usage?: string | null;
+	schedule_run_id?: string | null;
 }
 
 export interface WorktreeRow {
@@ -95,7 +96,36 @@ export interface TaskPhaseRow {
 	ended_at: number | null;
 }
 
-const SCHEMA_VERSION = 2;
+export type ScheduleOverlapPolicy = "skip" | "allow";
+export type ScheduleMisfirePolicy = "skip" | "run_once";
+export type ScheduleRunStatus = "claimed" | "launched" | "skipped" | "failed";
+
+export interface ScheduleRow {
+	id: string;
+	name: string;
+	cron: string;
+	timezone: string;
+	task_input: string;
+	enabled: number;
+	overlap_policy: ScheduleOverlapPolicy;
+	misfire_policy: ScheduleMisfirePolicy;
+	next_run_at: number;
+	created_at: number;
+	updated_at: number;
+}
+
+export interface ScheduleRunRow {
+	id: string;
+	schedule_id: string;
+	scheduled_for: number;
+	status: ScheduleRunStatus;
+	task_input: string;
+	task_id: string | null;
+	reason: string | null;
+	created_at: number;
+}
+
+const SCHEMA_VERSION = 3;
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS tasks (
@@ -113,7 +143,8 @@ CREATE TABLE IF NOT EXISTS tasks (
 	error TEXT,
 	options TEXT NOT NULL,
 	result TEXT,
-	usage TEXT
+	usage TEXT,
+	schedule_run_id TEXT
 );
 CREATE INDEX IF NOT EXISTS tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS tasks_created ON tasks(created_at);
@@ -200,6 +231,36 @@ CREATE TABLE IF NOT EXISTS task_iterations (
 );
 CREATE INDEX IF NOT EXISTS iterations_task ON task_iterations(task_id);
 CREATE INDEX IF NOT EXISTS iterations_parent ON task_iterations(parent_task_id);
+
+CREATE TABLE IF NOT EXISTS schedules (
+	id TEXT PRIMARY KEY,
+	name TEXT NOT NULL UNIQUE,
+	cron TEXT NOT NULL,
+	timezone TEXT NOT NULL,
+	task_input TEXT NOT NULL,
+	enabled INTEGER NOT NULL DEFAULT 1,
+	overlap_policy TEXT NOT NULL DEFAULT 'skip',
+	misfire_policy TEXT NOT NULL DEFAULT 'skip',
+	next_run_at INTEGER NOT NULL,
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS schedules_due ON schedules(enabled, next_run_at);
+
+CREATE TABLE IF NOT EXISTS schedule_runs (
+	id TEXT PRIMARY KEY,
+	schedule_id TEXT NOT NULL,
+	scheduled_for INTEGER NOT NULL,
+	status TEXT NOT NULL,
+	task_input TEXT NOT NULL,
+	task_id TEXT,
+	reason TEXT,
+	created_at INTEGER NOT NULL,
+	UNIQUE(schedule_id, scheduled_for),
+	FOREIGN KEY (schedule_id) REFERENCES schedules(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS schedule_runs_schedule ON schedule_runs(schedule_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS schedule_runs_status ON schedule_runs(status);
 `;
 
 export class StateStore {
@@ -233,6 +294,17 @@ export class StateStore {
 			}
 		}
 
+		if (current < 3) {
+			try {
+				this.db.exec("ALTER TABLE tasks ADD COLUMN schedule_run_id TEXT");
+			} catch {
+				// Column already exists — idempotent
+			}
+			this.db.exec(
+				"CREATE UNIQUE INDEX IF NOT EXISTS tasks_schedule_run ON tasks(schedule_run_id) WHERE schedule_run_id IS NOT NULL",
+			);
+		}
+
 		if (current < SCHEMA_VERSION) {
 			this.db
 				.prepare("INSERT OR REPLACE INTO meta (key, value, updated_at) VALUES (?, ?, ?)")
@@ -252,18 +324,25 @@ export class StateStore {
 				`INSERT INTO tasks (
 					id, workflow_source, workflow_name, workflow_path, status,
 					base_repo, base_branch, cwd, created_at, started_at, finished_at,
-					error, options, result
+					error, options, result, schedule_run_id
 				) VALUES (
 					@id, @workflow_source, @workflow_name, @workflow_path, @status,
 					@base_repo, @base_branch, @cwd, @created_at, @started_at, @finished_at,
-					@error, @options, @result
+					@error, @options, @result, @schedule_run_id
 				)`,
 			)
-			.run(row);
+			.run({ ...row, schedule_run_id: row.schedule_run_id ?? null });
 	}
 
 	getTask(id: string): TaskRow | null {
 		const row = this.db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as TaskRow | undefined;
+		return row ?? null;
+	}
+
+	getTaskByScheduleRun(scheduleRunId: string): TaskRow | null {
+		const row = this.db.prepare("SELECT * FROM tasks WHERE schedule_run_id = ?").get(scheduleRunId) as
+			| TaskRow
+			| undefined;
 		return row ?? null;
 	}
 
@@ -525,5 +604,112 @@ export class StateStore {
 	listPhases(taskId: string): TaskPhaseRow[] {
 		const rows = this.db.prepare("SELECT * FROM task_phases WHERE task_id = ? ORDER BY started_at ASC").all(taskId);
 		return rows as TaskPhaseRow[];
+	}
+
+	// === schedules ===
+
+	insertSchedule(row: ScheduleRow): void {
+		this.db
+			.prepare(
+				`INSERT INTO schedules (
+					id, name, cron, timezone, task_input, enabled, overlap_policy,
+					misfire_policy, next_run_at, created_at, updated_at
+				) VALUES (
+					@id, @name, @cron, @timezone, @task_input, @enabled, @overlap_policy,
+					@misfire_policy, @next_run_at, @created_at, @updated_at
+				)`,
+			)
+			.run(row);
+	}
+
+	getSchedule(idOrName: string): ScheduleRow | null {
+		const row = this.db.prepare("SELECT * FROM schedules WHERE id = ? OR name = ?").get(idOrName, idOrName) as
+			| ScheduleRow
+			| undefined;
+		return row ?? null;
+	}
+
+	listSchedules(): ScheduleRow[] {
+		return this.db.prepare("SELECT * FROM schedules ORDER BY name ASC").all() as ScheduleRow[];
+	}
+
+	listDueSchedules(now: number): ScheduleRow[] {
+		return this.db
+			.prepare("SELECT * FROM schedules WHERE enabled = 1 AND next_run_at <= ? ORDER BY next_run_at ASC")
+			.all(now) as ScheduleRow[];
+	}
+
+	updateSchedule(id: string, patch: Partial<ScheduleRow>): void {
+		const keys = Object.keys(patch);
+		if (keys.length === 0) return;
+		const setClause = keys.map((key) => `${key} = @${key}`).join(", ");
+		this.db.prepare(`UPDATE schedules SET ${setClause} WHERE id = @__id`).run({ ...patch, __id: id });
+	}
+
+	deleteSchedule(id: string): boolean {
+		return this.db.prepare("DELETE FROM schedules WHERE id = ?").run(id).changes > 0;
+	}
+
+	claimDueSchedule(run: ScheduleRunRow, expectedNextRunAt: number, nextRunAt: number): boolean {
+		const claim = this.db.transaction(() => {
+			const updated = this.db
+				.prepare(
+					"UPDATE schedules SET next_run_at = ?, updated_at = ? WHERE id = ? AND enabled = 1 AND next_run_at = ?",
+				)
+				.run(nextRunAt, Date.now(), run.schedule_id, expectedNextRunAt);
+			if (updated.changes === 0) return false;
+			this.insertScheduleRun(run);
+			return true;
+		});
+		try {
+			return claim();
+		} catch (error) {
+			if (error instanceof Error && error.message.includes("UNIQUE constraint failed")) return false;
+			throw error;
+		}
+	}
+
+	insertScheduleRun(row: ScheduleRunRow): void {
+		this.db
+			.prepare(
+				`INSERT INTO schedule_runs (
+					id, schedule_id, scheduled_for, status, task_input, task_id, reason, created_at
+				) VALUES (
+					@id, @schedule_id, @scheduled_for, @status, @task_input, @task_id, @reason, @created_at
+				)`,
+			)
+			.run(row);
+	}
+
+	updateScheduleRun(id: string, patch: Partial<ScheduleRunRow>): void {
+		const keys = Object.keys(patch);
+		if (keys.length === 0) return;
+		const setClause = keys.map((key) => `${key} = @${key}`).join(", ");
+		this.db.prepare(`UPDATE schedule_runs SET ${setClause} WHERE id = @__id`).run({ ...patch, __id: id });
+	}
+
+	listScheduleRuns(scheduleId: string, limit = 100): ScheduleRunRow[] {
+		return this.db
+			.prepare("SELECT * FROM schedule_runs WHERE schedule_id = ? ORDER BY created_at DESC LIMIT ?")
+			.all(scheduleId, limit) as ScheduleRunRow[];
+	}
+
+	listClaimedScheduleRuns(): ScheduleRunRow[] {
+		return this.db
+			.prepare("SELECT * FROM schedule_runs WHERE status = 'claimed' ORDER BY created_at ASC")
+			.all() as ScheduleRunRow[];
+	}
+
+	hasActiveTaskForSchedule(scheduleId: string): boolean {
+		const row = this.db
+			.prepare(
+				`SELECT 1
+				 FROM schedule_runs sr
+				 JOIN tasks t ON t.schedule_run_id = sr.id
+				 WHERE sr.schedule_id = ? AND t.status IN ('created', 'running', 'needs_human')
+				 LIMIT 1`,
+			)
+			.get(scheduleId);
+		return Boolean(row);
 	}
 }

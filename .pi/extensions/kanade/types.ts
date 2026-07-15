@@ -41,7 +41,56 @@ export type KanadeTask = {
 	finished_at?: number | null;
 	error?: string | null;
 	result?: string | null;
+	schedule_run_id?: string | null;
 	worktree_summary?: WorktreeSummary;
+};
+
+export type ScheduledTaskOptions = {
+	cwd?: string;
+	concurrency?: number;
+	token_budget?: number;
+	cost_budget?: number;
+	agent_timeout_ms?: number;
+	prepare_commands?: string[];
+	pi?: {
+		thinking_level?: string;
+		tools?: string[];
+		exclude_tools?: string[];
+		no_tools?: "all" | "builtin";
+		skill_paths?: string[];
+	};
+};
+
+export type ScheduledTaskInput = {
+	source: "saved";
+	workflow_name: string;
+	args?: unknown;
+	options?: ScheduledTaskOptions;
+};
+
+export type KanadeSchedule = {
+	id: string;
+	name: string;
+	cron: string;
+	timezone: string;
+	task: ScheduledTaskInput;
+	enabled: boolean;
+	overlap_policy: "skip" | "allow";
+	misfire_policy: "skip" | "run_once";
+	next_run_at: number;
+	created_at: number;
+	updated_at: number;
+};
+
+export type KanadeScheduleRun = {
+	id: string;
+	schedule_id: string;
+	scheduled_for: number;
+	status: "claimed" | "launched" | "skipped" | "failed" | string;
+	task_input: string;
+	task_id: string | null;
+	reason: string | null;
+	created_at: number;
 };
 
 export type InboxRequest = {

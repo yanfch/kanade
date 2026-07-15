@@ -5,6 +5,8 @@ import type {
 	AgentTiming,
 	InboxRequest,
 	KanadeOverview,
+	KanadeSchedule,
+	KanadeScheduleRun,
 	KanadeTask,
 	ReviewSummary,
 	ServerEvent,
@@ -105,6 +107,18 @@ export async function fetchInbox(): Promise<InboxRequest[]> {
 	} catch {
 		return [];
 	}
+}
+
+export async function fetchSchedules(): Promise<KanadeSchedule[]> {
+	const body = await getJson<{ schedules: KanadeSchedule[] }>("/schedules");
+	return body.schedules ?? [];
+}
+
+export async function fetchScheduleRuns(scheduleId: string, limit = 8): Promise<KanadeScheduleRun[]> {
+	const body = await getJson<{ runs: KanadeScheduleRun[] }>(
+		`/schedules/${encodeURIComponent(scheduleId)}/runs?limit=${limit}`,
+	);
+	return body.runs ?? [];
 }
 
 export async function fetchOverview(): Promise<KanadeOverview> {

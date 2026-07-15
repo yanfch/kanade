@@ -14,7 +14,22 @@ export function createMockSessionFactory(
 		};
 	} = {},
 ) {
+	const sessions: Array<{
+		prompts: string[];
+		thinkingLevel?: CreateAgentSessionOptions["thinkingLevel"];
+		allowedTools?: string[];
+		excludedTools?: string[];
+		skillNames: string[];
+	}> = [];
 	const createSession = async (options: CreateAgentSessionOptions): Promise<CreateAgentSessionResult> => {
+		const record = {
+			prompts: [] as string[],
+			thinkingLevel: options.thinkingLevel,
+			allowedTools: options.tools,
+			excludedTools: options.excludeTools,
+			skillNames: options.resourceLoader?.getSkills().skills.map((skill) => skill.name) ?? [],
+		};
+		sessions.push(record);
 		const sm = options.sessionManager;
 		if (sm?.isPersisted()) sm.newSession();
 
@@ -26,7 +41,8 @@ export function createMockSessionFactory(
 					...(scenario.usage ? { usage: scenario.usage } : {}),
 				},
 			],
-			async prompt() {
+			async prompt(text: string) {
+				record.prompts.push(text);
 				return;
 			},
 			async abort() {
@@ -45,5 +61,5 @@ export function createMockSessionFactory(
 		return { session } as unknown as CreateAgentSessionResult;
 	};
 
-	return { createSession };
+	return { createSession, sessions };
 }

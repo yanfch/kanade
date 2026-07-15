@@ -64,7 +64,7 @@ export class AgentDetailOverlay implements Component {
 		const events = this.detail?.sessionEvents ?? [];
 		const visibleEvents = this.visibleActivityEvents(events, 14);
 		const activityLabel =
-			events.length > visibleEvents.length
+			events.length > visibleEvents.items.length
 				? `Activity · ${visibleEvents.start + 1}-${visibleEvents.end}/${events.length}`
 				: "Activity";
 		body.push(this.theme.fg("muted", activityLabel));
@@ -95,11 +95,11 @@ export class AgentDetailOverlay implements Component {
 			this.scrollActivity(-1);
 			return;
 		}
-		if (isKey(data, "pageup", "\x1b[5~")) {
+		if (data === "\x1b[5~") {
 			this.scrollActivity(8);
 			return;
 		}
-		if (isKey(data, "pagedown", "\x1b[6~")) {
+		if (data === "\x1b[6~") {
 			this.scrollActivity(-8);
 			return;
 		}

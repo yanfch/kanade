@@ -57,6 +57,31 @@ kanade workflows [--json]
 kanade save <task-id> --as <workflow-name> [--force]
 ```
 
+### Scheduled tasks
+
+Schedules run inside the Kanade server and are portable across macOS, Linux, and Windows. They always create a fresh task from a saved workflow. The fixed prompt is passed to the workflow as `args.prompt`.
+
+```bash
+kanade schedule add daily-review \
+  --workflow repo-review \
+  --prompt "Review open work and produce a concise report" \
+  --cron "0 9 * * 1-5" \
+  --timezone Asia/Shanghai \
+  --cwd /path/to/repo \
+  --thinking-level high \
+  --skill /path/to/custom-skill
+
+kanade schedule ls
+kanade schedule show daily-review
+kanade schedule runs daily-review
+kanade schedule run daily-review
+kanade schedule pause daily-review
+kanade schedule resume daily-review
+kanade schedule rm daily-review
+```
+
+The default overlap policy is `skip`. Missed runs older than one minute are also skipped by default instead of being backfilled. Use `--overlap allow` or `--misfire run_once` when creating a schedule to opt into different behavior.
+
 ## HTTP API
 
 ```text
@@ -69,6 +94,11 @@ POST /tasks/:id/abort          Abort running task
 POST /tasks/:id/respond        Respond to human request
 POST /tasks/:id/save           Save generated/inline script as workflow
 
+POST   /schedules              Create schedule
+POST   /schedules/:id/run      Run schedule immediately
+PATCH  /schedules/:id          Update/pause/resume schedule
+DELETE /schedules/:id          Delete schedule
+
 GET  /tasks                    List tasks
 GET  /tasks/:id                Task details + usage + iteration chain
 GET  /tasks/:id/review         Merge-readiness review
@@ -80,6 +110,31 @@ GET  /tasks/:id/sessions       Persisted subagent sessions
 GET  /inbox                    Pending human requests
 GET  /events                   Global SSE stream
 GET  /health                   Health check
+GET  /schedules                List schedules
+GET  /schedules/:id            Schedule details
+GET  /schedules/:id/runs       Schedule dispatch history
+```
+
+Create schedule request:
+
+```json
+{
+  "name": "daily-review",
+  "cron": "0 9 * * 1-5",
+  "timezone": "Asia/Shanghai",
+  "task": {
+    "source": "saved",
+    "workflow_name": "repo-review",
+    "args": { "prompt": "Review open work" },
+    "options": {
+      "cwd": "C:\\src\\project",
+      "pi": {
+        "thinking_level": "high",
+        "skill_paths": ["C:\\pi-skills\\review"]
+      }
+    }
+  }
+}
 ```
 
 ## Compact monitoring examples

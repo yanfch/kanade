@@ -73,6 +73,7 @@ import type {
 import { ActionMenuOverlay } from "./action-menu.ts";
 import { AgentDetailOverlay } from "./agent-detail-overlay.ts";
 import { ConfirmOverlay } from "./confirm-overlay.ts";
+import { ScheduleOverlay } from "./schedule-overlay.ts";
 import { SettingsOverlay } from "./settings-overlay.ts";
 
 export class KanadePanel implements Component {
@@ -251,6 +252,10 @@ export class KanadePanel implements Component {
 		}
 		if (data === "s" || data === "S") {
 			void this.openSettings();
+			return;
+		}
+		if (data === "c" || data === "C") {
+			void this.openSchedules();
 			return;
 		}
 		if (data === "e" || data === "E") {
@@ -728,6 +733,7 @@ export class KanadePanel implements Component {
 			lines.push(`${prefix} ${icon} ${task.id} ${title}`);
 			const metaParts = [
 				String(task.status),
+				task.schedule_run_id ? "scheduled" : "",
 				taskWorktreeHint(task),
 				relativeTime(task.finished_at ?? task.started_at ?? task.created_at),
 			].filter(Boolean);
@@ -862,7 +868,7 @@ export class KanadePanel implements Component {
 								? this.color("success", "✓")
 								: this.color("dim", "○");
 				const agentLabel = agent?.label ?? step.label;
-				const agentDuration = agent ? nodeDurationLabel(agent, isTerminalTask) : "";
+				const agentDuration = "";
 				lines.push(
 					`${conditional ? "  " : ""}${this.color("dim", "└─")} ${agentIcon} Agent: ${truncatePlain(agentLabel, width - 24)}${this.color("dim", ` · ${agentStatus}${agentDuration ? ` · ${agentDuration}` : ""}`)}`,
 				);
@@ -1236,6 +1242,21 @@ export class KanadePanel implements Component {
 		}
 	}
 
+	private async openSchedules(): Promise<void> {
+		this.lastNotice = undefined;
+		this.actionInProgress = true;
+		this.invalidateAndRender();
+		try {
+			await this.ui.custom<void>((tui, theme, _keybindings, done) => new ScheduleOverlay(tui, theme, done), {
+				overlay: true,
+				overlayOptions: { anchor: "top-center", offsetY: 3, width: "86%", minWidth: 80, maxHeight: "78%" },
+			});
+		} finally {
+			this.actionInProgress = false;
+			this.invalidateAndRender();
+		}
+	}
+
 	private headerLine(width: number): string {
 		const counts = countTasks(this.overview.tasks);
 		const status = this.overview.connected
@@ -1268,7 +1289,7 @@ export class KanadePanel implements Component {
 		return truncateAnsi(
 			this.color(
 				"dim",
-				`↑↓ select   ${action}   Tab preview   f agent   s settings   ${searchHint}   r refresh   ${closeHint}`,
+				`↑↓ select   ${action}   Tab preview   f agent   c schedules   s settings   ${searchHint}   r refresh   ${closeHint}`,
 			),
 			width,
 		);

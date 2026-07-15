@@ -40,10 +40,10 @@
 		"smoke:generated-workflow": "tsx scripts/generated-workflow-smoke.ts",
 		"smoke:generated-live": "tsx scripts/generated-live-smoke.ts",
 		"smoke:workflow-promotion": "tsx scripts/workflow-promotion-smoke.ts",
-		"lint": "biome check src/ scripts/",
+		"lint": "biome check src/ scripts/ .pi/extensions/kanade/",
 		"lint:fix": "biome check --write src/",
 		"format": "biome format --write src/",
-		"typecheck": "tsc --noEmit",
+		"typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.pi.json",
 		"prepare": "husky"
 	},
 	"dependencies": {
@@ -60,6 +60,7 @@
 		"@opentelemetry/semantic-conventions": "^1.41.1",
 		"acorn": "^8.14.0",
 		"better-sqlite3": "^11.7.0",
+		"cron-parser": "^5.6.2",
 		"hono": "^4.6.0",
 		"picocolors": "^1.1.1",
 		"simple-git": "^3.27.0",

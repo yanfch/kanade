@@ -36,12 +36,17 @@ export function fitBodyRows(body: string[], minRows: number, maxRows: number): s
 	return [...content, help];
 }
 
-export function windowAroundSelection<T>(items: T[], selected: number, size: number): { items: T[]; start: number } {
-	if (items.length <= size) return { items, start: 0 };
+export function windowAroundSelection<T>(
+	items: T[],
+	selected: number,
+	size: number,
+): { items: T[]; start: number; end: number } {
+	if (items.length <= size) return { items, start: 0, end: items.length };
 	const half = Math.floor(size / 2);
 	let start = Math.max(0, selected - half);
 	start = Math.min(start, Math.max(0, items.length - size));
-	return { items: items.slice(start, start + size), start };
+	const end = Math.min(items.length, start + size);
+	return { items: items.slice(start, end), start, end };
 }
 
 export function box(body: string[], width: number, title: string, theme: Theme): string[] {

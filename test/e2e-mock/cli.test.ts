@@ -600,6 +600,46 @@ describe("CLI — run", () => {
 	});
 });
 
+describe("CLI — schedule", () => {
+	it("creates and manually runs a saved workflow schedule with prompt and Pi options", async () => {
+		await fetch(`${BASE_URL}/workflows/cli-scheduled`, {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				script: `export const meta = { name: 'cli-scheduled', description: 'Test' }\nreturn await agent(args.prompt, { label: 'scheduled' })`,
+			}),
+		});
+
+		const created = cliJson(
+			`schedule add cli-daily --workflow cli-scheduled --prompt 'review repository' --cron '0 9 1 1 *' --timezone Asia/Shanghai --cwd "${tmpdir()}" --thinking-level high --pi-tool read --pi-exclude-tool write --skill "${tmpdir()}"`,
+		) as {
+			name: string;
+			task: { args: { prompt: string }; options: { cwd: string; pi: Record<string, unknown> } };
+		};
+		expect(created.name).toBe("cli-daily");
+		expect(created.task.args.prompt).toBe("review repository");
+		expect(created.task.options.cwd).toBe(tmpdir());
+		expect(created.task.options.pi).toMatchObject({
+			thinking_level: "high",
+			tools: ["read"],
+			exclude_tools: ["write"],
+			skill_paths: [tmpdir()],
+		});
+
+		const run = cliJson("schedule run cli-daily") as { status: string; task_id: string };
+		expect(run.status).toBe("launched");
+		await waitForTask(run.task_id);
+		const task = cliJson(`show ${run.task_id}`) as { task: { options: string; schedule_run_id: string } };
+		const options = JSON.parse(task.task.options);
+		expect(options.pi.thinking_level).toBe("high");
+		expect(task.task.schedule_run_id).toBeTruthy();
+
+		const runs = cliJson("schedule runs cli-daily") as { runs: Array<{ task_id: string }> };
+		expect(runs.runs[0].task_id).toBe(run.task_id);
+		expect(cli("schedule rm cli-daily")).toContain("deleted");
+	});
+});
+
 describe("CLI — iterate", () => {
 	it("iterate via API and verify chain", { timeout: 30_000 }, async () => {
 		const t1 = await createTask(`export const meta = { name: 'cli-iter', description: 'Test' }\nreturn 'done'`);

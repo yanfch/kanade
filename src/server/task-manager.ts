@@ -38,6 +38,15 @@ import { type WorkflowInfo, WorkflowStore } from "./workflow-store.ts";
 
 export type WorkflowSizeHint = "small" | "medium" | "large";
 
+export interface PiRuntimeOptions {
+	thinking_level?: NonNullable<CreateAgentSessionOptions["thinkingLevel"]>;
+	tools?: string[];
+	exclude_tools?: string[];
+	no_tools?: "all" | "builtin";
+	/** Additional custom skill files or directories loaded by Pi for this task. */
+	skill_paths?: string[];
+}
+
 export interface TaskOptions {
 	cwd?: string;
 	/** Size/complexity hint used only by the workflow author for generated workflows. */
@@ -56,6 +65,8 @@ export interface TaskOptions {
 	agent_timeout_ms?: number;
 	/** Shell commands to run in the task worktree before agent execution. */
 	prepare_commands?: string[];
+	/** Serializable Pi SDK options that are safe to persist with a task. */
+	pi?: PiRuntimeOptions;
 }
 
 export type CreateTaskInput =
@@ -273,6 +284,28 @@ export class TaskManager {
 		return this.createFromScript("inline", null, input.script, input.args, input.options);
 	}
 
+	createScheduled(input: Extract<CreateTaskInput, { source: "saved" }>, scheduleRunId: string): CreateTaskResult {
+		const existing = this.store.getTaskByScheduleRun(scheduleRunId);
+		if (existing) {
+			return {
+				task_id: existing.id,
+				run_dir: join(this.config.paths.runsDir, existing.id),
+				workflow_path: existing.workflow_path,
+			};
+		}
+		if (!input.workflow_name?.trim()) throw new AppError("workflow_name is required", 400);
+		const workflow = this.workflowStore.get(input.workflow_name);
+		if (!workflow) throw new AppError(`Workflow not found: ${input.workflow_name}`, 404);
+		return this.createFromScript(
+			"saved",
+			input.workflow_name,
+			workflow.script,
+			input.args,
+			input.options,
+			scheduleRunId,
+		);
+	}
+
 	private createGenerated(prompt: string, args: unknown, options: TaskOptions | undefined): CreateTaskResult {
 		this.assertGeneratedAuthorAvailable(options);
 		const taskId = this.allocateTaskId();
@@ -374,6 +407,7 @@ export class TaskManager {
 		script: string,
 		args: unknown,
 		options: TaskOptions | undefined,
+		scheduleRunId?: string,
 	): CreateTaskResult {
 		const taskId = this.allocateTaskId();
 		const runDir = join(this.config.paths.runsDir, taskId);
@@ -398,6 +432,7 @@ export class TaskManager {
 			error: null,
 			options: JSON.stringify(options ?? {}),
 			result: null,
+			schedule_run_id: scheduleRunId ?? null,
 		});
 
 		const taskTrace = this.startTaskTrace(taskId, source);
@@ -999,6 +1034,11 @@ export class TaskManager {
 		return this.controllers.size;
 	}
 
+	canStartTask(): boolean {
+		const max = this.config.defaults.maxConcurrentTasks;
+		return max <= 0 || this.runningCount < max;
+	}
+
 	private async run(
 		taskId: string,
 		script: string,
@@ -1074,6 +1114,15 @@ export class TaskManager {
 				tokenBudget: options.token_budget ?? this.config.defaults.tokenBudget,
 				costBudget: options.cost_budget ?? this.config.defaults.costBudget,
 				agentTimeoutMs: options.agent_timeout_ms ?? this.config.defaults.agentTimeoutMs,
+				session: options.pi
+					? {
+							thinkingLevel: options.pi.thinking_level,
+							tools: options.pi.tools,
+							excludeTools: options.pi.exclude_tools,
+							noTools: options.pi.no_tools,
+						}
+					: undefined,
+				additionalSkillPaths: options.pi?.skill_paths,
 				signal: controller.signal,
 				tracer: this.tracer,
 				traceContext,

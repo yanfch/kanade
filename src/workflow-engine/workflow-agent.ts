@@ -8,6 +8,7 @@ import {
 	AuthStorage,
 	type CreateAgentSessionOptions,
 	type CreateAgentSessionResult,
+	DefaultResourceLoader,
 	ModelRegistry,
 	SessionManager,
 	SettingsManager,
@@ -47,6 +48,8 @@ export interface WorkflowAgentOptions {
 	tools?: ToolDefinition[];
 	/** Override any createAgentSession option (model, authStorage, resourceLoader, etc.). */
 	session?: Partial<CreateAgentSessionOptions>;
+	/** Additional custom skill files or directories discovered for each effective cwd. */
+	additionalSkillPaths?: string[];
 	/** Extra system guidance prepended to every subagent task. */
 	instructions?: string;
 	/** Default subagent model used when neither the call nor the role specifies one. */
@@ -125,6 +128,7 @@ export class WorkflowAgent {
 	private readonly tools?: ToolDefinition[];
 	private readonly createCodingTools: CreateCodingTools;
 	private readonly sessionOptions: Partial<CreateAgentSessionOptions>;
+	private readonly additionalSkillPaths: string[];
 	private readonly instructions?: string;
 	private readonly defaultModel?: string;
 	private readonly rolesDir?: string;
@@ -148,6 +152,7 @@ export class WorkflowAgent {
 		this.tools = options.tools;
 		this.createCodingTools = options.createCodingTools ?? createCodingTools;
 		this.sessionOptions = options.session ?? {};
+		this.additionalSkillPaths = options.additionalSkillPaths ?? [];
 		this.instructions = options.instructions;
 		this.defaultModel = options.defaultModel;
 		this.rolesDir = options.rolesDir;
@@ -207,7 +212,7 @@ export class WorkflowAgent {
 			return cached.result;
 		}
 
-		const sessionOptions = await this.buildSessionOptions(requestedModel);
+		const sessionOptions = await this.buildSessionOptions(requestedModel, effectiveCwd);
 
 		const label = options.label ?? "agent";
 		const retry = options.retry;
@@ -328,16 +333,30 @@ export class WorkflowAgent {
 		return loadRole(name, { rolesDir: this.rolesDir });
 	}
 
-	private async buildSessionOptions(modelName: string | undefined): Promise<Partial<CreateAgentSessionOptions>> {
+	private async buildSessionOptions(
+		modelName: string | undefined,
+		effectiveCwd: string,
+	): Promise<Partial<CreateAgentSessionOptions>> {
 		const authStorage =
 			this.sessionOptions.authStorage ?? AuthStorage.create(this.authPath ?? join(this.agentDir, "auth.json"));
 		const modelRegistry =
 			this.sessionOptions.modelRegistry ??
 			ModelRegistry.create(authStorage, this.modelsPath ?? join(this.agentDir, "models.json"));
-		const settingsManager = this.sessionOptions.settingsManager ?? this.createSettingsManager();
+		const settingsManager = this.sessionOptions.settingsManager ?? this.createSettingsManager(effectiveCwd);
+		let resourceLoader = this.sessionOptions.resourceLoader;
+		if (!resourceLoader && this.additionalSkillPaths.length > 0) {
+			resourceLoader = new DefaultResourceLoader({
+				cwd: effectiveCwd,
+				agentDir: this.agentDir,
+				settingsManager,
+				additionalSkillPaths: this.additionalSkillPaths,
+			});
+			await resourceLoader.reload();
+		}
+		const common = { ...this.sessionOptions, authStorage, modelRegistry, settingsManager, resourceLoader };
 
 		if (!modelName) {
-			return { ...this.sessionOptions, authStorage, modelRegistry, settingsManager };
+			return common;
 		}
 
 		const model = await this.modelResolver(modelName, {
@@ -347,17 +366,14 @@ export class WorkflowAgent {
 		if (!model) throw new Error(`Model not found: ${modelName}`);
 
 		return {
-			...this.sessionOptions,
-			authStorage,
-			modelRegistry,
-			settingsManager,
+			...common,
 			model,
 		};
 	}
 
-	private createSettingsManager(): SettingsManager {
+	private createSettingsManager(cwd = this.cwd): SettingsManager {
 		const settingsManager = this.inheritPiSettings
-			? SettingsManager.create(this.cwd, this.agentDir)
+			? SettingsManager.create(cwd, this.agentDir)
 			: SettingsManager.inMemory();
 		if (this.disableSubagentCompaction) {
 			settingsManager.applyOverrides({ compaction: { enabled: false } });

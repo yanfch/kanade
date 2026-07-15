@@ -14,9 +14,11 @@ import { AppError } from "./errors.ts";
 import type { EventBus, ServerEvent } from "./event-bus.ts";
 import type { CreateTaskInput } from "./task-manager.ts";
 import type { TaskManager } from "./task-manager.ts";
+import type { CreateScheduleInput, TaskScheduler, UpdateScheduleInput } from "./task-scheduler.ts";
 
 export interface AppContext {
 	taskManager: TaskManager;
+	taskScheduler?: TaskScheduler;
 	events: EventBus;
 	config?: KanadeConfig;
 }
@@ -82,6 +84,40 @@ export function createApp(ctx: AppContext): Hono {
 	app.delete("/workflows/:name", (c) => {
 		const deleted = ctx.taskManager.deleteWorkflow(c.req.param("name"));
 		if (!deleted) return c.json({ error: "Workflow not found" }, 404);
+		return c.json({ ok: true });
+	});
+
+	app.post("/schedules", async (c) => {
+		const input = (await c.req.json().catch(() => ({}))) as CreateScheduleInput;
+		return c.json(requireTaskScheduler(ctx).create(input), 201);
+	});
+
+	app.get("/schedules", (c) => c.json({ schedules: requireTaskScheduler(ctx).list() }));
+
+	app.get("/schedules/:id/runs", (c) => {
+		const limitValue = Number(c.req.query("limit") ?? 100);
+		const limit = Number.isFinite(limitValue) ? Math.max(1, Math.min(Math.floor(limitValue), 1000)) : 100;
+		return c.json({ runs: requireTaskScheduler(ctx).listRuns(c.req.param("id"), limit) });
+	});
+
+	app.post("/schedules/:id/run", async (c) => {
+		const run = await requireTaskScheduler(ctx).runNow(c.req.param("id"));
+		return c.json(run, run.status === "launched" ? 202 : 200);
+	});
+
+	app.get("/schedules/:id", (c) => {
+		const schedule = requireTaskScheduler(ctx).get(c.req.param("id"));
+		if (!schedule) return c.json({ error: "Schedule not found" }, 404);
+		return c.json(schedule);
+	});
+
+	app.patch("/schedules/:id", async (c) => {
+		const input = (await c.req.json().catch(() => ({}))) as UpdateScheduleInput;
+		return c.json(requireTaskScheduler(ctx).update(c.req.param("id"), input));
+	});
+
+	app.delete("/schedules/:id", (c) => {
+		requireTaskScheduler(ctx).delete(c.req.param("id"));
 		return c.json({ ok: true });
 	});
 
@@ -387,6 +423,11 @@ export function createApp(ctx: AppContext): Hono {
 function parseBooleanQuery(value: string | undefined): boolean | undefined {
 	if (value === undefined) return undefined;
 	return value === "1" || value === "true" || value === "yes";
+}
+
+function requireTaskScheduler(ctx: AppContext): TaskScheduler {
+	if (!ctx.taskScheduler) throw new AppError("Task scheduler is not available", 500);
+	return ctx.taskScheduler;
 }
 
 function parseRecoveryState(

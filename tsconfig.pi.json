@@ -1,0 +1,9 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"rootDir": ".",
+		"outDir": "dist-pi"
+	},
+	"include": [".pi/extensions/kanade/**/*.ts"],
+	"exclude": ["node_modules", "dist", "dist-pi"]
+}

@@ -8,6 +8,7 @@ import { createApp } from "./app.ts";
 import { CleanupScheduler } from "./cleanup-scheduler.ts";
 import { EventBus } from "./event-bus.ts";
 import { TaskManager } from "./task-manager.ts";
+import { TaskScheduler } from "./task-scheduler.ts";
 
 export { createApp } from "./app.ts";
 export type { AppContext } from "./app.ts";
@@ -15,7 +16,14 @@ export { AppError } from "./errors.ts";
 export { EventBus } from "./event-bus.ts";
 export type { ServerEvent } from "./event-bus.ts";
 export { TaskManager } from "./task-manager.ts";
-export type { CreateTaskInput, CreateTaskResult, TaskOptions } from "./task-manager.ts";
+export type { CreateTaskInput, CreateTaskResult, PiRuntimeOptions, TaskOptions } from "./task-manager.ts";
+export { TaskScheduler, nextCronRun } from "./task-scheduler.ts";
+export type {
+	CreateScheduleInput,
+	Schedule,
+	ScheduledTaskInput,
+	UpdateScheduleInput,
+} from "./task-scheduler.ts";
 export { WorkflowStore } from "./workflow-store.ts";
 export type { WorkflowInfo } from "./workflow-store.ts";
 export { LlmWorkflowAuthor, StubWorkflowAuthor } from "./workflow-author.ts";
@@ -38,6 +46,12 @@ export function startServer(
 	const events = new EventBus();
 	const humanGate = new HumanGate(store);
 	const taskManager = new TaskManager(config, store, events, humanGate, undefined, tracing, sessionFactory);
+	const taskScheduler = new TaskScheduler({
+		store,
+		taskManager,
+		events,
+		logger: tracing.logger.forComponent("task-scheduler"),
+	});
 
 	// Recover pending human requests from previous run
 	const recovered = humanGate.recover();
@@ -63,8 +77,9 @@ export function startServer(
 		logger: tracing.logger.forComponent("cleanup"),
 	});
 	cleanupScheduler.start();
+	taskScheduler.start();
 
-	const app = createApp({ taskManager, events, config });
+	const app = createApp({ taskManager, taskScheduler, events, config });
 
 	const server = serve({ fetch: app.fetch, hostname: config.server.bind, port: config.server.port });
 	logger.info("server started", {
@@ -78,6 +93,7 @@ export function startServer(
 		tracing,
 		async close() {
 			logger.info("server shutting down");
+			taskScheduler.stop();
 			cleanupScheduler.stop();
 			server.close();
 			await tracing.shutdown();

@@ -139,6 +139,28 @@ models:
 
 Use `defaults.authorModel` for generated workflow authoring and `defaults.agentModel` for general agent execution. `defaults.roleModels` can override model selection by role.
 
+### Per-task Pi options and skills
+
+Kanade embeds the Pi SDK, so task options use a typed, serializable subset instead of raw Pi CLI arguments:
+
+```json
+{
+  "options": {
+    "cwd": "/path/to/repo",
+    "agent_model": "provider/model",
+    "pi": {
+      "thinking_level": "high",
+      "tools": ["read", "bash"],
+      "exclude_tools": ["write"],
+      "no_tools": "builtin",
+      "skill_paths": ["/path/to/custom-skill"]
+    }
+  }
+}
+```
+
+Pi automatically discovers project skills under `.pi/skills/` and `.agents/skills/`, plus global skills under the configured Pi agent directory and `~/.agents/skills/`. Use `pi.skill_paths` or repeated CLI `--skill` options for additional paths. The same options can be persisted in a schedule.
+
 ## Isolation and recovery
 
 The recommended public default is worktree isolation with preserved failed/aborted worktrees:
