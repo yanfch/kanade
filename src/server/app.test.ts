@@ -13,6 +13,7 @@ import { createMockSessionFactory } from "./test-session-mock.ts";
 
 const SIMPLE_SCRIPT = "export const meta = { name: 'demo', description: 'Demo' }\nreturn { ok: true }";
 const TEST_GIT_AUTHOR = ["-c", "user.name=Kanade Test", "-c", "user.email=kanade@example.com"];
+const TEST_BASE_REF = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 
 function tempWorktreePath(prefix: string): string {
 	return join(tmpdir(), `${prefix}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -587,7 +588,7 @@ describe("GET /tasks", () => {
 				workflow_path: "/tmp/TL-struct-test.js",
 				status: "finished",
 				base_repo: null,
-				base_branch: "main",
+				base_branch: TEST_BASE_REF,
 				cwd: process.cwd(),
 				created_at: now,
 				started_at: now,
@@ -601,7 +602,7 @@ describe("GET /tasks", () => {
 				task_id: "TL-struct-test",
 				label: "dev",
 				branch: branchName,
-				base_branch: "main",
+				base_branch: TEST_BASE_REF,
 				worktree_path: tmpDir,
 				status: "inactive",
 				base_repo: process.cwd(),
@@ -1511,7 +1512,7 @@ describe("GET /tasks/:id/review", () => {
 				task_id: created.task_id,
 				label: "dev",
 				branch: branchName,
-				base_branch: "main",
+				base_branch: TEST_BASE_REF,
 				worktree_path: tmpDir,
 				status: "inactive",
 				base_repo: process.cwd(),
@@ -1853,7 +1854,7 @@ describe("POST /tasks/:id/merge — review gating", () => {
 				task_id: created.task_id,
 				label: "dev",
 				branch: branchName,
-				base_branch: "main",
+				base_branch: TEST_BASE_REF,
 				worktree_path: tmpDir,
 				status: "active",
 				base_repo: process.cwd(),

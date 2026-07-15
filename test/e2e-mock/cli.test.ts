@@ -152,14 +152,42 @@ async function waitForServerDown(url: string, timeoutMs = 10_000): Promise<void>
 	throw new Error(`Server still reachable at ${url}`);
 }
 
-async function restartMainServer(): Promise<void> {
+async function stopMainServer(): Promise<void> {
 	if (serverProcess) {
 		serverProcess.kill("SIGTERM");
 		serverProcess = null;
 	}
 	await waitForServerDown(BASE_URL);
+}
+
+async function startMainServer(): Promise<void> {
 	serverProcess = spawnMainServer();
 	await waitForServer(BASE_URL);
+}
+
+async function restartMainServer(): Promise<void> {
+	await stopMainServer();
+	await startMainServer();
+}
+
+async function mutatePersistedUsage(taskId: string, mutate: (usage: Record<string, unknown>) => void): Promise<void> {
+	await stopMainServer();
+	try {
+		const db = new Database(join(kanadeDir, "db", "state.db"));
+		try {
+			const row = db.prepare("SELECT usage FROM tasks WHERE id = ?").get(taskId) as
+				| { usage: string | null }
+				| undefined;
+			if (!row) throw new Error(`Task not found in state database: ${taskId}`);
+			const usage = row.usage ? (JSON.parse(row.usage) as Record<string, unknown>) : {};
+			mutate(usage);
+			db.prepare("UPDATE tasks SET usage = ? WHERE id = ?").run(JSON.stringify(usage), taskId);
+		} finally {
+			db.close();
+		}
+	} finally {
+		await startMainServer();
+	}
 }
 
 beforeAll(async () => {
@@ -705,12 +733,7 @@ describe("CLI — show usage", () => {
 				cost: { input: 0.01, output: 0.02, cacheRead: 0.003, cacheWrite: 0, total: 0.033 },
 			},
 		};
-		const db = new Database(join(kanadeDir, "db", "state.db"));
-		try {
-			db.prepare("UPDATE tasks SET usage = ? WHERE id = ?").run(JSON.stringify(usage), taskId);
-		} finally {
-			db.close();
-		}
+		await mutatePersistedUsage(taskId, (current) => Object.assign(current, usage));
 
 		const out = cli(`show ${taskId}`);
 		expect(out).toContain("Author Cost:");
@@ -797,15 +820,9 @@ describe("CLI — show usage", () => {
 				pending: true,
 			},
 		];
-		const db = new Database(join(kanadeDir, "db", "state.db"));
-		try {
-			const row = db.prepare("SELECT usage FROM tasks WHERE id = ?").get(taskId) as { usage: string | null };
-			const usage = row?.usage ? JSON.parse(row.usage) : {};
+		await mutatePersistedUsage(taskId, (usage) => {
 			usage.agents = agentsArray;
-			db.prepare("UPDATE tasks SET usage = ? WHERE id = ?").run(JSON.stringify(usage), taskId);
-		} finally {
-			db.close();
-		}
+		});
 
 		const out = cli(`show ${taskId}`);
 		expect(out).toContain("Per-Agent Usage");
@@ -842,17 +859,11 @@ describe("CLI — show usage", () => {
 			totalTokens: 195,
 			cost: { input: 0.0011, output: 0.0022, cacheRead: 0.0001, cacheWrite: 0.0001, total: 0.0035 },
 		};
-		const db = new Database(join(kanadeDir, "db", "state.db"));
-		try {
-			const row = db.prepare("SELECT usage FROM tasks WHERE id = ?").get(taskId) as { usage: string | null };
-			const usage = row?.usage ? JSON.parse(row.usage) : {};
+		await mutatePersistedUsage(taskId, (usage) => {
 			usage.author = authorUsage;
 			usage.runtime = runtimeUsage;
 			usage.total = totalUsage;
-			db.prepare("UPDATE tasks SET usage = ? WHERE id = ?").run(JSON.stringify(usage), taskId);
-		} finally {
-			db.close();
-		}
+		});
 
 		const body = cliJson(`show ${taskId}`) as { usage: Record<string, unknown> };
 		expect(body.usage.author).toEqual(authorUsage);
